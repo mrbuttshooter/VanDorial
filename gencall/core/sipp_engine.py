@@ -1,0 +1,382 @@
+"""
+GenCall SIPp Engine - Controls SIPp processes for SIP traffic generation.
+Manages launching, monitoring, and stopping SIPp instances.
+"""
+
+import subprocess
+import os
+import signal
+import time
+import threading
+import logging
+import shlex
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+from gencall.core.config import Config
+
+logger = logging.getLogger("gencall.sipp")
+
+
+class SIPpTransport(Enum):
+    UDP = "u1"
+    TCP = "t1"
+    TLS = "l1"
+
+
+class SIPpMode(Enum):
+    UAC = "uac"  # client - makes calls
+    UAS = "uas"  # server - receives calls
+
+
+class SIPpState(Enum):
+    IDLE = "idle"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    ERROR = "error"
+
+
+@dataclass
+class SIPpStats:
+    """Real-time stats from a running SIPp instance."""
+    total_calls: int = 0
+    successful_calls: int = 0
+    failed_calls: int = 0
+    current_calls: int = 0
+    retransmissions: int = 0
+    calls_per_second: float = 0.0
+    avg_response_time_ms: float = 0.0
+    start_time: float = 0.0
+
+    @property
+    def uptime(self):
+        if self.start_time:
+            return time.time() - self.start_time
+        return 0.0
+
+    @property
+    def success_rate(self):
+        total = self.successful_calls + self.failed_calls
+        if total == 0:
+            return 0.0
+        return (self.successful_calls / total) * 100
+
+    def to_dict(self):
+        return {
+            "total_calls": self.total_calls,
+            "successful_calls": self.successful_calls,
+            "failed_calls": self.failed_calls,
+            "current_calls": self.current_calls,
+            "retransmissions": self.retransmissions,
+            "calls_per_second": round(self.calls_per_second, 2),
+            "avg_response_time_ms": round(self.avg_response_time_ms, 2),
+            "uptime_seconds": round(self.uptime, 1),
+            "success_rate": round(self.success_rate, 2),
+        }
+
+
+@dataclass
+class SIPpInstance:
+    """Represents a single SIPp process."""
+    id: str
+    scenario_file: str
+    remote_host: str
+    remote_port: int = 5060
+    local_port: int = 5060
+    local_ip: str = ""
+    mode: SIPpMode = SIPpMode.UAC
+    transport: SIPpTransport = SIPpTransport.UDP
+    call_rate: float = 1.0
+    max_calls: int = 0  # 0 = unlimited
+    call_limit: int = 10  # concurrent call limit
+    duration: int = 0  # 0 = run forever
+    csv_file: str = ""
+    auth_user: str = ""
+    auth_pass: str = ""
+    extra_args: str = ""
+    state: SIPpState = SIPpState.IDLE
+    stats: SIPpStats = field(default_factory=SIPpStats)
+    _process: Optional[subprocess.Popen] = field(default=None, repr=False)
+    _monitor_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    _stats_file: str = field(default="", repr=False)
+    error_message: str = ""
+
+    def build_command(self, config: Config) -> list:
+        """Build the SIPp command line arguments."""
+        sipp_bin = config.sipp_command
+        cmd = [sipp_bin]
+
+        # Scenario
+        cmd.extend(["-sf", self.scenario_file])
+
+        # Remote target
+        cmd.append(f"{self.remote_host}:{self.remote_port}")
+
+        # Local binding
+        if self.local_ip:
+            cmd.extend(["-i", self.local_ip])
+        cmd.extend(["-p", str(self.local_port)])
+
+        # Transport
+        cmd.extend(["-t", self.transport.value])
+
+        # Call rate and limits
+        cmd.extend(["-r", str(self.call_rate)])
+        if self.max_calls > 0:
+            cmd.extend(["-m", str(self.max_calls)])
+        cmd.extend(["-l", str(self.call_limit)])
+
+        # Duration
+        if self.duration > 0:
+            cmd.extend(["-d", str(self.duration * 1000)])  # ms
+
+        # CSV injection file
+        if self.csv_file:
+            cmd.extend(["-inf", self.csv_file])
+
+        # Authentication
+        if self.auth_user:
+            cmd.extend(["-au", self.auth_user])
+        if self.auth_pass:
+            cmd.extend(["-ap", self.auth_pass])
+
+        # Stats output
+        self._stats_file = f"/tmp/gencall_sipp_{self.id}.csv"
+        cmd.extend(["-trace_stat", "-stf", self._stats_file, "-fd", "1"])
+
+        # Screen output control
+        cmd.extend(["-trace_err", "-trace_logs"])
+
+        # Background mode (no curses)
+        cmd.append("-bg")
+
+        # Extra args
+        if self.extra_args:
+            cmd.extend(shlex.split(self.extra_args))
+
+        return cmd
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "scenario_file": self.scenario_file,
+            "remote_host": self.remote_host,
+            "remote_port": self.remote_port,
+            "local_port": self.local_port,
+            "local_ip": self.local_ip,
+            "mode": self.mode.value,
+            "transport": self.transport.value,
+            "call_rate": self.call_rate,
+            "max_calls": self.max_calls,
+            "call_limit": self.call_limit,
+            "duration": self.duration,
+            "state": self.state.value,
+            "stats": self.stats.to_dict(),
+            "error_message": self.error_message,
+        }
+
+
+class SIPpEngine:
+    """
+    Manages multiple SIPp instances.
+    Handles launching, monitoring, and stopping SIPp processes.
+    """
+
+    def __init__(self, config: Config = None):
+        self.config = config or Config()
+        self.instances: dict[str, SIPpInstance] = {}
+        self._lock = threading.Lock()
+        self._set_file_limit()
+
+    def _set_file_limit(self):
+        """Set the open file limit for SIPp."""
+        try:
+            import resource
+            limit = self.config.sipp_file_limit
+            resource.setrlimit(resource.RLIMIT_NOFILE, (limit, limit))
+        except (ImportError, ValueError, OSError) as e:
+            logger.warning("Could not set file limit: %s", e)
+
+    def start_instance(self, instance: SIPpInstance) -> bool:
+        """Start a SIPp instance."""
+        with self._lock:
+            if instance.id in self.instances:
+                existing = self.instances[instance.id]
+                if existing.state == SIPpState.RUNNING:
+                    logger.warning("Instance %s is already running", instance.id)
+                    return False
+
+            self.instances[instance.id] = instance
+
+        try:
+            cmd = instance.build_command(self.config)
+            logger.info("Starting SIPp: %s", " ".join(cmd))
+
+            instance.state = SIPpState.STARTING
+            instance._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid,
+            )
+
+            # Give it a moment to start
+            time.sleep(0.5)
+            if instance._process.poll() is not None:
+                stderr = instance._process.stderr.read().decode("utf-8", errors="replace")
+                instance.state = SIPpState.ERROR
+                instance.error_message = stderr[:500]
+                logger.error("SIPp failed to start: %s", stderr[:200])
+                return False
+
+            instance.state = SIPpState.RUNNING
+            instance.stats.start_time = time.time()
+
+            # Start stats monitor thread
+            instance._monitor_thread = threading.Thread(
+                target=self._monitor_instance,
+                args=(instance,),
+                daemon=True,
+                name=f"sipp-monitor-{instance.id}",
+            )
+            instance._monitor_thread.start()
+
+            logger.info("SIPp instance %s started (PID %d)", instance.id, instance._process.pid)
+            return True
+
+        except FileNotFoundError:
+            instance.state = SIPpState.ERROR
+            instance.error_message = f"SIPp binary not found: {self.config.sipp_command}"
+            logger.error(instance.error_message)
+            return False
+        except Exception as e:
+            instance.state = SIPpState.ERROR
+            instance.error_message = str(e)
+            logger.exception("Failed to start SIPp instance %s", instance.id)
+            return False
+
+    def stop_instance(self, instance_id: str) -> bool:
+        """Gracefully stop a SIPp instance."""
+        with self._lock:
+            instance = self.instances.get(instance_id)
+            if not instance:
+                return False
+
+        if instance.state != SIPpState.RUNNING:
+            return False
+
+        instance.state = SIPpState.STOPPING
+        try:
+            if instance._process and instance._process.poll() is None:
+                # Send SIGUSR1 for graceful shutdown (SIPp convention)
+                os.killpg(os.getpgid(instance._process.pid), signal.SIGUSR1)
+                try:
+                    instance._process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    # Force kill if graceful shutdown failed
+                    os.killpg(os.getpgid(instance._process.pid), signal.SIGKILL)
+                    instance._process.wait(timeout=5)
+
+            instance.state = SIPpState.STOPPED
+            logger.info("SIPp instance %s stopped", instance_id)
+            return True
+        except Exception as e:
+            instance.state = SIPpState.ERROR
+            instance.error_message = str(e)
+            logger.exception("Error stopping SIPp instance %s", instance_id)
+            return False
+
+    def stop_all(self):
+        """Stop all running instances."""
+        for instance_id in list(self.instances.keys()):
+            self.stop_instance(instance_id)
+
+    def remove_instance(self, instance_id: str) -> bool:
+        """Remove a stopped instance."""
+        with self._lock:
+            instance = self.instances.get(instance_id)
+            if not instance:
+                return False
+            if instance.state == SIPpState.RUNNING:
+                return False
+            # Cleanup stats file
+            if instance._stats_file and os.path.exists(instance._stats_file):
+                os.remove(instance._stats_file)
+            del self.instances[instance_id]
+            return True
+
+    def get_instance(self, instance_id: str) -> Optional[SIPpInstance]:
+        return self.instances.get(instance_id)
+
+    def list_instances(self) -> list[dict]:
+        return [inst.to_dict() for inst in self.instances.values()]
+
+    def update_call_rate(self, instance_id: str, new_rate: float) -> bool:
+        """Dynamically update the call rate of a running instance."""
+        instance = self.instances.get(instance_id)
+        if not instance or instance.state != SIPpState.RUNNING:
+            return False
+        # SIPp supports dynamic rate change via key commands on stdin
+        # In background mode, we'd need to restart - or use the remote control port
+        instance.call_rate = new_rate
+        logger.info("Call rate for %s updated to %f", instance_id, new_rate)
+        return True
+
+    def _monitor_instance(self, instance: SIPpInstance):
+        """Monitor a SIPp instance by reading its stats file."""
+        while instance.state == SIPpState.RUNNING:
+            try:
+                if instance._process and instance._process.poll() is not None:
+                    exit_code = instance._process.returncode
+                    if exit_code == 0:
+                        instance.state = SIPpState.STOPPED
+                        logger.info("SIPp instance %s completed normally", instance.id)
+                    else:
+                        stderr = ""
+                        if instance._process.stderr:
+                            stderr = instance._process.stderr.read().decode("utf-8", errors="replace")
+                        instance.state = SIPpState.ERROR
+                        instance.error_message = f"Exit code {exit_code}: {stderr[:200]}"
+                        logger.error("SIPp instance %s exited with code %d", instance.id, exit_code)
+                    break
+
+                self._read_stats(instance)
+            except Exception as e:
+                logger.debug("Stats read error for %s: %s", instance.id, e)
+
+            time.sleep(self.config.stats_interval)
+
+    def _read_stats(self, instance: SIPpInstance):
+        """Parse SIPp CSV stats file."""
+        if not instance._stats_file or not os.path.exists(instance._stats_file):
+            return
+
+        try:
+            with open(instance._stats_file, "r") as f:
+                lines = f.readlines()
+                if len(lines) < 2:
+                    return
+                # SIPp stats CSV format - last line has current stats
+                headers = lines[0].strip().split(";")
+                values = lines[-1].strip().split(";")
+
+                if len(headers) != len(values):
+                    return
+
+                stats_dict = dict(zip(headers, values))
+
+                instance.stats.total_calls = int(stats_dict.get("TotalCallCreated", 0))
+                instance.stats.successful_calls = int(stats_dict.get("SuccessfulCall(C)", 0))
+                instance.stats.failed_calls = int(stats_dict.get("FailedCall(C)", 0))
+                instance.stats.current_calls = int(stats_dict.get("CurrentCall", 0))
+                instance.stats.retransmissions = int(stats_dict.get("Retransmissions(C)", 0))
+
+                elapsed = instance.stats.uptime
+                if elapsed > 0:
+                    instance.stats.calls_per_second = instance.stats.total_calls / elapsed
+
+        except (ValueError, KeyError, IndexError):
+            pass
