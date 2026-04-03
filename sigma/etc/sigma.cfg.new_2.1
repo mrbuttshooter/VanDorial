@@ -1,0 +1,53 @@
+[web server config]
+socket_host = 0.0.0.0
+socket_port = 8000
+
+[sip settings]
+#min_rtp_port = 10100
+#max_rtp_port =  12000
+#max_rtp_attempt = 100
+
+[db config]
+db_connect_data = sqlite:////opt/sigma/etc/sigma.sqlite
+#db_connect_data = postgresql://sigma:Netaxis@127.0.0.1:5432/sigma
+logs_size = 500
+logs_mode = 0
+
+[auto-config]
+
+# Interface to look for the IP address to assign to connectors.
+#   For Linux: name of the interface to look for.
+#   For Windows: GUID of the interface to look for.
+#itf = en0
+
+# Connectors to be "reconfigured" with the IP address of "itf" interface.
+#   If "itf" is not defined or is empty and "connectors" is not, the IP of
+#   the interface connected to the default gateway, where present,
+#   is taken into account.
+#   Leave commented or empty if no connectors should be reconfigured.
+#connectors =
+
+[console]
+logs_connector = 100
+logs_scenario = 50
+
+[SIPp]
+#SIPp_command = sipp
+SIPp_command = /opt/sigma/bin/sipp
+SIPp_open_file_limit = 5000
+
+[misc]
+log_level = 20
+#user=sigma
+
+[alarm]
+#persistence = 1
+from_email = no-reply@sigma.netaxis.be
+#to_email = 
+email_tls = 0
+#email_port = 587
+#email_server = smtp.gmail.com
+#email_login = 
+#email_passwd = 
+#snmp_community = sigmaIsGreat
+#snmp_mngr = 127.0.0.1
