@@ -3,3 +3,4 @@ dist/
 *.local
 .vite/
 .DS_Store
+*.tsbuildinfo

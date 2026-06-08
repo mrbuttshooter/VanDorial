@@ -3,5 +3,6 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 sqlalchemy>=2.0.0
 pydantic>=2.0.0
+httpx>=0.24.0  # controller -> node REST client (gencall/controller/node_client.py)
 dpkt>=1.9.8
 psycopg2-binary>=2.9.0  # PostgreSQL support (optional)

@@ -82,7 +82,7 @@ last_seen, version, active_tests, error }`
   { name?, group_id?, node_ids?: number[],
     scenario, destination: { remote_host, remote_port?, transport? },
     rate: { mode: "per_node" | "total", value: number },
-    call_limit?, max_calls?, duration?, auth?: { user, pass } }
+    call_limit?, max_calls?, duration?, auth?: { user, password } }
   ```
   Resolves targets (group_id OR explicit node_ids), computes per-node rate, and
   fans out `POST /api/tests/start` to each online target in parallel. Returns
@@ -164,6 +164,21 @@ Extend the existing React app; point it at the controller.
 
 Multi-tenant/RBAC user accounts; orchestration auto-discovery (designed pluggable,
 not built); cross-node call correlation; editing live SIPp scenarios mid-run.
+
+## 9a. Phase-3 hardening backlog (from build review)
+
+Deferred, deliberately, to keep Phase 2 scoped — track for Phase 3:
+- **Controller auth must fail closed.** Today, if the controller DB is unavailable
+  the API serves unauthenticated (same degraded mode as the worker). On a control
+  plane that fans out to the whole fleet the blast radius is large — make missing
+  auth fatal (refuse to start / bind loopback only).
+- **Resolve the auth gateway per-app, not via a module global.** `require_api_key`
+  reads `gencall.api.routes.gateway`; the controller sets that global. Fine for
+  separate processes, fragile if worker+controller ever share one. Move to
+  `request.app.state`.
+- **Proxy allow-list.** `/api/nodes/{id}/proxy/{path}` forwards any path to the
+  worker with the node key — a controller admin can reach worker key-management.
+  Add a path allow-list when RBAC lands.
 
 ## 10. Environment note for implementers
 
