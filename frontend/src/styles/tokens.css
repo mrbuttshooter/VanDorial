@@ -1,0 +1,87 @@
+/* ============================================================================
+   GENCALL NOC CONSOLE — DESIGN TOKENS
+   Aesthetic: phosphor control-room. Near-black substrate, signal-green traces,
+   amber/red alarm states, hairline grids. Everything reads like an instrument.
+   ============================================================================ */
+
+:root {
+  /* ---- Substrate -------------------------------------------------------- */
+  --bg-void: #04070a;          /* deepest background, behind everything       */
+  --bg-base: #070b0f;          /* app background                              */
+  --bg-panel: #0b1217;         /* card / panel surface                        */
+  --bg-panel-2: #0f1820;       /* elevated surface (modals, headers)          */
+  --bg-inset: #060a0d;         /* sunken wells (tables, code)                 */
+  --bg-hover: #12202a;
+
+  /* ---- Hairlines & structure ------------------------------------------- */
+  --line: #18262e;             /* default border                              */
+  --line-strong: #243640;
+  --line-phosphor: rgba(54, 249, 168, 0.16); /* glowing edge on live panels   */
+  --grid-line: rgba(54, 249, 168, 0.035);    /* background graph paper         */
+
+  /* ---- Phosphor signal palette ----------------------------------------- */
+  --signal: #36f9a8;           /* primary — "on", healthy, live               */
+  --signal-dim: #1f9e6b;
+  --signal-glow: rgba(54, 249, 168, 0.55);
+  --cyan: #38d6ff;             /* secondary data series / info                */
+  --cyan-glow: rgba(56, 214, 255, 0.45);
+  --amber: #ffb454;            /* warning, ramp, caution                      */
+  --amber-glow: rgba(255, 180, 84, 0.45);
+  --crit: #ff5470;             /* critical, failed, alarm                     */
+  --crit-glow: rgba(255, 84, 112, 0.45);
+  --violet: #b58cff;           /* tertiary series                             */
+
+  /* ---- Text ------------------------------------------------------------ */
+  --text: #d6e4dd;             /* primary readable text                       */
+  --text-bright: #f2fbf7;      /* headings, key readouts                      */
+  --text-muted: #6f857d;       /* labels, secondary                           */
+  --text-faint: #46564f;       /* disabled, decorative                        */
+
+  /* ---- Type ------------------------------------------------------------ */
+  --font-display: "Chakra Petch", "Segoe UI", sans-serif; /* HUD headings     */
+  --font-mono: "IBM Plex Mono", "Cascadia Code", monospace; /* data / body    */
+
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 24px;
+  --fs-readout: 40px;          /* big instrument numbers                      */
+
+  --tracking-wide: 0.14em;
+  --tracking-hud: 0.22em;      /* uppercase HUD labels                        */
+
+  /* ---- Geometry -------------------------------------------------------- */
+  --r-sm: 3px;
+  --r-md: 5px;
+  --r-lg: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --sidebar-w: 232px;
+  --topbar-h: 56px;
+
+  /* ---- Effects --------------------------------------------------------- */
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
+                  0 18px 40px -28px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.85);
+  --glow-text: 0 0 18px var(--signal-glow);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Status → color mapping, used by badges, dots, rows. */
+:root {
+  --st-running: var(--signal);
+  --st-pending: var(--amber);
+  --st-stopped: var(--text-muted);
+  --st-failed: var(--crit);
+  --st-completed: var(--cyan);
+}

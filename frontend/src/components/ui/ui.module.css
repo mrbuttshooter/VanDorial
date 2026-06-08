@@ -1,0 +1,337 @@
+/* ============================================================================
+   Shared UI primitives — buttons, panels, badges, tables, modals, toasts.
+   ============================================================================ */
+
+/* ---- Panel -------------------------------------------------------------- */
+.panel {
+  position: relative;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-panel);
+}
+.panelLive {
+  border-color: var(--line-phosphor);
+}
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+.panelTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-bright);
+}
+.panelTitle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--signal);
+  box-shadow: 0 0 8px var(--signal-glow);
+  transform: rotate(45deg);
+}
+.panelBody {
+  padding: var(--space-4);
+}
+.panelBodyFlush {
+  padding: 0;
+}
+
+/* ---- Button ------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  background: var(--bg-panel-2);
+  white-space: nowrap;
+  transition: all 0.14s var(--ease);
+  user-select: none;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--signal-dim);
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--signal-dim);
+  outline-offset: 2px;
+}
+.btn_primary {
+  background: linear-gradient(180deg, rgba(54, 249, 168, 0.18), rgba(54, 249, 168, 0.06));
+  border-color: var(--signal-dim);
+  color: var(--signal);
+  text-shadow: 0 0 12px var(--signal-glow);
+}
+.btn_primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(54, 249, 168, 0.28), rgba(54, 249, 168, 0.1));
+  border-color: var(--signal);
+}
+.btn_danger {
+  color: var(--crit);
+  border-color: rgba(255, 84, 112, 0.4);
+  background: rgba(255, 84, 112, 0.06);
+}
+.btn_danger:hover:not(:disabled) {
+  background: rgba(255, 84, 112, 0.14);
+  border-color: var(--crit);
+  color: #fff;
+}
+.btn_ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn_ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--line);
+}
+.btn_sm {
+  padding: 3px var(--space-2);
+  font-size: var(--fs-2xs);
+}
+.btn_icon {
+  padding: var(--space-2);
+}
+
+/* ---- Badge / status dot ------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+}
+.dotPulse {
+  animation: pulse-dot 1.6s var(--ease-snap) infinite;
+}
+
+/* ---- Field -------------------------------------------------------------- */
+.field {
+  display: flex;
+  flex-direction: column;
+}
+.fieldRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+.hint {
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  margin-top: var(--space-1);
+}
+
+/* ---- Table -------------------------------------------------------------- */
+.tableWrap {
+  overflow: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-panel-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+.table tbody tr {
+  transition: background 0.12s var(--ease);
+}
+.table tbody tr:hover {
+  background: rgba(54, 249, 168, 0.04);
+}
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+.numCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Empty / loading ---------------------------------------------------- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+}
+.emptyMark {
+  font-family: var(--font-display);
+  font-size: var(--fs-2xl);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-hud);
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--signal);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Modal -------------------------------------------------------------- */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(2, 5, 7, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh var(--space-4) var(--space-4);
+  animation: flicker-in 0.22s var(--ease);
+}
+.modal {
+  width: 100%;
+  max-width: 560px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line-phosphor);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  animation: rise 0.22s var(--ease);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+}
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+.modalBody {
+  padding: var(--space-4);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.modalFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.iconBtn {
+  color: var(--text-muted);
+  padding: var(--space-1);
+  line-height: 0;
+  border-radius: var(--r-sm);
+}
+.iconBtn:hover {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+
+/* ---- Toast -------------------------------------------------------------- */
+.toastWrap {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(380px, 90vw);
+}
+.toast {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  padding: var(--space-3) var(--space-4) var(--space-3) 0;
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+  animation: rise 0.2s var(--ease);
+  overflow: hidden;
+}
+.toastBar {
+  width: 3px;
+  background: var(--signal);
+  flex: none;
+}
+.toastMsg {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  padding: 2px 0;
+}
+.toast_ok .toastBar { background: var(--signal); }
+.toast_ok { border-color: var(--signal-dim); }
+.toast_warn .toastBar { background: var(--amber); }
+.toast_warn { border-color: rgba(255, 180, 84, 0.4); }
+.toast_error .toastBar { background: var(--crit); }
+.toast_error { border-color: rgba(255, 84, 112, 0.4); }
+.toast_info .toastBar { background: var(--cyan); }
+.toast_info { border-color: rgba(56, 214, 255, 0.4); }

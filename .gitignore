@@ -1,0 +1,30 @@
+# Python
+gencall/**/__pycache__/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Runtime data / secrets (never commit)
+*.db
+*.sqlite
+*.log
+.env
+gencall/logs/
+gencall/media/*.wav
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Built NOC console — produced by `npm run build` in frontend/.
+# Build it during deploy rather than committing the bundle + sourcemaps.
+gencall/web/console/
+
+# Tooling / editor
+.playwright-mcp/
+.DS_Store
+*.local

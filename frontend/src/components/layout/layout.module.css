@@ -1,0 +1,242 @@
+/* ============================================================================
+   App shell: fixed sidebar + sticky topbar + scrolling content well.
+   ============================================================================ */
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+/* ---- Sidebar ------------------------------------------------------------ */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-base) 100%);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  height: var(--topbar-h);
+  border-bottom: 1px solid var(--line);
+}
+.brandMark {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--signal-dim);
+  border-radius: var(--r-sm);
+  color: var(--signal);
+  box-shadow: 0 0 16px -4px var(--signal-glow), inset 0 0 12px -6px var(--signal-glow);
+  background: rgba(54, 249, 168, 0.05);
+}
+.brandText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.brandName {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--fs-lg);
+  letter-spacing: 0.12em;
+  color: var(--text-bright);
+}
+.brandSub {
+  font-size: 9px;
+  letter-spacing: var(--tracking-hud);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.navGroup {
+  padding: var(--space-4) var(--space-3) var(--space-1);
+}
+.navGroupLabel {
+  font-size: 9px;
+  letter-spacing: var(--tracking-hud);
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 var(--space-3) var(--space-2);
+}
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  position: relative;
+  transition: all 0.14s var(--ease);
+  margin-bottom: 2px;
+}
+.navLink svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  opacity: 0.8;
+}
+.navLink:hover {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+.navLinkActive {
+  color: var(--signal);
+  background: rgba(54, 249, 168, 0.08);
+}
+.navLinkActive::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--signal);
+  box-shadow: 0 0 8px var(--signal-glow);
+}
+.navCount {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--signal);
+  background: rgba(54, 249, 168, 0.1);
+  padding: 0 6px;
+  border-radius: 99px;
+}
+.sidebarFoot {
+  margin-top: auto;
+  padding: var(--space-4);
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ---- Topbar ------------------------------------------------------------- */
+.main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--topbar-h);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-base) 86%, transparent);
+  backdrop-filter: blur(8px);
+}
+.crumb {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.crumbTitle {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-bright);
+  text-transform: uppercase;
+}
+.crumbSub {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.topMeters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  margin-left: auto;
+}
+.meter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.15;
+}
+.meterVal {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+}
+.meterLabel {
+  font-size: 9px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+.contentInner {
+  max-width: 1480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  animation: rise 0.3s var(--ease) both;
+}
+
+/* ---- Responsive --------------------------------------------------------- */
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 60px 1fr;
+  }
+  .brandText,
+  .navGroupLabel,
+  .navLink span,
+  .navCount,
+  .sidebarFoot {
+    display: none;
+  }
+  .brand {
+    justify-content: center;
+    padding: var(--space-3);
+  }
+  .navLink {
+    justify-content: center;
+  }
+  .topMeters {
+    gap: var(--space-3);
+  }
+}
+@media (max-width: 620px) {
+  .content {
+    padding: var(--space-3);
+  }
+  .crumbSub {
+    display: none;
+  }
+}

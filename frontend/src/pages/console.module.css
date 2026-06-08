@@ -1,0 +1,56 @@
+.term {
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  height: 62vh;
+  min-height: 360px;
+  overflow-y: auto;
+  padding: var(--space-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+.line {
+  display: grid;
+  grid-template-columns: 76px 56px 110px 1fr;
+  gap: var(--space-3);
+  padding: 1px var(--space-4);
+  border-left: 2px solid transparent;
+  animation: flicker-in 0.18s var(--ease);
+}
+.line:hover {
+  background: rgba(54, 249, 168, 0.03);
+}
+.ts {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.lvl {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.src {
+  color: var(--cyan);
+  opacity: 0.85;
+}
+.msg {
+  color: var(--text);
+  word-break: break-word;
+}
+.l_INFO { color: var(--signal); }
+.l_DEBUG { color: var(--text-muted); }
+.l_WARN { color: var(--amber); }
+.l_ERROR { color: var(--crit); }
+.line.row_WARN { border-left-color: var(--amber); }
+.line.row_ERROR { border-left-color: var(--crit); }
+
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: var(--signal);
+  box-shadow: 0 0 8px var(--signal-glow);
+  animation: pulse-dot 1.1s steps(2) infinite;
+  vertical-align: text-bottom;
+  margin-left: var(--space-4);
+}

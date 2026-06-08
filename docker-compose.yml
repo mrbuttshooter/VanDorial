@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  gencall:
+    build: .
+    container_name: gencall
+    restart: unless-stopped
+    ports:
+      - "8080:8080"           # Web dashboard + API
+      - "5060:5060/udp"       # SIP UDP
+      - "5060:5060/tcp"       # SIP TCP
+    volumes:
+      - ./gencall/etc:/opt/gencall/gencall/etc
+      - ./gencall/media:/opt/gencall/media
+      - gencall-logs:/opt/gencall/logs
+      - gencall-db:/opt/gencall/data
+    environment:
+      - GENCALL_CONFIG=/opt/gencall/gencall/etc/gencall.cfg
+      # Database credentials come from the environment / .env — never hardcoded.
+      - GENCALL_DB_ENGINE=${GENCALL_DB_ENGINE:-postgresql}
+      - GENCALL_PG_HOST=postgres
+      - GENCALL_PG_PORT=5432
+      - GENCALL_PG_USER=${POSTGRES_USER:-gencall}
+      - GENCALL_PG_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+      - GENCALL_PG_DATABASE=${POSTGRES_DB:-gencall}
+    depends_on:
+      - postgres
+    networks:
+      - gencall-net
+    # For SIPp to work with host networking (optional, for production):
+    # network_mode: host
+
+  # Optional: PostgreSQL for production persistence
+  postgres:
+    image: postgres:16-alpine
+    container_name: gencall-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gencall}
+      POSTGRES_USER: ${POSTGRES_USER:-gencall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+    volumes:
+      - gencall-pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - gencall-net
+
+volumes:
+  gencall-logs:
+  gencall-db:
+  gencall-pgdata:
+
+networks:
+  gencall-net:
+    driver: bridge
