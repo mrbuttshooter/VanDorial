@@ -165,7 +165,7 @@ def main():
         ssl_kwargs["ssl_certfile"] = config.ssl_cert
         ssl_kwargs["ssl_keyfile"] = config.ssl_key
 
-    print(f"""
+    banner = f"""
     ╔═══════════════════════════════════════════╗
     ║   GenCall v2.0 - SIP Traffic Generator    ║
     ║                                           ║
@@ -174,7 +174,19 @@ def main():
     ║   Streams:   ws://{host}:{port:<5d}/ws         ║
     ║   Health:    http://{host}:{port:<5d}/api/health║
     ╚═══════════════════════════════════════════╝
-    """)
+    """
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        # Console encoding can't render box-drawing glyphs (e.g. Windows cp1252).
+        # Fall back to plain ASCII rather than crashing on startup.
+        print(
+            f"\n  GenCall v2.0 - SIP Traffic Generator\n"
+            f"    Console: http://{host}:{port}/console\n"
+            f"    API:     http://{host}:{port}/api\n"
+            f"    Streams: ws://{host}:{port}/ws\n"
+            f"    Health:  http://{host}:{port}/api/health\n"
+        )
 
     uvicorn.run(
         app,
