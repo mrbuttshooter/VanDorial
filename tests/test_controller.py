@@ -1,0 +1,531 @@
+"""
+Tests for the VanDorial Fleet Controller REST API.
+
+These exercise gencall.controller.app.create_controller_app via FastAPI's
+TestClient with the node client fully MOCKED — NodeClient's async HTTP methods
+are monkeypatched so no real worker (and no live sipp) is ever required. This
+sandbox is Windows without sipp; nothing here touches the engine or a binary.
+
+Coverage:
+  * Node CRUD (create / list / update / delete / 404s).
+  * Group CRUD + membership reassignment.
+  * split_rate helper (per_node gives each node N; total splits N across the
+    online nodes, distributing the remainder to the first nodes).
+  * POST /api/fleet/launch fan-out with a partial failure (one node errors →
+    run status 'partial'; dispatched reflects per-node ok/error).
+  * GET /api/fleet/stats aggregation (sum across mocked per-node snapshots).
+  * Auth required: every protected endpoint is 401 without X-API-Key;
+    /api/health stays open.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+# ─── Fixtures ────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def controller(monkeypatch):
+    """Build a controller app backed by a throwaway sqlite DB (auth enabled),
+    with NodeClient mocked and the aggregator's liveness/stats made
+    deterministic. Yields (TestClient, headers, ctx) where ctx exposes helpers
+    for driving node online-state and per-node stats from individual tests.
+    """
+    # Fresh Config singleton so our env-driven DB url is honored.
+    from gencall.core.config import Config
+    Config.reset()
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    db_url = "sqlite:///" + tmp.name
+    monkeypatch.setenv("GENCALL_CONTROLLER_DATABASE_URL", db_url)
+
+    # ── Mock NodeClient so no real worker / sipp is needed ──────────────────
+    # Per-test mutable view of the fleet: node_id -> {"online", "stats", "raise"}.
+    fleet: dict[int, dict] = {}
+    # Record of start_test dispatches so launch tests can assert the fan-out.
+    dispatched_calls: list[dict] = []
+
+    from gencall.controller import node_client as node_client_mod
+    NodeClient = node_client_mod.NodeClient
+
+    def _node_id_for(address: str):
+        # Tests encode the node id in the address as http://node-<id> so a mocked
+        # client (which only knows address + key) can resolve which node it is.
+        for nid, spec in fleet.items():
+            if spec.get("address") == address:
+                return nid
+        return None
+
+    async def fake_health(self):
+        nid = _node_id_for(self.address)
+        spec = fleet.get(nid, {})
+        if not spec.get("online", False):
+            raise RuntimeError("connection refused")
+        return {"version": "2.0.0", "active_tests": spec.get("active_tests", 0),
+                "status": "ok"}
+
+    async def fake_get_stats(self):
+        nid = _node_id_for(self.address)
+        spec = fleet.get(nid, {})
+        if not spec.get("online", False):
+            raise RuntimeError("connection refused")
+        return dict(spec.get("stats") or {})
+
+    async def fake_start_test(self, payload):
+        nid = _node_id_for(self.address)
+        spec = fleet.get(nid, {})
+        dispatched_calls.append({"node_id": nid, "payload": payload})
+        if spec.get("start_raises"):
+            raise RuntimeError("worker rejected start")
+        return {"id": f"test-{nid}"}
+
+    async def fake_stop_test(self, test_id):
+        return {"status": "stopped", "id": test_id}
+
+    monkeypatch.setattr(NodeClient, "health", fake_health, raising=True)
+    monkeypatch.setattr(NodeClient, "get_stats", fake_get_stats, raising=True)
+    monkeypatch.setattr(NodeClient, "start_test", fake_start_test, raising=True)
+    monkeypatch.setattr(NodeClient, "stop_test", fake_stop_test, raising=True)
+
+    # ── Build the app ───────────────────────────────────────────────────────
+    from gencall.controller.app import create_controller_app
+    app, config = create_controller_app(Config())
+
+    # The aggregator runs a background poll thread; for deterministic tests we
+    # stop it and drive node_status / get_fleet_stats from `fleet` directly.
+    from gencall.controller import routes as controller_routes
+    aggregator = controller_routes.aggregator
+
+    def fake_node_status(node_id):
+        spec = fleet.get(node_id)
+        if spec is None:
+            return None
+        return {"node_id": node_id, "online": bool(spec.get("online")),
+                "version": "2.0.0", "active_tests": spec.get("active_tests", 0),
+                "last_seen": None, "error": None,
+                "group_id": spec.get("group_id")}
+
+    def fake_is_online(node_id):
+        return bool(fleet.get(node_id, {}).get("online", False))
+
+    def fake_get_fleet_stats():
+        from gencall.controller.aggregator import (
+            aggregate_snapshots, empty_snapshot,
+        )
+        per_node = {}
+        per_group_lists: dict = {}
+        online_snaps = []
+        for nid, spec in fleet.items():
+            if spec.get("online") and spec.get("stats"):
+                snap = dict(spec["stats"])
+                per_node[nid] = snap
+                online_snaps.append(snap)
+                gid = spec.get("group_id")
+                if gid is not None:
+                    per_group_lists.setdefault(gid, []).append(snap)
+            else:
+                per_node[nid] = None
+        per_group = {gid: aggregate_snapshots(s)
+                     for gid, s in per_group_lists.items()}
+        agg = aggregate_snapshots(online_snaps) if online_snaps else empty_snapshot()
+        return {"aggregate": agg, "per_group": per_group, "per_node": per_node}
+
+    monkeypatch.setattr(aggregator, "node_status", fake_node_status, raising=True)
+    monkeypatch.setattr(aggregator, "is_online", fake_is_online, raising=True)
+    monkeypatch.setattr(aggregator, "get_fleet_stats", fake_get_fleet_stats,
+                        raising=True)
+    # Never actually launch the poll thread during tests.
+    monkeypatch.setattr(aggregator, "start", lambda: None, raising=True)
+    monkeypatch.setattr(aggregator, "stop", lambda: None, raising=True)
+
+    # Mint a known admin key in the controller DB so we can authenticate.
+    from gencall.api import routes as worker_routes
+    raw_key, _ = worker_routes.gateway.keys.create_key("test-admin")
+    headers = {"X-API-Key": raw_key}
+
+    class Ctx:
+        pass
+
+    ctx = Ctx()
+    ctx.fleet = fleet
+    ctx.dispatched_calls = dispatched_calls
+
+    def register_node(client, nid_address, group_id=None, online=False, stats=None,
+                      start_raises=False, **node_fields):
+        """Create a node via the API and register its mocked state in `fleet`."""
+        body = {"name": node_fields.get("name", f"node-{nid_address}"),
+                "address": nid_address,
+                "group_id": group_id,
+                "api_key": node_fields.get("api_key", "k"),
+                "enabled": node_fields.get("enabled", True)}
+        resp = client.post("/api/nodes", json=body, headers=headers)
+        assert resp.status_code == 200, resp.text
+        node = resp.json()
+        fleet[node["id"]] = {"address": nid_address, "group_id": group_id,
+                             "online": online, "stats": stats,
+                             "start_raises": start_raises}
+        return node
+
+    ctx.register_node = register_node
+
+    with TestClient(app) as client:
+        yield client, headers, ctx
+
+    Config.reset()
+    try:
+        os.unlink(tmp.name)
+    except OSError:
+        pass
+
+
+# ─── split_rate helper ───────────────────────────────────────────────────────
+
+
+def test_split_rate_per_node_gives_each_node_full_value():
+    from gencall.controller.aggregator import split_rate
+    assert split_rate("per_node", 5.0, 3) == [5.0, 5.0, 5.0]
+    # Default mode is per_node.
+    assert split_rate("", 2.0, 2) == [2.0, 2.0]
+    assert split_rate("per_node", 1.0, 0) == []
+
+
+def test_split_rate_total_splits_evenly():
+    from gencall.controller.aggregator import split_rate
+    assert split_rate("total", 9.0, 3) == [3.0, 3.0, 3.0]
+
+
+def test_split_rate_total_distributes_remainder_to_first_nodes():
+    from gencall.controller.aggregator import split_rate
+    # 10 cps across 3 nodes -> 4,3,3 (remainder of 0.01-units to the front).
+    rates = split_rate("total", 10.0, 3)
+    assert rates == [3.34, 3.33, 3.33]
+    assert round(sum(rates), 2) == 10.0
+    # Integer-clean remainder: 7 across 2 -> 3.5 / 3.5.
+    assert split_rate("total", 7.0, 2) == [3.5, 3.5]
+    # No targets -> empty.
+    assert split_rate("total", 10.0, 0) == []
+
+
+# ─── Auth ────────────────────────────────────────────────────────────────────
+
+
+PROTECTED = [
+    ("get", "/api/nodes"),
+    ("post", "/api/nodes"),
+    ("get", "/api/groups"),
+    ("post", "/api/groups"),
+    ("post", "/api/fleet/launch"),
+    ("get", "/api/fleet/runs"),
+    ("get", "/api/fleet/stats"),
+    ("get", "/api/fleet/stats/history"),
+]
+
+
+@pytest.mark.parametrize("method,path", PROTECTED)
+def test_endpoints_require_api_key(controller, method, path):
+    client, _headers, _ctx = controller
+    if method == "get":
+        resp = client.get(path)
+    else:
+        resp = getattr(client, method)(path, json={})
+    assert resp.status_code == 401, f"{method} {path} -> {resp.status_code}"
+
+
+def test_health_is_unauthenticated(controller):
+    client, _headers, _ctx = controller
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["mode"] == "controller"
+
+
+def test_valid_key_is_accepted(controller):
+    client, headers, _ctx = controller
+    assert client.get("/api/nodes", headers=headers).status_code == 200
+
+
+# ─── Node CRUD ───────────────────────────────────────────────────────────────
+
+
+def test_node_crud_lifecycle(controller):
+    client, headers, _ctx = controller
+
+    # Empty to start.
+    resp = client.get("/api/nodes", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["nodes"] == []
+
+    # Create.
+    resp = client.post("/api/nodes", json={
+        "name": "edge-1", "address": "http://node-1/", "api_key": "k1",
+    }, headers=headers)
+    assert resp.status_code == 200
+    node = resp.json()
+    nid = node["id"]
+    assert node["name"] == "edge-1"
+    # Trailing slash is stripped by the route.
+    assert node["address"] == "http://node-1"
+    assert node["enabled"] is True
+
+    # List shows it.
+    listing = client.get("/api/nodes", headers=headers).json()["nodes"]
+    assert [n["id"] for n in listing] == [nid]
+
+    # Update.
+    resp = client.put(f"/api/nodes/{nid}", json={"name": "edge-1b",
+                                                 "enabled": False},
+                      headers=headers)
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["name"] == "edge-1b"
+    assert updated["enabled"] is False
+
+    # Delete.
+    resp = client.delete(f"/api/nodes/{nid}", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "deleted", "id": nid}
+    assert client.get("/api/nodes", headers=headers).json()["nodes"] == []
+
+
+def test_node_update_and_delete_404(controller):
+    client, headers, _ctx = controller
+    assert client.put("/api/nodes/999", json={"name": "x"},
+                      headers=headers).status_code == 404
+    assert client.delete("/api/nodes/999", headers=headers).status_code == 404
+
+
+def test_node_check_uses_mocked_health(controller):
+    client, headers, ctx = controller
+    node = ctx.register_node(client, "http://node-1", online=True)
+    resp = client.post(f"/api/nodes/{node['id']}/check", headers=headers)
+    assert resp.status_code == 200
+    view = resp.json()
+    assert view["online"] is True
+    assert view["version"] == "2.0.0"
+
+    # Flip the mocked node offline -> check reports offline with an error.
+    ctx.fleet[node["id"]]["online"] = False
+    resp = client.post(f"/api/nodes/{node['id']}/check", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["online"] is False
+
+
+# ─── Group CRUD + membership ─────────────────────────────────────────────────
+
+
+def test_group_crud_and_membership(controller):
+    client, headers, ctx = controller
+
+    # Create a group.
+    resp = client.post("/api/groups", json={"name": "us-east",
+                                            "description": "east coast"},
+                       headers=headers)
+    assert resp.status_code == 200
+    group = resp.json()
+    gid = group["id"]
+    assert group["name"] == "us-east"
+    assert group["node_ids"] == []
+    assert group["total_count"] == 0
+
+    # Two nodes, initially ungrouped.
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=False)
+
+    # Assign both via membership update.
+    resp = client.put(f"/api/groups/{gid}",
+                      json={"node_ids": [n1["id"], n2["id"]]}, headers=headers)
+    assert resp.status_code == 200
+    view = resp.json()
+    assert set(view["node_ids"]) == {n1["id"], n2["id"]}
+    assert view["total_count"] == 2
+    # Mocked aggregator: only n1 is online.
+    assert view["online_count"] == 1
+
+    # Drop n2 from the group -> it is orphaned (group_id cleared), not deleted.
+    resp = client.put(f"/api/groups/{gid}", json={"node_ids": [n1["id"]]},
+                      headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["node_ids"] == [n1["id"]]
+    # n2 still exists as a node.
+    all_ids = {n["id"] for n in client.get("/api/nodes",
+                                           headers=headers).json()["nodes"]}
+    assert n2["id"] in all_ids
+
+    # Rename + describe.
+    resp = client.put(f"/api/groups/{gid}",
+                      json={"name": "us-west", "description": "moved"},
+                      headers=headers)
+    assert resp.json()["name"] == "us-west"
+    assert resp.json()["description"] == "moved"
+
+    # List.
+    groups = client.get("/api/groups", headers=headers).json()["groups"]
+    assert [g["id"] for g in groups] == [gid]
+
+    # Delete the group -> members orphaned, group gone.
+    resp = client.delete(f"/api/groups/{gid}", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "deleted", "id": gid}
+    assert client.get("/api/groups", headers=headers).json()["groups"] == []
+    # Node n1 survived deletion of its group.
+    survivors = {n["id"] for n in client.get("/api/nodes",
+                                             headers=headers).json()["nodes"]}
+    assert {n1["id"], n2["id"]} <= survivors
+
+
+def test_group_update_and_delete_404(controller):
+    client, headers, _ctx = controller
+    assert client.put("/api/groups/999", json={"name": "x"},
+                      headers=headers).status_code == 404
+    assert client.delete("/api/groups/999", headers=headers).status_code == 404
+
+
+# ─── Fleet launch fan-out (partial failure) ──────────────────────────────────
+
+
+def test_fleet_launch_partial_failure(controller):
+    client, headers, ctx = controller
+
+    # Three nodes: n1 online & OK, n2 online but start_test raises, n3 offline.
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True,
+                           start_raises=True)
+    n3 = ctx.register_node(client, "http://node-3", online=False)
+
+    resp = client.post("/api/fleet/launch", json={
+        "name": "campaign-A",
+        "node_ids": [n1["id"], n2["id"], n3["id"]],
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9", "remote_port": 5060,
+                        "transport": "udp"},
+        "rate": {"mode": "per_node", "value": 4.0},
+    }, headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    run_id = body["fleet_run_id"]
+
+    by_node = {d["node_id"]: d for d in body["dispatched"]}
+    # n1 dispatched OK with a test id.
+    assert by_node[n1["id"]]["ok"] is True
+    assert by_node[n1["id"]]["test_id"] == f"test-{n1['id']}"
+    # n2 online but worker rejected -> error recorded.
+    assert by_node[n2["id"]]["ok"] is False
+    assert by_node[n2["id"]]["error"]
+    # n3 offline -> never dispatched, marked offline.
+    assert by_node[n3["id"]]["ok"] is False
+    assert by_node[n3["id"]]["error"] == "node offline"
+
+    # Only ONLINE targets get a start_test call; offline node was skipped.
+    called_ids = {c["node_id"] for c in ctx.dispatched_calls}
+    assert called_ids == {n1["id"], n2["id"]}
+    # per_node mode -> each online node got the full value.
+    for call in ctx.dispatched_calls:
+        assert call["payload"]["call_rate"] == 4.0
+
+    # Mixed ok/error -> run status 'partial', persisted on the run record.
+    run = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()
+    assert run["status"] == "partial"
+    assert len(run["results"]) == 3
+
+
+def test_fleet_launch_total_rate_split(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True)
+
+    resp = client.post("/api/fleet/launch", json={
+        "node_ids": [n1["id"], n2["id"]],
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "total", "value": 10.0},
+    }, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dispatched"]  # both dispatched
+
+    rates = sorted(c["payload"]["call_rate"] for c in ctx.dispatched_calls)
+    assert rates == [5.0, 5.0]
+
+
+def test_fleet_launch_requires_targets(controller):
+    client, headers, _ctx = controller
+    resp = client.post("/api/fleet/launch", json={
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9"},
+    }, headers=headers)
+    assert resp.status_code == 400
+
+
+# ─── Fleet stats aggregation ─────────────────────────────────────────────────
+
+
+def _snap(total, ok, failed, current, cps, rt):
+    return {
+        "timestamp": 1.0,
+        "active_instances": 1,
+        "total_calls": total,
+        "successful_calls": ok,
+        "failed_calls": failed,
+        "current_calls": current,
+        "calls_per_second": cps,
+        "avg_response_time_ms": rt,
+        "success_rate": round((ok / (ok + failed) * 100) if (ok + failed) else 0, 2),
+    }
+
+
+def test_fleet_stats_sums_across_nodes(controller):
+    client, headers, ctx = controller
+
+    grp = client.post("/api/groups", json={"name": "g1"},
+                      headers=headers).json()
+    gid = grp["id"]
+
+    # Two online nodes in the group with concrete snapshots, one offline node.
+    n1 = ctx.register_node(client, "http://node-1", group_id=gid, online=True,
+                           stats=_snap(100, 80, 20, 5, 10.0, 50.0))
+    n2 = ctx.register_node(client, "http://node-2", group_id=gid, online=True,
+                           stats=_snap(40, 30, 10, 2, 4.0, 100.0))
+    n3 = ctx.register_node(client, "http://node-3", online=False,
+                           stats=_snap(999, 999, 0, 99, 99.0, 999.0))
+
+    resp = client.get("/api/fleet/stats", headers=headers)
+    assert resp.status_code == 200
+    stats = resp.json()
+    agg = stats["aggregate"]
+
+    # Sums across the two ONLINE nodes only (offline n3 excluded).
+    assert agg["total_calls"] == 140
+    assert agg["successful_calls"] == 110
+    assert agg["failed_calls"] == 30
+    assert agg["current_calls"] == 7
+    assert agg["calls_per_second"] == 14.0
+    assert agg["active_instances"] == 2
+    # Response time averaged over contributing nodes: (50 + 100) / 2.
+    assert agg["avg_response_time_ms"] == 75.0
+    # success_rate recomputed from totals: 110 / 140 * 100.
+    assert agg["success_rate"] == round(110 / 140 * 100, 2)
+
+    # per_node: online nodes carry a snapshot, offline node is null.
+    per_node = stats["per_node"]
+    assert per_node[str(n1["id"])]["total_calls"] == 100
+    assert per_node[str(n2["id"])]["total_calls"] == 40
+    assert per_node[str(n3["id"])] is None
+
+    # per_group rollup for the group sums its two online members.
+    per_group = stats["per_group"]
+    assert per_group[str(gid)]["total_calls"] == 140
+
+
+def test_fleet_stats_empty_when_no_online_nodes(controller):
+    client, headers, ctx = controller
+    ctx.register_node(client, "http://node-1", online=False)
+    stats = client.get("/api/fleet/stats", headers=headers).json()
+    assert stats["aggregate"]["total_calls"] == 0
+    assert stats["aggregate"]["success_rate"] == 0.0

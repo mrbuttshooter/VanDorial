@@ -142,8 +142,21 @@ export interface ConnectorRequest {
   auth_pass?: string;
 }
 
-/* ---- WebSocket envelope (gencall/api/websocket.py) ---------------------- */
-export type StreamTopic = "stats" | "cdr" | "sip" | "alerts" | "logs" | "test";
+/* ---- WebSocket envelope (gencall/api/websocket.py) ----------------------
+   Worker topics ("stats".."test") are emitted by the single-node engine. The
+   controller's /ws hub (see fleet design §4) re-uses the same envelope and adds
+   fleet topics ("fleet_stats" | "node_status" | "fleet_events") so the existing
+   `stream` singleton can subscribe to controller streams unchanged. */
+export type StreamTopic =
+  | "stats"
+  | "cdr"
+  | "sip"
+  | "alerts"
+  | "logs"
+  | "test"
+  | "fleet_stats"
+  | "node_status"
+  | "fleet_events";
 
 export interface StreamMessage<T = unknown> {
   type: "stream" | "connected" | "subscribed" | "unsubscribed" | "error" | "pong";

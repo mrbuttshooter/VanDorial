@@ -1,0 +1,58 @@
+# .dockerignore — keep the build context small and reproducible.
+# Excludes dev artifacts, secrets, and anything the multi-stage build
+# regenerates inside the image (the frontend is built in stage 1, so a
+# locally-built frontend/dist must never leak in).
+
+# Node / frontend build artifacts (stage 1 runs `npm ci` itself)
+node_modules
+**/node_modules
+frontend/dist
+frontend/.vite
+
+# Python caches and build outputs
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build/
+dist/
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.venv
+venv
+env
+
+# Local databases and logs (treated as secrets / runtime state)
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# VCS and editor/OS noise
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# Env files and secrets — never bake these into an image layer
+.env
+.env.*
+!.env.example
+
+# Docker/compose files themselves (not needed inside the image)
+Dockerfile
+**/Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Tests and docs are not needed at runtime
+tests/
+docs/

@@ -18,6 +18,12 @@ from gencall.core.config import Config
 
 logger = logging.getLogger("gencall.sipp")
 
+# os.setsid / os.killpg / os.getpgid are POSIX-only. On Windows (and any other
+# non-POSIX platform) they are absent, so we detect support once and fall back to
+# plain process control there. This keeps Unix behavior (start SIPp in its own
+# session/process group so we can signal the whole group) unchanged.
+_HAS_SETSID = hasattr(os, "setsid") and hasattr(os, "killpg") and hasattr(os, "getpgid")
+
 
 class SIPpTransport(Enum):
     UDP = "u1"
@@ -216,12 +222,15 @@ class SIPpEngine:
             logger.info("Starting SIPp: %s", " ".join(cmd))
 
             instance.state = SIPpState.STARTING
-            instance._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setsid,
-            )
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+            }
+            if _HAS_SETSID:
+                # POSIX: start SIPp in a new session so we can later signal the
+                # whole process group (graceful SIGUSR1, then SIGKILL).
+                popen_kwargs["preexec_fn"] = os.setsid
+            instance._process = subprocess.Popen(cmd, **popen_kwargs)
 
             # Give it a moment to start
             time.sleep(0.5)
@@ -271,14 +280,26 @@ class SIPpEngine:
         instance.state = SIPpState.STOPPING
         try:
             if instance._process and instance._process.poll() is None:
-                # Send SIGUSR1 for graceful shutdown (SIPp convention)
-                os.killpg(os.getpgid(instance._process.pid), signal.SIGUSR1)
-                try:
-                    instance._process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    # Force kill if graceful shutdown failed
-                    os.killpg(os.getpgid(instance._process.pid), signal.SIGKILL)
-                    instance._process.wait(timeout=5)
+                if _HAS_SETSID:
+                    # POSIX: signal the whole process group. SIGUSR1 is SIPp's
+                    # convention for a graceful drain-and-exit.
+                    pgid = os.getpgid(instance._process.pid)
+                    os.killpg(pgid, signal.SIGUSR1)
+                    try:
+                        instance._process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if graceful shutdown failed
+                        os.killpg(pgid, signal.SIGKILL)
+                        instance._process.wait(timeout=5)
+                else:
+                    # Non-POSIX (e.g. Windows): no process groups / SIGUSR1.
+                    # Fall back to terminate(), escalating to kill() on timeout.
+                    instance._process.terminate()
+                    try:
+                        instance._process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        instance._process.kill()
+                        instance._process.wait(timeout=5)
 
             instance.state = SIPpState.STOPPED
             logger.info("SIPp instance %s stopped", instance_id)

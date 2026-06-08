@@ -1,0 +1,209 @@
+/* ============================================================================
+   Fleet-console specific layout: per-node health grid, group rollup cards,
+   and the topbar scope selector. Reuses NOC tokens (tokens.css) throughout.
+   ============================================================================ */
+
+/* ---- Per-node health grid ----------------------------------------------- */
+.nodeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+.nodeCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--node-accent, var(--text-faint));
+  border-radius: var(--r-md);
+  transition: border-color 0.16s var(--ease), transform 0.16s var(--ease),
+    background 0.16s var(--ease);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+.nodeCard:hover {
+  border-color: var(--line-phosphor);
+  background: var(--bg-hover);
+  transform: translateY(-2px);
+}
+.nodeCard:focus-visible {
+  outline: 2px solid var(--signal-dim);
+  outline-offset: 2px;
+}
+.nodeCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.nodeName {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--text-bright);
+  letter-spacing: 0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nodeAddr {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nodeMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+}
+.nodeMetric {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.nodeMetricVal {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-md);
+}
+.nodeMetricLabel {
+  font-size: 9px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ---- Group rollup cards -------------------------------------------------- */
+.groupRollup {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+.rollupCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  transition: border-color 0.16s var(--ease), transform 0.16s var(--ease);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+.rollupCard:hover {
+  border-color: var(--line-phosphor);
+  transform: translateY(-2px);
+}
+.rollupHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.rollupName {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--text-bright);
+  letter-spacing: 0.03em;
+}
+.rollupMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+/* ---- Scope selector (topbar) -------------------------------------------- */
+.scopeBar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.scopeSelect {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 4px var(--space-2);
+  min-width: 92px;
+}
+.scopeSelect:focus-visible {
+  outline: 2px solid var(--signal-dim);
+  outline-offset: 1px;
+}
+.scopeArrow {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+/* ---- Membership transfer (group edit) ----------------------------------- */
+.memberCols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+.memberList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--space-2);
+  background: var(--bg-inset);
+}
+.memberRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.memberRow:hover {
+  background: var(--bg-hover);
+}
+.memberRow input {
+  accent-color: var(--signal);
+}
+.memberMeta {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+/* count chip used in headers */
+.countChip {
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line);
+  padding: 1px 8px;
+  border-radius: 99px;
+}
+
+@media (max-width: 720px) {
+  .scopeSelect {
+    min-width: 72px;
+  }
+}

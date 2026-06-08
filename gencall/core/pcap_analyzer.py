@@ -136,6 +136,7 @@ class PcapAnalyzer:
         self.sip_messages: list[SIPMessage] = []
         self.rtp_streams: dict[int, RTPStreamInfo] = {}  # keyed by SSRC
         self.call_flows: dict[str, list[CallFlowEntry]] = defaultdict(list)  # keyed by Call-ID
+        self.skipped_packets: int = 0  # packets that failed to parse (malformed/non-IP/non-UDP errors)
 
     def analyze_file(self, filepath: str) -> dict:
         """Analyze a pcap file and return structured results."""
@@ -179,8 +180,11 @@ class PcapAnalyzer:
                 # Try RTP
                 self._parse_rtp(ts, src_ip, src_port, dst_ip, dst_port, payload)
 
-        except Exception:
-            pass  # Skip malformed packets
+        except Exception as e:
+            # Skip malformed/unparseable packets but keep a record so a corrupt
+            # or truncated capture is visible rather than silently dropped.
+            self.skipped_packets += 1
+            logger.debug("Skipping malformed packet at ts=%s: %s", ts, e)
 
     @staticmethod
     def _ip_to_str(ip_bytes: bytes) -> str:
@@ -395,6 +399,7 @@ class PcapAnalyzer:
                 "stream_details": [s.to_dict() for s in self.rtp_streams.values()],
             },
             "call_ids": list(call_ids)[:50],
+            "skipped_packets": self.skipped_packets,
         }
 
     def _detect_anomalies(self) -> list[dict]:

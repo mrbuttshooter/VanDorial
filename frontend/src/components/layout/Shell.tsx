@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { useState } from "react";
 import styles from "./layout.module.css";
+import fleet from "@/pages/fleet.module.css";
 import { Sidebar } from "./Sidebar";
 import { Button } from "../ui/Button";
 import { IconPower } from "../icons";
@@ -9,9 +10,15 @@ import { api } from "@/lib/api";
 import { useToast } from "../ui/Toast";
 import { abbrev, num } from "@/lib/format";
 import { Modal, ModalActions } from "../ui/Modal";
+import { useAsync } from "@/hooks/useAsync";
+import { fleetApi } from "@/fleet/fleetApi";
+import { useFleetScope } from "@/fleet/scope";
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Dashboard", sub: "Live traffic overview" },
+  "/fleet": { title: "Fleet Overview", sub: "Cluster-wide telemetry" },
+  "/nodes": { title: "Nodes", sub: "Worker inventory & health" },
+  "/groups": { title: "Groups", sub: "Membership & campaigns" },
   "/campaigns": { title: "Campaigns", sub: "Active & queued test runs" },
   "/scenarios": { title: "Scenarios", sub: "SIP message flows" },
   "/connectors": { title: "Connectors", sub: "SIP endpoints & trunks" },
@@ -51,6 +58,8 @@ export function Shell() {
             <span className={styles.crumbTitle}>{meta.title}</span>
             <span className={styles.crumbSub}>/ {meta.sub}</span>
           </div>
+
+          <ScopeSelector />
 
           <div className={styles.topMeters}>
             <div className={styles.meter}>
@@ -118,6 +127,91 @@ export function Shell() {
           {active === 1 ? "" : "s"} immediately. In-flight calls will be torn down.
         </p>
       </Modal>
+    </div>
+  );
+}
+
+/* ---- Scope selector (design §7) ----------------------------------------
+   Fleet ▸ Group ▸ Node vantage picker. Driving it updates the shared scope
+   context so the fleet pages (and node-scoped console pages, via the proxy)
+   know what to render / target. Two cascading selects: scope kind, then the
+   concrete group / node when applicable. */
+function ScopeSelector() {
+  const { scope, selectFleet, selectGroup, selectNode } = useFleetScope();
+  const groups = useAsync(() => fleetApi.listGroups(), [], 10000);
+  const nodes = useAsync(() => fleetApi.listNodes(), [], 10000);
+
+  const groupList = groups.data?.groups ?? [];
+  const nodeList = nodes.data?.nodes ?? [];
+
+  const onKind = (kind: string) => {
+    if (kind === "fleet") {
+      selectFleet();
+    } else if (kind === "group") {
+      const first = groupList[0];
+      if (first) selectGroup(first.id);
+      else selectFleet();
+    } else {
+      const first = nodeList[0];
+      if (first) selectNode(first.id);
+      else selectFleet();
+    }
+  };
+
+  return (
+    <div className={fleet.scopeBar} title="Telemetry scope">
+      <span className="hud-label">Scope</span>
+      <select
+        className={fleet.scopeSelect}
+        value={scope.kind}
+        onChange={(e) => onKind(e.target.value)}
+        aria-label="Scope kind"
+      >
+        <option value="fleet">Fleet</option>
+        <option value="group" disabled={groupList.length === 0}>
+          Group
+        </option>
+        <option value="node" disabled={nodeList.length === 0}>
+          Node
+        </option>
+      </select>
+
+      {scope.kind === "group" && (
+        <>
+          <span className={fleet.scopeArrow}>▸</span>
+          <select
+            className={fleet.scopeSelect}
+            value={scope.groupId ?? ""}
+            onChange={(e) => selectGroup(Number(e.target.value))}
+            aria-label="Group"
+          >
+            {groupList.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+
+      {scope.kind === "node" && (
+        <>
+          <span className={fleet.scopeArrow}>▸</span>
+          <select
+            className={fleet.scopeSelect}
+            value={scope.nodeId ?? ""}
+            onChange={(e) => selectNode(Number(e.target.value))}
+            aria-label="Node"
+          >
+            {nodeList.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name}
+                {n.online ? "" : " (offline)"}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
     </div>
   );
 }

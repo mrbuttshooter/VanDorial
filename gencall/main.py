@@ -143,10 +143,19 @@ def main():
     parser.add_argument("-p", "--port", type=int, default=None, help="Web server port")
     parser.add_argument("--no-ssl", action="store_true", help="Disable SSL")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker processes")
+    parser.add_argument(
+        "--mode", choices=["worker", "controller"], default="worker",
+        help="Run-mode: 'worker' (default, single-node GenCall server) or "
+             "'controller' (VanDorial fleet control-plane).",
+    )
 
     args = parser.parse_args()
 
-    app, config = create_app(args.config)
+    if args.mode == "controller":
+        from gencall.controller.app import create_controller_app
+        app, config = create_controller_app(Config(args.config))
+    else:
+        app, config = create_app(args.config)
 
     host = args.host or config.web_host
     port = args.port or config.web_port

@@ -18,6 +18,7 @@ setup(
         "uvicorn[standard]>=0.24.0",
         "sqlalchemy>=2.0.0",
         "pydantic>=2.0.0",
+        "httpx>=0.24.0",
         "dpkt>=1.9.8",
     ],
     extras_require={
@@ -27,6 +28,7 @@ setup(
         "console_scripts": [
             "gencall=gencall.cli:main",
             "gencall-server=gencall.main:main",
+            "gencall-controller=gencall.controller.app:run",
         ],
     },
     python_requires=">=3.10",

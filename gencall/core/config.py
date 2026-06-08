@@ -32,7 +32,62 @@ class Config:
             logger.info("Config loaded from %s", self._path)
         else:
             logger.warning("No config file found, using defaults")
+        self._validate()
         self._initialized = True
+
+    def _validate(self):
+        """Light, non-fatal validation of numeric settings.
+
+        Bad values only emit a warning — the typed accessors still return
+        whatever the parser/fallback yields, so behavior is unchanged. This is
+        purely an early heads-up for operators with a misconfigured file.
+        """
+        def warn_range(label, value, low, high):
+            try:
+                v = int(value)
+            except (TypeError, ValueError):
+                logger.warning("Config: %s is not an integer (%r); using anyway", label, value)
+                return
+            if not (low <= v <= high):
+                logger.warning(
+                    "Config: %s=%d is outside the sane range [%d, %d]; using anyway",
+                    label, v, low, high,
+                )
+
+        # TCP/UDP port numbers must be 1-65535.
+        warn_range("web.port", self.web_port, 1, 65535)
+
+        # RTP port window: each within range and min < max.
+        min_rtp = self.min_rtp_port
+        max_rtp = self.max_rtp_port
+        warn_range("sip.min_rtp_port", min_rtp, 1, 65535)
+        warn_range("sip.max_rtp_port", max_rtp, 1, 65535)
+        try:
+            if int(min_rtp) >= int(max_rtp):
+                logger.warning(
+                    "Config: sip.min_rtp_port (%s) should be less than sip.max_rtp_port (%s)",
+                    min_rtp, max_rtp,
+                )
+        except (TypeError, ValueError):
+            pass
+
+        # SIP timers and intervals should be positive.
+        if self.sip_t1 <= 0:
+            logger.warning("Config: sip.T1=%s should be a positive number of ms", self.sip_t1)
+        if self.sip_t2 <= 0:
+            logger.warning("Config: sip.T2=%s should be a positive number of ms", self.sip_t2)
+        if self.stats_interval <= 0:
+            logger.warning(
+                "Config: stats.interval=%s should be positive (seconds between polls)",
+                self.stats_interval,
+            )
+
+        # SIPp file-descriptor limit should be a positive count.
+        if self.sipp_file_limit <= 0:
+            logger.warning(
+                "Config: sipp.open_file_limit=%s should be a positive integer",
+                self.sipp_file_limit,
+            )
 
     @staticmethod
     def _find_config():

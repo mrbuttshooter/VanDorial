@@ -1,14 +1,34 @@
-version: "3.8"
+# VanDorial / GenCall — Podman / Docker Compose
+#
+# RHEL-family hosts (Red Hat / Rocky / Alma). Works with `docker compose` and
+# `podman compose` / `podman-compose`.
+#
+#   build : docker compose build      (or: podman compose build)
+#   up    : docker compose up -d
+#
+# Two run-modes of the SAME image (built once, shared by both services):
+#   - worker     : the GenCall node (REST/WS/SIPp engine)   — port 8080
+#   - controller : the fleet control plane (Phase 2)        — port 8090->8080
+#
+# The browser only ever talks to the controller; the controller reaches workers
+# over the internal network using each node's X-API-Key.
+
+x-gencall-image: &gencall-image vandorial/gencall:latest
 
 services:
+  # ── Worker node (existing GenCall server) ──────────────────────────────────
   gencall:
-    build: .
+    image: *gencall-image
+    build:
+      context: .
+      dockerfile: gencall/Dockerfile
     container_name: gencall
     restart: unless-stopped
     ports:
-      - "8080:8080"           # Web dashboard + API
-      - "5060:5060/udp"       # SIP UDP
-      - "5060:5060/tcp"       # SIP TCP
+      - "8080:8080"             # Web console + REST/WS API
+      - "5060:5060/udp"         # SIP signalling (UDP)
+      - "5060:5060/tcp"         # SIP signalling (TCP)
+      - "10000-20000:10000-20000/udp"  # RTP media
     volumes:
       - ./gencall/etc:/opt/gencall/gencall/etc
       - ./gencall/media:/opt/gencall/media
@@ -27,10 +47,43 @@ services:
       - postgres
     networks:
       - gencall-net
-    # For SIPp to work with host networking (optional, for production):
+    # For SIPp to reach external SIP endpoints with real RTP, host networking
+    # avoids NAT on the wide RTP range. Enable on production hosts if needed:
     # network_mode: host
 
-  # Optional: PostgreSQL for production persistence
+  # ── Controller / fleet control plane (Phase 2) ─────────────────────────────
+  # Same image, controller mode. Fans out commands to the worker node(s),
+  # aggregates telemetry, health-checks nodes, and serves the fleet console.
+  # NOTE: controller mode (`--mode controller` / the `gencall-controller`
+  # entrypoint) is delivered in Phase 2 of the fleet design. The service is
+  # wired here so the topology is ready; until that code lands, start only the
+  # `gencall` worker (e.g. `docker compose up -d gencall postgres`).
+  controller:
+    image: *gencall-image
+    build:
+      context: .
+      dockerfile: gencall/Dockerfile
+    container_name: gencall-controller
+    restart: unless-stopped
+    # Controller run-mode. Spec form: `gencall-server --mode controller`
+    # (alias `gencall-controller`). Browser talks ONLY to this service.
+    command: ["--mode", "controller", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8090:8080"             # Fleet console + controller API (browser entry)
+    volumes:
+      - ./gencall/etc:/opt/gencall/gencall/etc
+      - controller-db:/opt/gencall/data   # controller's own inventory/groups DB
+    environment:
+      - GENCALL_CONFIG=/opt/gencall/gencall/etc/gencall.cfg
+      # Controller keeps its own DB, separate from the worker DB (see spec §3).
+      - GENCALL_DB_ENGINE=${CONTROLLER_DB_ENGINE:-sqlite}
+      - GENCALL_DATABASE_URL=${CONTROLLER_DATABASE_URL:-sqlite:////opt/gencall/data/controller.db}
+    depends_on:
+      - gencall
+    networks:
+      - gencall-net
+
+  # ── PostgreSQL (worker persistence) ────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: gencall-db
@@ -49,6 +102,7 @@ services:
 volumes:
   gencall-logs:
   gencall-db:
+  controller-db:
   gencall-pgdata:
 
 networks:
