@@ -30,6 +30,15 @@ failures, so an abandoned streamer can leak the owned socket/fd/port.
 
 Both are verified by `_selftest.py` against mock modules mirroring the recovered structure.
 
+### Note: two distinct scheduler costs
+
+The retention `DELETE` storm (every-iteration cleanup) is the **idle-CPU** culprit and is fixed
+by the cleanup throttle above. Separately, **under live call load** the scheduler can busy-poll
+`schedulings`/`plannings`/`testcampaigns` at hundreds of Hz (confirmed via `strace`: thousands
+of `futex` + steady `poll`/`sendto`/`recvfrom`, while `pg_stat_activity` shows the DB otherwise
+idle) — which also contends the GIL against call threads. If you see the scheduler thread hot
+(~30%+) under load with a quiet DB, enable `SIGMA_PATCH_LOOP_FLOOR=0.1` (see controls).
+
 ## Install
 
 ```bash
@@ -78,7 +87,7 @@ and a recompile is required instead.
 | Var | Effect |
 |---|---|
 | `SIGMA_PATCH_CLEANUP_INTERVAL=N` | Min seconds between retention cleanups (default 300). |
-| `SIGMA_PATCH_LOOP_FLOOR=N` | Min seconds per scheduler iteration (default 0 = off). Use only if `run()`'s own interval is too small and CPU stays high after throttling cleanup. |
+| `SIGMA_PATCH_LOOP_FLOOR=N` | Min seconds between scheduler poll-loop iterations (default 0 = off). Throttles `monitorScenarios`/`checkPlannings`/`scanDatabase*` so `run()` can't busy-poll the DB at hundreds of Hz **under load**. Set `0.1` (≈10 Hz) if the scheduler thread stays hot (~30%+) while the DB is otherwise idle. Trade-off: scenario start/finish detection is delayed by up to `N` seconds (fine at 0.1). |
 | `SIGMA_PATCH_DRY_RUN=1` | Log decisions, change nothing. |
 | `SIGMA_PATCH_DISABLE=1` | Full no-op without uninstalling. |
 | `SIGMA_PATCH_LOG=<path>` | Where events are appended (default `/var/log/sigma_patch.log`). |

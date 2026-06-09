@@ -131,9 +131,6 @@ def _make_gated(cls, method_name, interval):
         now = time.monotonic()
         last = getattr(self, state_attr, 0.0)
         due = (now - last) >= interval
-        # Optional per-iteration sleep floor (applies on the cleanup call path).
-        if _LOOP_FLOOR > 0 and not _DRY_RUN:
-            time.sleep(_LOOP_FLOOR)
         if not due:
             if _DRY_RUN:
                 _log("DRY-RUN would throttle %s (%.0fs since last < %.0fs); running anyway"
@@ -148,6 +145,46 @@ def _make_gated(cls, method_name, interval):
 
     try:
         setattr(cls, method_name, gated)
+        return True
+    except (TypeError, AttributeError):
+        return False
+
+
+# Methods run() calls every loop iteration; throttling any of these caps the loop rate.
+_LOOP_METHODS = ("monitorScenarios", "checkPlannings",
+                 "scanDatabaseScenarios", "scanDatabaseTestCampaigns")
+
+
+def _make_loop_throttle(cls, method_name, floor):
+    """Wrap cls.method_name so consecutive calls of THIS method are >= `floor` seconds
+    apart (sleeping to fill the gap). Per-method timestamps self-coordinate: once the
+    first per-iteration method sleeps, the others called right after already have ~floor
+    since their own previous call, so the net effect is ~one floor-sleep per loop pass
+    (no compounding). This caps run()'s poll frequency without touching its compiled body."""
+    import functools
+
+    orig = cls.__dict__.get(method_name, None)
+    if orig is None:
+        orig = getattr(cls, method_name, None)
+    if orig is None or not callable(orig):
+        return False
+    state_attr = "_sigma_period_" + method_name
+
+    @functools.wraps(orig)
+    def throttled(self, *args, **kwargs):
+        now = time.monotonic()
+        last = getattr(self, state_attr, 0.0)
+        gap = now - last
+        if 0.0 <= gap < floor and not _DRY_RUN:
+            time.sleep(floor - gap)
+        try:
+            setattr(self, state_attr, time.monotonic())
+        except Exception:
+            pass
+        return orig(self, *args, **kwargs)
+
+    try:
+        setattr(cls, method_name, throttled)
         return True
     except (TypeError, AttributeError):
         return False
@@ -172,6 +209,14 @@ def _apply_scheduler_patch(module):
     for name in ("cleanup", "do_cleanup"):
         if _make_gated(cls, name, _CLEANUP_INTERVAL):
             gated.append(name)
+
+    # Cap the poll-loop frequency (kills the SELECT-poll busy-spin under load).
+    floored = []
+    if _LOOP_FLOOR > 0:
+        for name in _LOOP_METHODS:
+            if _make_loop_throttle(cls, name, _LOOP_FLOOR):
+                floored.append(name)
+
     try:
         setattr(cls, _PATCH_FLAG, True)
     except Exception:
@@ -180,7 +225,8 @@ def _apply_scheduler_patch(module):
     if gated:
         _log("scheduler CPU hotfix ACTIVE%s: throttled %s to >=%.0fs%s. log=%s"
              % (" [DRY-RUN]" if _DRY_RUN else "", "+".join(gated), _CLEANUP_INTERVAL,
-                (" loop_floor=%.2fs" % _LOOP_FLOOR) if _LOOP_FLOOR > 0 else "", _LOG_PATH))
+                (" + loop floor %.3fs on %s" % (_LOOP_FLOOR, "+".join(floored)))
+                if floored else " (loop floor OFF)", _LOG_PATH))
     else:
         _log("scheduler: no cleanup/do_cleanup method found to throttle "
              "(retention DELETEs may be inline in run(); see SIGMA_PATCH_DB_THROTTLE note)",
