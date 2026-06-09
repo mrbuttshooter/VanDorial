@@ -1,0 +1,8 @@
+# Keep NetAxis proprietary binaries and reverse-engineering teardown OUT of this public repo.
+sigma/
+ANALYSIS/
+extract.sh
+
+# Allow only the original hotfix overlay and its packaged tarball.
+!patch/
+!sigma-cpu-hotfix.tar.gz
