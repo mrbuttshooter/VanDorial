@@ -8,9 +8,12 @@ import asyncio
 import logging
 import sys
 import os
+import tempfile
+from contextlib import asynccontextmanager
+
 import uvicorn
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from gencall.core.config import Config
@@ -21,12 +24,26 @@ from gencall.scenarios.manager import ScenarioManager
 from gencall.db.models import Database
 from gencall.api import routes
 from gencall.api import websocket
-from gencall.web.dashboard import router as dashboard_router
 
 logger = logging.getLogger("gencall")
 
 # Built NOC console (frontend/ → `npm run build` emits here).
 CONSOLE_DIR = os.path.join(os.path.dirname(__file__), "web", "console")
+
+# Served at / only when the console build is missing — points the operator at
+# the build step and the live API. The React console in web/console/ is the UI.
+CONSOLE_MISSING_HTML = (
+    "<!doctype html><meta charset='utf-8'><title>GenCall</title>"
+    "<body style='font:14px ui-monospace,monospace;background:#0a0e12;"
+    "color:#e6edf3;padding:48px;line-height:1.6'>"
+    "<h1 style='color:#00e6a7'>GenCall</h1>"
+    "<p>The NOC console build was not found.</p>"
+    "<p>Build it with <code>npm install &amp;&amp; npm run build</code> in "
+    "<code>frontend/</code>, then restart.</p>"
+    "<p>API is live at <a style='color:#00e6a7' href='/api/health'>/api/health</a> "
+    "&middot; docs at <a style='color:#00e6a7' href='/docs'>/docs</a>.</p>"
+    "</body>"
+)
 
 
 def create_app(config_path: str = None):
@@ -50,7 +67,9 @@ def create_app(config_path: str = None):
     # Database
     db = None
     try:
-        db_dir = os.path.dirname(config.get("database", "sqlite_path", "/tmp/gencall.db"))
+        db_dir = os.path.dirname(
+            config.get("database", "sqlite_path", os.path.join(tempfile.gettempdir(), "gencall.db"))
+        )
         os.makedirs(db_dir, exist_ok=True)
         db = Database(config.db_url)
         db.create_tables()
@@ -98,15 +117,16 @@ def create_app(config_path: str = None):
     app.include_router(websocket.router)
     stats_engine.add_listener(websocket.on_stats_update)
 
-    @app.on_event("startup")
-    async def _bind_ws_loop() -> None:
+    @asynccontextmanager
+    async def _lifespan(_app):
         # The sync→async broadcast bridge needs the running loop.
         websocket.set_event_loop(asyncio.get_running_loop())
+        yield
+
+    app.router.lifespan_context = _lifespan
 
     # ── Web UI ──────────────────────────────────────────────────────────────
-    # New NOC console (SPA) at /console; legacy dashboard kept at /legacy.
-    app.include_router(dashboard_router, prefix="/legacy")
-
+    # The NOC console SPA (frontend/, built into web/console/) is the only UI.
     if os.path.isdir(CONSOLE_DIR):
         app.mount("/console", StaticFiles(directory=CONSOLE_DIR, html=True), name="console")
 
@@ -117,11 +137,13 @@ def create_app(config_path: str = None):
         logger.info("NOC console mounted: /console")
     else:
         logger.warning(
-            "Console build not found at %s — run `npm run build` in frontend/. "
-            "Falling back to legacy dashboard at /.",
+            "Console build not found at %s — run `npm run build` in frontend/.",
             CONSOLE_DIR,
         )
-        app.include_router(dashboard_router)
+
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def _console_missing():
+            return CONSOLE_MISSING_HTML
 
     # Start stats collection
     stats_engine.start()

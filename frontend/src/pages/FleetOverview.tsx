@@ -58,7 +58,9 @@ export function FleetOverview() {
   const conc = series.map((p) => p.current_calls);
   const succ = series.map((p) => p.success_rate);
 
-  const nodeList = nodes.data?.nodes ?? [];
+  // Memoize so the `?? []` fallback doesn't mint a new array reference every
+  // render (which would defeat the onlineNodes memo and re-run it each time).
+  const nodeList = useMemo(() => nodes.data?.nodes ?? [], [nodes.data]);
   const groupList = groups.data?.groups ?? [];
   const perNode = stats.data?.per_node ?? {};
   const perGroup = stats.data?.per_group ?? {};

@@ -435,17 +435,13 @@ def _():
     assert resp.status_code == 200
     assert "tests" in resp.json()
 
-@test("Dashboard serves HTML")
+@test("Console-missing fallback page serves HTML")
 def _():
-    from fastapi.testclient import TestClient
-    from gencall.api import routes
-    from gencall.web.dashboard import router as dashboard_router
-    # Mount dashboard like main.py does
-    routes.app.include_router(dashboard_router)
-    client = TestClient(routes.app)
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "GenCall" in resp.text
+    # The React console (web/console/) is the UI. When its build is absent the
+    # server falls back to this minimal page at / instead of a legacy dashboard.
+    from gencall.main import CONSOLE_MISSING_HTML
+    assert "GenCall" in CONSOLE_MISSING_HTML
+    assert "/api/health" in CONSOLE_MISSING_HTML
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

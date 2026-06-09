@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { hexA } from "./Sparkline";
+import { hexA } from "./chartUtils";
 import styles from "./charts.module.css";
 
 export interface Series {
