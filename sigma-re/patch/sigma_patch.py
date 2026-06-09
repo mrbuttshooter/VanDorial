@@ -56,13 +56,52 @@ SCHED_MODULE = "sigma.core.scheduler"
 _PATCH_FLAG = "_sigma_patched"
 _FINALIZER_FLAG = "_sigma_finalizer_registered"
 
-_DISABLED = os.environ.get("SIGMA_PATCH_DISABLE", "") in ("1", "true", "TRUE", "yes")
-_DRY_RUN = os.environ.get("SIGMA_PATCH_DRY_RUN", "") in ("1", "true", "TRUE", "yes")
+
+def _read_config_file():
+    """Read KEY=VALUE settings from a config file, so options work even when the
+    service launcher doesn't propagate environment variables to the python process.
+    Checked in order; first existing file wins. Env vars always take precedence."""
+    paths = [os.environ.get("SIGMA_PATCH_CONF"),
+             "/opt/sigma/etc/sigma_patch.conf",
+             "/etc/sigma_patch.conf"]
+    cfg = {}
+    for p in paths:
+        if not p or not os.path.isfile(p):
+            continue
+        try:
+            with open(p) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+            cfg["__source__"] = p
+            break
+        except Exception:
+            pass
+    return cfg
+
+
+_CONF = _read_config_file()
+
+
+def _get(name, default=None):
+    """Resolve a setting: environment first, then config file, then default."""
+    if name in os.environ:
+        return os.environ[name]
+    if name in _CONF:
+        return _CONF[name]
+    return default
+
+
+_DISABLED = str(_get("SIGMA_PATCH_DISABLE", "")) in ("1", "true", "TRUE", "yes")
+_DRY_RUN = str(_get("SIGMA_PATCH_DRY_RUN", "")) in ("1", "true", "TRUE", "yes")
 
 
 def _env_float(name, default):
     try:
-        return float(os.environ.get(name, default))
+        return float(_get(name, default))
     except (TypeError, ValueError):
         return float(default)
 
@@ -74,7 +113,7 @@ _logger = logging.getLogger("sigma_patch")
 
 
 def _log_file_path():
-    p = os.environ.get("SIGMA_PATCH_LOG")
+    p = _get("SIGMA_PATCH_LOG")
     if p:
         return p
     default = "/var/log/sigma_patch.log"
@@ -431,6 +470,9 @@ class _PostImportFinder:
 
 
 def install():
+    if _CONF.get("__source__"):
+        _log("loaded config from %s (loop_floor=%.3fs cleanup_interval=%.0fs)"
+             % (_CONF["__source__"], _LOOP_FLOOR, _CLEANUP_INTERVAL))
     if _DISABLED:
         _log("SIGMA_PATCH_DISABLE set - hook not installed")
         return

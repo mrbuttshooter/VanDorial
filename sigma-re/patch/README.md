@@ -82,7 +82,26 @@ top -bH -p "$(pgrep -f sigma-web | head -1)"   # the hot scheduler thread should
 reports `Scheduler ... patchable: NO (cdef extension type)`, the on-box throttle is impossible
 and a recompile is required instead.
 
-## Controls (env vars)
+## Setting options (env var OR config file)
+
+Every option below can be set as an **environment variable** *or* in a **config file** —
+whichever is easier for your service launcher. Env vars win if both are set.
+
+The config file is the reliable choice when the service drops privileges / doesn't propagate
+env (e.g. a SysV init script). The patch reads, first match wins:
+`$SIGMA_PATCH_CONF` → `/opt/sigma/etc/sigma_patch.conf` → `/etc/sigma_patch.conf`.
+
+```bash
+# enable the under-load poll-loop throttle without touching the init script:
+cat > /opt/sigma/etc/sigma_patch.conf <<'EOF'
+SIGMA_PATCH_LOOP_FLOOR=0.1
+SIGMA_PATCH_CLEANUP_INTERVAL=300
+EOF
+systemctl restart sigmaWeb        # in your maintenance window
+grep "loaded config" /var/log/sigma_patch.log   # confirms the file was read
+```
+
+## Controls (env vars / config-file keys)
 
 | Var | Effect |
 |---|---|
