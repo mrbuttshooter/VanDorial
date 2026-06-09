@@ -10,6 +10,7 @@ import time
 import threading
 import logging
 import shlex
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -149,8 +150,17 @@ class SIPpInstance:
         if self.auth_pass:
             cmd.extend(["-ap", self.auth_pass])
 
-        # Stats output
-        self._stats_file = f"/tmp/gencall_sipp_{self.id}.csv"
+        # Stats output. The directory comes from config ([sipp] stats_dir,
+        # default /tmp) so Linux behavior is unchanged, but /tmp is POSIX-only
+        # and absent on Windows — fall back to the platform temp dir if the
+        # configured location does not exist and cannot be created.
+        stats_dir = config.sipp_stats_dir or tempfile.gettempdir()
+        if not os.path.isdir(stats_dir):
+            try:
+                os.makedirs(stats_dir, exist_ok=True)
+            except OSError:
+                stats_dir = tempfile.gettempdir()
+        self._stats_file = os.path.join(stats_dir, f"gencall_sipp_{self.id}.csv")
         cmd.extend(["-trace_stat", "-stf", self._stats_file, "-fd", "1"])
 
         # Screen output control

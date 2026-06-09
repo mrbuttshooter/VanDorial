@@ -159,6 +159,13 @@ class Config:
     def sipp_transport(self):
         return self.get("sipp", "default_transport", "udp")
 
+    @property
+    def sipp_stats_dir(self):
+        # Directory for SIPp's per-instance stats CSV. Defaults to /tmp to
+        # preserve existing Linux behavior; override on non-POSIX hosts (e.g.
+        # Windows) or to relocate stats off /tmp on Linux containers.
+        return self.get("sipp", "stats_dir", "/tmp")
+
     # --- Database ---
     # Secrets (DB credentials) should come from the environment, never the
     # config file. Env vars override the corresponding [database] settings.
