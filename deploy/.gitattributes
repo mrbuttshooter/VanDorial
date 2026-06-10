@@ -1,0 +1,3 @@
+# Deploy scripts run on the Ubuntu box — force LF so the shebang doesn't break
+# with a CRLF ("bad interpreter: bash\r") when checked out on Windows then copied.
+*.sh text eol=lf
