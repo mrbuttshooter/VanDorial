@@ -105,8 +105,13 @@
     </action>
   </nop>
 
-  <!-- 200 OK to the BYE. -->
-  <send>
+  <!-- 200 OK to the BYE. The normal path ends here: jump straight to the
+       call_done label at the very end of the scenario so we DON'T fall through
+       into the max_duration_guard block (a SIPp <label> is only a jump target,
+       it does not stop the scenario). Without this next=, every normally
+       completed call would also fire the guard BYE + a duplicate t_bye_received
+       log line, corrupting B-side duration and channel-free accounting. -->
+  <send next="call_done">
     <![CDATA[
       SIP/2.0 200 OK
       [last_Via:]
@@ -118,14 +123,12 @@
     ]]>
   </send>
 
-  <label id="call_done" />
-  <!-- Reaching here ends this dialog; SIPp recycles the slot for the next call. -->
-
   <!-- ── Max-duration guard: BYE a stuck call from our side ─────────────
-       Entered only when no BYE arrived within [duration_max_s]. We send our
-       own BYE, log t_bye_received as this guard fire (the parser still gets a
-       terminal event so the channel is accounted and freed), then fall
-       through to call_done. -->
+       Entered ONLY via the recv ontimeout="max_duration_guard" jump above,
+       i.e. when no BYE arrived within [duration_max_s]. We send our own BYE,
+       log t_bye_received as this guard fire (the parser still gets a terminal
+       event so the channel is accounted and freed), then fall through to
+       call_done at the end. -->
   <label id="max_duration_guard" />
   <send retrans="500">
     <![CDATA[
@@ -145,6 +148,14 @@
     </action>
   </nop>
   <recv response="200" optional="true" crlf="true" next="call_done" />
+
+  <!-- ── End of dialog ──────────────────────────────────────────────────
+       Both the normal BYE path (via next="call_done" on its 200-OK send) and
+       the guard path (via the recv next="call_done" above) converge here.
+       Reaching this label ends the dialog; SIPp recycles the slot for the
+       next call. It MUST be the last executable element so neither path can
+       fall through into another send. -->
+  <label id="call_done" />
 
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
   <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000, 30000" />

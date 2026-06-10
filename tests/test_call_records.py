@@ -369,3 +369,88 @@ def test_trust_filter_empty_whitelist_allows_all(tmp_path, db):
     assert len(finalized) == 1
     assert finalized[0]["trusted"] is True
     assert len(_fetch_records(db)) == 1
+
+
+# ── loop_uas.xml scenario-structure guard (real-SIPp label semantics) ───────
+#
+# A SIPp <label> is ONLY a jump target — it does NOT halt the scenario.
+# Execution falls through a label into whatever element follows it. The
+# previous template placed `call_done` BEFORE the `max_duration_guard` block,
+# so a normally completed call (BYE received -> 200-OK sent) fell straight
+# through call_done into the guard and sent a SECOND, unsolicited BYE plus a
+# duplicate `t_bye_received ... guard=max_duration` log line on EVERY call,
+# corrupting B-side duration and channel-free accounting.
+#
+# Correct shape: the normal-path 200-OK <send> must carry next="call_done",
+# the guard's trailing <recv> must carry next="call_done", and `call_done`
+# must be the LAST <label> in the file (after `max_duration_guard`) so neither
+# path can fall through into the guard's <send>.
+
+
+def _loop_uas_xml_path():
+    import os as _os
+    from gencall.scenarios import manager as _m
+
+    return _os.path.join(_os.path.dirname(_m.__file__), "templates", "loop_uas.xml")
+
+
+def test_loop_uas_template_parses_and_has_guard_labels():
+    """The template is well-formed XML and declares both control labels once."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(_loop_uas_xml_path()).getroot()
+    label_ids = [el.get("id") for el in root.iter("label")]
+    assert label_ids.count("call_done") == 1
+    assert label_ids.count("max_duration_guard") == 1
+
+
+def test_loop_uas_call_done_is_after_max_duration_guard():
+    """call_done must be the LAST executable label, after the guard block.
+
+    A label before the guard cannot serve as a skip target (SIPp labels don't
+    stop execution), so call_done has to sit at the very end. This pins the
+    ordering that prevents the normal path from falling through into the guard.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(_loop_uas_xml_path()).getroot()
+    order = [el.get("id") for el in root.iter("label")]
+    assert order.index("max_duration_guard") < order.index("call_done"), (
+        "call_done must come AFTER max_duration_guard so the normal BYE path "
+        "(which jumps to call_done) skips the guard's unsolicited BYE."
+    )
+    # call_done is the last <label> and no <send> may follow it (which would
+    # re-introduce a fall-through into an unsolicited message).
+    children = list(root)
+    last_label_idx = max(
+        i for i, el in enumerate(children)
+        if el.tag == "label" and el.get("id") == "call_done"
+    )
+    assert not any(
+        el.tag == "send" for el in children[last_label_idx + 1:]
+    ), "no <send> may follow the call_done label"
+
+
+def test_loop_uas_normal_bye_path_skips_the_guard():
+    """The normal-path BYE 200-OK <send> jumps to call_done, not the guard.
+
+    Without next="call_done" on this send, a normally completed call falls
+    through into max_duration_guard and emits a duplicate guard=max_duration
+    log line + a second BYE. We pin that exactly one <send> targets call_done
+    and that it is the BYE-200-OK send (Content-Length 0, no SDP, no BYE
+    request line of its own).
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(_loop_uas_xml_path()).getroot()
+    sends_to_call_done = [
+        el for el in root.iter("send") if el.get("next") == "call_done"
+    ]
+    assert len(sends_to_call_done) == 1, (
+        "exactly one <send> (the normal BYE 200-OK) must jump to call_done"
+    )
+    body = (sends_to_call_done[0].text or "")
+    assert "200 OK" in body
+    assert "Content-Length: 0" in body
+    # It must be a response, not the guard's own BYE request.
+    assert "BYE sip:" not in body
