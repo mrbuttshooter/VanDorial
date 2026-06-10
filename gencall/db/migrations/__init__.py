@@ -61,6 +61,44 @@ def _split_statements(sql_text):
     return statements
 
 
+# ── dialect translation ──────────────────────────────────────────────────────
+#
+# The migration files are authored with SQLite syntax (the test DB), but
+# production is PostgreSQL. ``INTEGER PRIMARY KEY AUTOINCREMENT`` is a
+# SQLite-ONLY construct: on PostgreSQL it is a hard syntax error that aborts the
+# whole migration transaction, so the records/stats schema would never be
+# created on the box. We rewrite it per dialect at apply time, branching on the
+# engine's dialect name (``engine.dialect.name``):
+#
+#   * sqlite      -> kept as-is (``INTEGER PRIMARY KEY AUTOINCREMENT``)
+#   * postgresql  -> ``BIGSERIAL PRIMARY KEY`` (auto-incrementing 64-bit id)
+#   * other       -> kept as-is (best-effort; sqlite syntax is the source form)
+#
+# Case-insensitive, whitespace-tolerant so a column like
+# ``id  INTEGER   PRIMARY KEY   AUTOINCREMENT`` is matched regardless of spacing.
+# Everything else in our migrations (VARCHAR/BIGINT/FLOAT/REAL/TEXT/INTEGER,
+# CREATE TABLE/INDEX IF NOT EXISTS) is valid on both engines, so no other
+# rewrite is needed. (Audited 0001–0005: AUTOINCREMENT is the only SQLite-ism.)
+
+import re
+
+_AUTOINCREMENT_RE = re.compile(
+    r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", re.IGNORECASE
+)
+
+
+def _translate_for_dialect(stmt, dialect_name):
+    """Rewrite SQLite-only DDL tokens for the target SQLAlchemy dialect.
+
+    Currently only ``INTEGER PRIMARY KEY AUTOINCREMENT`` needs translation; on
+    PostgreSQL it becomes ``BIGSERIAL PRIMARY KEY``. On sqlite (or any other
+    dialect) the statement is returned unchanged.
+    """
+    if dialect_name == "postgresql":
+        return _AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", stmt)
+    return stmt
+
+
 def apply_migrations(engine):
     """Apply every pending SQL migration against the given SQLAlchemy engine.
 
@@ -68,6 +106,11 @@ def apply_migrations(engine):
     those already recorded. Returns the list of filenames applied this call.
     """
     from sqlalchemy import text
+
+    # Branch DDL generation on the live engine's dialect so SQLite-authored
+    # migrations apply cleanly on PostgreSQL (production) too — see
+    # _translate_for_dialect.
+    dialect_name = engine.dialect.name
 
     applied = []
     with engine.begin() as conn:
@@ -92,7 +135,7 @@ def apply_migrations(engine):
         # One transaction per file: all-or-nothing.
         with engine.begin() as conn:
             for stmt in statements:
-                conn.execute(text(stmt))
+                conn.execute(text(_translate_for_dialect(stmt, dialect_name)))
             conn.execute(
                 text(
                     "INSERT INTO schema_migrations (filename, applied_at) "

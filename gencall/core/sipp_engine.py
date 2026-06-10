@@ -152,7 +152,33 @@ class SIPpInstance:
     _process: Optional[subprocess.Popen] = field(default=None, repr=False)
     _monitor_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _stats_file: str = field(default="", repr=False)
+    # Per-call <log> output path the CallRecordParser tails (design §4.2). Set in
+    # build_command alongside _stats_file so the LoopEngine can register it with
+    # the parser on start. Derived from the stats path (same dir/stem, .calllog
+    # suffix); SIPp's <log> actions (loop_uac/loop_uas) are pointed here via
+    # -trace_logs so the file the parser reads is the file SIPp writes.
+    log_file: str = field(default="", repr=False)
+    _run_dir: str = field(default="", repr=False)
     error_message: str = ""
+
+    def log_file_candidates(self) -> list:
+        """Paths the per-call <log> output may land at, for the parser to tail.
+
+        Returns the deterministic ``.calllog`` path (what the test stub writes)
+        plus, once the process has a pid, the real-SIPp ``<scenario>_<pid>_logs.log``
+        path (which SIPp derives itself — no flag overrides it). Registering both
+        is safe: the CallRecordParser skips any path that does not (yet) exist, so
+        whichever file actually gets written is the one ingested.
+        """
+        out = []
+        if self.log_file:
+            out.append(self.log_file)
+        proc = self._process
+        pid = getattr(proc, "pid", None)
+        if pid is not None and self._run_dir and self.scenario_file:
+            stem = os.path.splitext(os.path.basename(self.scenario_file))[0]
+            out.append(os.path.join(self._run_dir, f"{stem}_{pid}_logs.log"))
+        return out
 
     def build_command(self, config: Config) -> list:
         """Build the SIPp command line arguments."""
@@ -219,6 +245,20 @@ class SIPpInstance:
                 stats_dir = tempfile.gettempdir()
         self._stats_file = os.path.join(stats_dir, f"gencall_sipp_{self.id}.csv")
         cmd.extend(["-trace_stat", "-stf", self._stats_file, "-fd", "1"])
+
+        # Remember the resolved stats dir; the engine runs SIPp with this as cwd
+        # so real SIPp's <scenario>_<pid>_logs.log lands in a known directory we
+        # can resolve after spawn (see SIPpEngine._resolve_log_files).
+        self._run_dir = stats_dir
+
+        # Per-call <log> output path (design §4.2). Derive it from the stats path
+        # (same dir + stem, ".calllog" suffix) so it is deterministic and known
+        # BEFORE the process is spawned — the test stub writes its call log here
+        # verbatim. Real SIPp instead writes <scenario>_<pid>_logs.log in the cwd
+        # (no flag overrides that path); the engine resolves THAT path after the
+        # pid is known and registers both with the CallRecordParser. Tracking a
+        # not-yet-existent path is harmless (the parser skips missing files).
+        self.log_file = os.path.splitext(self._stats_file)[0] + ".calllog"
 
         # Screen output control. -trace_err writes SIPp's own error file, so we
         # do NOT need (and must not keep) a stderr PIPE open — see start_instance,
@@ -309,6 +349,12 @@ class SIPpEngine:
                 # discard it here rather than holding a pipe we never drain.
                 "stderr": subprocess.DEVNULL,
             }
+            # Run SIPp with the stats dir as cwd so its self-named per-call log
+            # (<scenario>_<pid>_logs.log) lands in a directory we can resolve
+            # after spawn (see SIPpInstance.log_file_candidates). build_command
+            # set _run_dir to that same resolved stats dir.
+            if getattr(instance, "_run_dir", ""):
+                popen_kwargs["cwd"] = instance._run_dir
             if _HAS_SETSID:
                 # POSIX: start SIPp in a new session so we can later signal the
                 # whole process group (graceful SIGUSR1, then SIGKILL).

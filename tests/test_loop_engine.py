@@ -248,6 +248,142 @@ def test_uas_enforces_positive_duration_max_s(loop_engine, monkeypatch):
     assert "duration_max_s 7200" in inst.extra_args
 
 
+# ─── CallRecordParser wiring (design §4.2 — the records BLOCKER) ──────────────
+
+def _count_call_records(db):
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        return conn.execute(
+            text("SELECT COUNT(*) FROM call_records")
+        ).fetchone()[0]
+
+
+def test_start_campaign_registers_log_with_parser(loop_engine, db):
+    """Starting a campaign registers the UAC's per-call log path with the wired
+    parser AND the parser ingests the stub's emitted records into call_records.
+
+    This is the end-to-end records path: without it call_records stays empty and
+    every minutes/completion stat is permanently 0.
+    """
+    from gencall.core.call_records import CallRecordParser
+
+    parser = CallRecordParser(db=db)
+    loop_engine.parser = parser
+
+    campaign = loop_engine.start_campaign(
+        name="rec", dest_host="1.2.3.4", rate=20.0, max_concurrent=10,
+        duration_s=1, target_calls=20,
+    )
+    cid = campaign["id"]
+
+    # The campaign's UAC log path(s) are now tracked by the parser.
+    inst = loop_engine.engine.get_instance(f"uac-{cid}")
+    candidates = inst.log_file_candidates()
+    assert candidates, "instance must expose a per-call log path"
+    assert any(p in parser._files for p in candidates), (
+        "start_campaign must register the UAC log with the parser"
+    )
+
+    # Let the finite stub run write its call log, then poll the parser.
+    deadline = time.time() + 30
+    while inst.state == SIPpState.RUNNING and time.time() < deadline:
+        time.sleep(0.1)
+    # A couple of polls to drain everything the stub wrote.
+    for _ in range(3):
+        parser.poll_once()
+        time.sleep(0.05)
+
+    assert _count_call_records(db) > 0, (
+        "the wired parser must ingest the campaign's call records"
+    )
+
+
+def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
+                                                         monkeypatch):
+    """create_app() instantiates and wires a CallRecordParser, and a campaign
+    started through the wired LoopEngine lands records in call_records.
+
+    Proves the production wiring (not just isolated units): the parser is
+    instantiated in create_app, attached to the LoopEngine, started, and given
+    the trust whitelist. This is the BLOCKER the review flagged (parser never
+    instantiated in main.py).
+    """
+    import textwrap
+
+    from gencall.core.config import Config
+
+    # A config pointing [sipp] at the stub and [database] at a temp sqlite file.
+    db_path = tmp_path / "appwire.db"
+    cfg_path = tmp_path / "appwire.cfg"
+    cfg_path.write_text(
+        textwrap.dedent(
+            f"""\
+            [sipp]
+            command = {stub_sipp.launcher}
+            stats_dir = {stub_sipp.stats_dir}
+            open_file_limit = 256
+            default_transport = udp
+
+            [database]
+            engine = sqlite
+            sqlite_path = {db_path}
+
+            [trust]
+            whitelist = 10.0.0.0/24
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+
+    # NB: `import gencall.main` (not `from gencall import main`) — the package
+    # __init__ sets __name__ = "GenCall", which breaks the `from gencall import
+    # <submodule>` form but not the dotted-import form.
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, config = gc_main.create_app(str(cfg_path))
+    try:
+        le = loops_api.loop_engine
+        parser = le.parser
+        # The parser was instantiated, wired to the engine, and carries the
+        # configured trust whitelist (proving config.trust_whitelist is passed).
+        assert parser is not None, "create_app must wire a CallRecordParser"
+        assert parser.trust_whitelist == ["10.0.0.0/24"]
+
+        # Start a finite campaign through the wired engine.
+        campaign = le.start_campaign(
+            name="wired", dest_host="1.2.3.4", rate=20.0, max_concurrent=10,
+            duration_s=1, target_calls=20,
+        )
+        cid = campaign["id"]
+        inst = le.engine.get_instance(f"uac-{cid}")
+        deadline = time.time() + 30
+        while inst.state == SIPpState.RUNNING and time.time() < deadline:
+            time.sleep(0.1)
+        for _ in range(3):
+            parser.poll_once()
+            time.sleep(0.05)
+
+        from sqlalchemy import text
+        with le.db.engine.connect() as conn:
+            n = conn.execute(
+                text("SELECT COUNT(*) FROM call_records WHERE campaign_id = :c"),
+                {"c": cid},
+            ).fetchone()[0]
+        assert n > 0, "records ingested through the create_app wiring"
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 # ─── API router tests (FastAPI TestClient) ────────────────────────────────────
 
 @pytest.fixture

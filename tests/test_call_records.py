@@ -295,6 +295,72 @@ def test_parser_poll_interval_floored():
     assert parser.poll_interval >= MIN_POLL_INTERVAL_S
 
 
+# ── binary-seek byte offset (multibyte / CRLF safe) ─────────────────────────
+
+
+def test_read_new_lines_binary_offset_multibyte(tmp_path):
+    """The tail offset is a TRUE byte offset and survives multibyte lines.
+
+    A UTF-8 line with multibyte characters has more BYTES than CHARS, and CRLF
+    line endings add a byte the text-mode splitter hides. With the old text-mode
+    seek(byte_offset) the second pass would seek to the wrong position and either
+    re-read or skip data. Writing two lines across two passes — the first line
+    carrying a multibyte name and a CRLF terminator — must yield exactly the two
+    records, in order, with no corruption and no duplication.
+    """
+    path = tmp_path / "multibyte.calllog"
+    parser = CallRecordParser(db=None)
+    parser.add_log_file(str(path), campaign_id="mb")
+    state = parser._files[str(path)]
+
+    # Line 1: multibyte a_number (café / 日本) + CRLF terminator (bytes > chars).
+    line1 = (
+        "direction=out call_id=mb-1 a_number=café日本 b_number=200 "
+        "t_invite=1000 t_200ok_received=1100 t_bye_sent=61100 final_code=200\r\n"
+    )
+    path.write_bytes(line1.encode("utf-8"))
+
+    lines = parser._read_new_lines(str(path), state)
+    assert len(lines) == 1
+    assert "call_id=mb-1" in lines[0]
+    # The offset advanced by the exact BYTE length of line 1 (incl. CRLF).
+    assert state["offset"] == len(line1.encode("utf-8"))
+
+    # Append a second line; the next read must start exactly where line 1 ended.
+    line2 = (
+        "direction=out call_id=mb-2 a_number=second b_number=200 "
+        "t_invite=2000 t_200ok_received=2100 t_bye_sent=62100 final_code=200\n"
+    )
+    with open(path, "ab") as fh:
+        fh.write(line2.encode("utf-8"))
+
+    lines2 = parser._read_new_lines(str(path), state)
+    assert len(lines2) == 1, "second pass must read ONLY the appended line"
+    assert "call_id=mb-2" in lines2[0]
+    assert "café" not in lines2[0], "line 1 must not be re-read (offset corrupt)"
+    assert state["offset"] == len(line1.encode("utf-8")) + len(line2.encode("utf-8"))
+
+
+def test_ingest_multibyte_line_end_to_end(tmp_path, db):
+    """A full multibyte call log parses and lands one correct record in the DB."""
+    path = tmp_path / "mb_e2e.calllog"
+    path.write_bytes(
+        (
+            "loop_uac direction=out call_id=mbcall a_number=café日本 "
+            "b_number=200 t_invite=1000 t_200ok_received=1100 "
+            "t_bye_sent=61100 final_code=200\n"
+        ).encode("utf-8")
+    )
+    parser = CallRecordParser(db=db)
+    parser.add_log_file(str(path), campaign_id="mb")
+    finalized = parser.poll_once()
+    assert len(finalized) == 1
+    rows = _fetch_records(db)
+    assert len(rows) == 1
+    assert rows[0]["a_number"] == "café日本"
+    assert rows[0]["duration_ms"] == 60000
+
+
 # ── trust filter (design §4.1, verification-only) ───────────────────────────
 
 

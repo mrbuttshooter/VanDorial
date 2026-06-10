@@ -336,8 +336,15 @@ class CallRecordParser:
     def _read_new_lines(self, path, state):
         """Read bytes appended since the stored offset; return list[str] lines.
 
-        Only complete lines are consumed; a trailing partial line is left for
-        the next pass by advancing the offset to the last newline.
+        The offset is a TRUE BYTE offset and the file is read in BINARY mode:
+        text-mode ``seek()`` on a multibyte/CRLF log mixes byte and character
+        positions (Python text streams only allow seeking to opaque cookies),
+        so a byte offset fed to a text-mode seek corrupts the read on any
+        non-ASCII or CRLF line. We therefore seek/read raw bytes, split on the
+        last newline at the byte level, advance the offset by the exact byte
+        count consumed, and only then decode the consumed bytes to str. Only
+        complete lines are consumed; a trailing partial line is left for the
+        next pass.
         """
         if not os.path.exists(path):
             return []
@@ -351,20 +358,25 @@ class CallRecordParser:
         if size == state["offset"]:
             return []
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(path, "rb") as fh:
                 fh.seek(state["offset"])
                 chunk = fh.read(size - state["offset"])
         except OSError as e:
             logger.debug("Could not read log file %s: %s", path, e)
             return []
 
-        last_nl = chunk.rfind("\n")
+        # Find the last newline at the BYTE level so the offset stays a byte
+        # offset (b"\n" is 0x0A and never appears inside a UTF-8 multibyte
+        # sequence, so splitting on it never bisects a character).
+        last_nl = chunk.rfind(b"\n")
         if last_nl == -1:
             # No complete line yet; wait for more bytes.
             return []
         consumed = chunk[: last_nl + 1]
-        state["offset"] += len(consumed.encode("utf-8", errors="replace"))
-        return [ln for ln in consumed.splitlines() if ln.strip()]
+        # Advance by the exact number of BYTES consumed (not re-encoded chars).
+        state["offset"] += len(consumed)
+        text_consumed = consumed.decode("utf-8", errors="replace")
+        return [ln for ln in text_consumed.splitlines() if ln.strip()]
 
     def poll_once(self):
         """Run one parse pass over every tracked file; persist terminal records.
@@ -458,7 +470,11 @@ class CallRecordParser:
                     text(
                         "SELECT id FROM call_records "
                         "WHERE call_uuid = :call_uuid AND direction = :direction "
-                        "AND (campaign_id IS :campaign_id OR campaign_id = :campaign_id)"
+                        # NULL-safe equality: 'IS :param' is SQLite-only and is a
+                        # syntax error on PostgreSQL. 'IS NOT DISTINCT FROM' is
+                        # the standard NULL-safe comparison and works on both
+                        # (matches NULL=NULL for one-shot tests with no campaign).
+                        "AND campaign_id IS NOT DISTINCT FROM :campaign_id"
                     ),
                     {
                         "call_uuid": params["call_uuid"],

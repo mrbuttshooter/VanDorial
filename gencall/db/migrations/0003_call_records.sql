@@ -35,3 +35,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_call_records_uuid
 -- Matcher joins inbound to outbound on the number pair within a time window.
 CREATE INDEX IF NOT EXISTS ix_call_records_match
     ON call_records (b_number, direction);
+
+-- LoopMatcher window scan: each pass loads only the inbound rows inside a
+-- campaign's join window (WHERE direction='in' AND t_start_ms BETWEEN floor AND
+-- ceil) instead of the whole table. This composite index makes that a range
+-- scan rather than a full-table scan every 10 s (design §4.3).
+CREATE INDEX IF NOT EXISTS ix_call_records_dir_start
+    ON call_records (direction, t_start_ms);
+
+-- Retention prune (design §5) issues DELETE ... WHERE created_at < :cutoff on
+-- the growth table; index created_at so the interval-gated prune is a range
+-- delete, not a full scan.
+CREATE INDEX IF NOT EXISTS ix_call_records_created_at
+    ON call_records (created_at);

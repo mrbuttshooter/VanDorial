@@ -168,6 +168,25 @@ def create_app(config_path: str = None):
     loop_engine.matcher = loop_matcher
     loop_matcher.start()
 
+    # ── Per-call record ingest (design §4.2) ─────────────────────────────────
+    # The CallRecordParser tail-parses each running SIPp instance's per-call
+    # <log> file into call_records — the table EVERY minutes/completion stat is
+    # computed from. Without this wiring call_records stays empty and all loop
+    # accounting reads 0. The LoopEngine registers each UAC/UAS instance's log
+    # path with this parser on start (and removes it on stop). The §4.1 trust
+    # filter (config [trust] whitelist / drop_untrusted) lives here too, so it is
+    # actually applied instead of being dead code.
+    from gencall.core.call_records import CallRecordParser
+
+    call_parser = CallRecordParser(
+        db=db,
+        trust_whitelist=config.trust_whitelist,
+        drop_untrusted=config.trust_drop_untrusted,
+    )
+    loop_engine.parser = call_parser
+    loops_api.call_parser = call_parser
+    call_parser.start()
+
     # ── Retention (design §5, §7 stage 10) ───────────────────────────────────
     # call_records is the growth table; the retention job prunes it INTERVAL-
     # GATED (default once/24 h, rows older than 30 days), never per-iteration, so
@@ -206,6 +225,12 @@ def create_app(config_path: str = None):
                 loop_engine.stop_monitor()
             except Exception as e:
                 logger.warning("Error stopping loop monitor: %s", e)
+            try:
+                # Stop the call-record parser before the matcher so the matcher
+                # is not racing a final parse pass during teardown.
+                call_parser.stop()
+            except Exception as e:
+                logger.warning("Error stopping call-record parser: %s", e)
             try:
                 loop_matcher.stop()
             except Exception as e:

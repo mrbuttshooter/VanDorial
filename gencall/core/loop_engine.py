@@ -106,6 +106,12 @@ class LoopEngine:
         # engine tracks/untracks each campaign on start/stop so the matcher only
         # joins records for running campaigns. None => no loop accounting.
         self.matcher = None
+        # Optional CallRecordParser (design §4.2), wired in main.py. When set,
+        # the engine registers each UAC/UAS instance's per-call <log> path with
+        # the parser on start and removes it on stop, so the parser actually
+        # ingests the records the loop produces (otherwise call_records stays
+        # empty and every minutes/completion stat is permanently 0).
+        self.parser = None
         self._lock = threading.RLock()
         # campaign_id -> in-memory campaign dict (mirrors the DB row + the SIPp
         # instance id owning it). The DB is the source of truth across restarts;
@@ -138,6 +144,11 @@ class LoopEngine:
             self._last_uas_start = _time.time()
             ok = self.engine.start_instance(instance)
             if ok:
+                # Register the UAS per-call log so inbound (B-side) records are
+                # ingested into call_records (design §4.2). campaign_id=None: the
+                # answer side is shared across campaigns; the matcher scopes
+                # inbound by its join window, not by a campaign tag.
+                self._register_logs(instance, campaign_id=None)
                 logger.info("Loop answer side (UAS) started on the SIP port")
             else:
                 logger.error(
@@ -259,7 +270,10 @@ class LoopEngine:
                             self.engine.remove_instance(UAS_INSTANCE_ID)
                         new = self._build_uas_instance()
                         self._last_uas_start = _time.time()
-                        self.engine.start_instance(new)
+                        if self.engine.start_instance(new):
+                            # Re-register the restarted UAS's (new pid → new
+                            # filename) per-call log with the parser.
+                            self._register_logs(new, campaign_id=None)
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("UAS monitor pass failed: %s", e)
             self._monitor_stop.wait(MONITOR_INTERVAL_S)
@@ -346,6 +360,10 @@ class LoopEngine:
                     instance.error_message or "UAC failed to start"
                 )
 
+            # Register the UAC's per-call <log> path so its outbound (A-side)
+            # records are ingested into call_records under this campaign (§4.2).
+            self._register_logs(instance, campaign_id=campaign_id)
+
             now = _now_iso()
             campaign = {
                 "id": campaign_id,
@@ -398,7 +416,18 @@ class LoopEngine:
                     raise KeyError(campaign_id)
 
             instance_id = campaign.get("instance_id") or f"uac-{campaign_id}"
+            inst = self.engine.get_instance(instance_id)
             self.engine.stop_instance(instance_id)
+            # Drain any final terminal records from this UAC's log, THEN stop
+            # tailing it: a last poll captures the closing BYE lines before the
+            # log file goes quiet, so the final match pass below sees them.
+            if self.parser is not None and inst is not None:
+                try:
+                    self.parser.poll_once()
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.warning("Final parse pass for %s failed: %s",
+                                   campaign_id, e)
+                self._unregister_logs(inst)
             campaign["status"] = "stopped"
             campaign["stopped_at"] = _now_iso()
             self._campaigns[campaign_id] = campaign
@@ -441,6 +470,37 @@ class LoopEngine:
         )
         public["sipp"] = inst.to_dict() if inst is not None else None
         return public
+
+    # ── helpers: call-record log registration (design §4.2) ──────────────────
+
+    def _register_logs(self, instance, campaign_id):
+        """Register a SIPp instance's per-call <log> path(s) with the parser.
+
+        No-op when no parser is wired. Registers every candidate path the
+        instance may write to (the deterministic .calllog the stub uses, plus
+        the real-SIPp <scenario>_<pid>_logs.log once the pid is known) under the
+        owning ``campaign_id`` (None for the shared UAS answer side). Tracking a
+        not-yet-existent path is harmless — the parser skips missing files.
+        """
+        if self.parser is None or instance is None:
+            return
+        try:
+            for path in instance.log_file_candidates():
+                self.parser.add_log_file(path, campaign_id=campaign_id)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not register call-log for %s: %s",
+                           getattr(instance, "id", "?"), e)
+
+    def _unregister_logs(self, instance):
+        """Stop tracking a SIPp instance's per-call <log> path(s)."""
+        if self.parser is None or instance is None:
+            return
+        try:
+            for path in instance.log_file_candidates():
+                self.parser.remove_log_file(path)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not unregister call-log for %s: %s",
+                           getattr(instance, "id", "?"), e)
 
     # ── helpers: CSV / caps / persistence ────────────────────────────────────
 

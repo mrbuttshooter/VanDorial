@@ -196,8 +196,15 @@ def test_suffix_matching_rewritten_leading_digits(db):
 
 
 def test_window_edge_inside_and_outside(db):
-    """An inbound just inside the window matches; one just outside does not —
-    but its minutes still count toward minutes_in."""
+    """An inbound just inside the window matches; one just outside does not.
+
+    Inbound is now SCOPED to the campaign's join window (so concurrent
+    campaigns can't each sum the same global inbound minutes). An inbound that
+    starts outside the window therefore neither matches NOR contributes to
+    minutes_in for this campaign — its minutes belong to whatever campaign's
+    window it actually falls in. The in-window inbound still counts (matched or
+    not); see test_unmatched_inbound_minutes_counted for the unmatched-in-window
+    case."""
     base = 1_700_000_000_000
     window_s = 60  # tight 60 s window for the test
     _insert_record(db, campaign_id=CID, direction="out", call_uuid="out-in",
@@ -210,7 +217,7 @@ def test_window_edge_inside_and_outside(db):
     _insert_record(db, campaign_id=None, direction="in", call_uuid="in-inside",
                    a_number="700000001", b_number="700000001",
                    t_start_ms=base + 59_000, duration_ms=20100)
-    # Just outside: +61 s.
+    # Just outside: +61 s (beyond the campaign window).
     _insert_record(db, campaign_id=None, direction="in", call_uuid="in-outside",
                    a_number="700000002", b_number="700000002",
                    t_start_ms=base + 61_000, duration_ms=20200)
@@ -219,8 +226,9 @@ def test_window_edge_inside_and_outside(db):
                                               window_s=window_s)
     assert stats["calls_in_matched"] == 1  # only the inside one
     assert stats["completion_pct"] == 50.0
-    # Both inbound minutes count regardless of the match outcome.
-    assert stats["minutes_in_ms"] == 20100 + 20200
+    # Only the in-window inbound counts toward minutes_in; the +61 s one is
+    # outside this campaign's window and is not attributed to it.
+    assert stats["minutes_in_ms"] == 20100
 
 
 def test_default_window_constant():
@@ -355,3 +363,50 @@ def test_no_db_is_inert():
     assert stats["calls_out"] == 0
     assert stats["minutes_in_ms"] == 0
     assert stats["completion_pct"] == 0.0
+
+
+# ── concurrent campaigns must not double-count global inbound minutes ────────
+
+
+def test_concurrent_campaigns_do_not_double_count_inbound(db):
+    """Two campaigns running in DIFFERENT time windows must each see only the
+    inbound minutes inside THEIR OWN window — not the global inbound sum.
+
+    Regression for the §4.3 N-times inflation bug: inbound carries no campaign
+    id, so loading ALL inbound for every campaign made each campaign sum the
+    same global inbound minutes. With inbound scoped to the campaign's join
+    window, campaign A (early window) and campaign B (a day later) each count
+    only their own returning leg.
+    """
+    window_s = 3600  # 1 h default
+    a_base = 1_700_000_000_000
+    b_base = a_base + 24 * 3600 * 1000  # +24 h: far outside A's 1 h window
+
+    # Campaign A: one outbound + its returning inbound, ~0.5 s later.
+    _insert_record(db, campaign_id="camp-A", direction="out", call_uuid="a-out",
+                   a_number="1000", b_number="300000001",
+                   t_start_ms=a_base, duration_ms=60000)
+    _insert_record(db, campaign_id=None, direction="in", call_uuid="a-in",
+                   a_number="300000001", b_number="300000001",
+                   t_start_ms=a_base + 500, duration_ms=60200, source_ip="10.0.0.1")
+
+    # Campaign B: a DIFFERENT outbound + its inbound, 24 h later.
+    _insert_record(db, campaign_id="camp-B", direction="out", call_uuid="b-out",
+                   a_number="1000", b_number="300000002",
+                   t_start_ms=b_base, duration_ms=30000)
+    _insert_record(db, campaign_id=None, direction="in", call_uuid="b-in",
+                   a_number="300000002", b_number="300000002",
+                   t_start_ms=b_base + 500, duration_ms=30300, source_ip="10.0.0.1")
+
+    matcher = LoopMatcher(db=db)
+    a_stats = matcher.match_campaign("camp-A", match_key="exact", window_s=window_s)
+    b_stats = matcher.match_campaign("camp-B", match_key="exact", window_s=window_s)
+
+    # Each campaign sees ONLY its own inbound minutes — NOT the global sum
+    # (60200 + 30300). Before the fix both would report the combined 90500.
+    assert a_stats["minutes_in_ms"] == 60200
+    assert b_stats["minutes_in_ms"] == 30300
+    assert a_stats["calls_in_matched"] == 1
+    assert b_stats["calls_in_matched"] == 1
+    assert a_stats["completion_pct"] == 100.0
+    assert b_stats["completion_pct"] == 100.0

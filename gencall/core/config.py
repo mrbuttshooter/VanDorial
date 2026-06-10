@@ -267,6 +267,17 @@ class Config:
         raw = self.get("trust", "whitelist", "") or ""
         return [tok for tok in raw.replace(",", " ").split() if tok]
 
+    @property
+    def trust_drop_untrusted(self):
+        """Drop (vs. flag-and-keep) inbound records from outside the whitelist.
+
+        Default False: a non-whitelisted inbound record is KEPT but flagged
+        untrusted so a misconfigured firewall is visible in the records rather
+        than silently discarded. Set [trust] drop_untrusted = true to drop them
+        (the host firewall remains the real boundary either way, design §4.1).
+        """
+        return self.getbool("trust", "drop_untrusted", False)
+
     # --- Retention (design §5 retention, §7 stage 10) ---
     # The interval-gated pruner for the call_records growth table. Defaults tuned
     # for the 4 GB box; the interval gate (never per-iteration) is what keeps us

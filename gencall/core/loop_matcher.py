@@ -176,12 +176,26 @@ class LoopMatcher:
 
     # ── core matching (pure, DB-read) ────────────────────────────────────────
 
-    def _load_records(self, campaign_id):
-        """Load this campaign's outbound + all inbound records for matching.
+    def _load_records(self, campaign_id, window_ms):
+        """Load this campaign's outbound + the inbound records in its window.
 
-        Outbound records are scoped to the campaign; inbound records carry no
-        campaign id (the answer side is shared across campaigns), so we load all
-        inbound records and let the number-pair + window join associate them.
+        Outbound records are scoped to the campaign. Inbound records carry no
+        campaign id (the answer side is shared across ALL concurrent campaigns),
+        so loading *every* inbound row would make each campaign sum the same
+        global inbound minutes — an N-times inflation of the commercial
+        minutes-in when several campaigns run at once. Instead we scope inbound
+        to the campaign's join window: an inbound call can only pair with (or be
+        attributed to) THIS campaign if it started within ``window_ms`` of one of
+        the campaign's outbound calls. So the relevant inbound band is::
+
+            [ min(out.t_start_ms) - window_ms , max(out.t_start_ms) + window_ms ]
+
+        We push that floor/ceiling into SQL (``WHERE direction='in' AND
+        t_start_ms >= :floor AND t_start_ms <= :ceil``) so the DB returns only
+        the campaign-relevant inbound rows — both bounding the minutes-in to this
+        campaign's window AND avoiding a full-table scan every pass (backed by
+        the ix_call_records_dir_start index in migration 0003).
+
         Returns ``(out_rows, in_rows)`` lists of dicts.
         """
         from sqlalchemy import text
@@ -192,6 +206,7 @@ class LoopMatcher:
             "duration_ms", "final_code",
         )
         sel = ", ".join(cols)
+        keys = list(cols)
         with self.db.engine.connect() as conn:
             out_rows = conn.execute(
                 text(
@@ -200,16 +215,30 @@ class LoopMatcher:
                 ),
                 {"cid": campaign_id},
             ).fetchall()
+            out_dicts = [dict(zip(keys, r)) for r in out_rows]
+
+            # Campaign window from the outbound starts. With no timed outbound
+            # call there is nothing to attribute inbound minutes to, so we load
+            # no inbound (its minutes belong to whichever campaign's window it
+            # falls in, not this empty one).
+            out_starts = [
+                o["t_start_ms"] for o in out_dicts if o["t_start_ms"] is not None
+            ]
+            if not out_starts:
+                return out_dicts, []
+            floor = min(out_starts) - window_ms
+            ceil = max(out_starts) + window_ms
+
             in_rows = conn.execute(
                 text(
-                    f"SELECT {sel} FROM call_records WHERE direction = 'in'"
-                )
+                    f"SELECT {sel} FROM call_records "
+                    "WHERE direction = 'in' "
+                    "AND t_start_ms >= :floor AND t_start_ms <= :ceil"
+                ),
+                {"floor": floor, "ceil": ceil},
             ).fetchall()
-        keys = list(cols)
-        return (
-            [dict(zip(keys, r)) for r in out_rows],
-            [dict(zip(keys, r)) for r in in_rows],
-        )
+            in_dicts = [dict(zip(keys, r)) for r in in_rows]
+        return out_dicts, in_dicts
 
     def match_campaign(self, campaign_id, match_key="exact", window_s=None):
         """Match one campaign's records and return (and persist) its stats dict.
@@ -225,7 +254,7 @@ class LoopMatcher:
             return self._empty_stats(campaign_id)
 
         window_ms = (self.window_s if window_s is None else int(window_s)) * 1000
-        out_rows, in_rows = self._load_records(campaign_id)
+        out_rows, in_rows = self._load_records(campaign_id, window_ms)
 
         # ── outbound aggregates ──────────────────────────────────────────────
         calls_out = len(out_rows)
