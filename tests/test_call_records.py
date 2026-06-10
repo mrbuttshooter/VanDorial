@@ -24,6 +24,7 @@ from gencall.core.call_records import (
     MIN_POLL_INTERVAL_S,
     CallRecordParser,
     _CallAccumulator,
+    ip_in_whitelist,
     parse_log_line,
 )
 from gencall.db.migrations import apply_migrations
@@ -292,3 +293,79 @@ def test_parser_poll_interval_floored():
     """Any sub-second poll interval is floored to the mandated >= 1 s."""
     parser = CallRecordParser(db=None, poll_interval=0.01)
     assert parser.poll_interval >= MIN_POLL_INTERVAL_S
+
+
+# ── trust filter (design §4.1, verification-only) ───────────────────────────
+
+
+def test_ip_in_whitelist_plain_and_cidr():
+    assert ip_in_whitelist("10.0.0.9", ["10.0.0.9"])           # exact host
+    assert ip_in_whitelist("10.0.0.9", ["10.0.0.0/24"])         # CIDR
+    assert not ip_in_whitelist("10.0.1.9", ["10.0.0.0/24"])     # outside CIDR
+    assert not ip_in_whitelist("203.0.113.5", ["10.0.0.9"])     # unrelated
+    # Empty whitelist means "allow all" so a fresh install isn't broken.
+    assert ip_in_whitelist("203.0.113.5", [])
+    assert ip_in_whitelist(None, [])
+    # No source_ip but a non-empty whitelist cannot be trusted.
+    assert not ip_in_whitelist(None, ["10.0.0.9"])
+    # A malformed whitelist token is skipped, not fatal.
+    assert ip_in_whitelist("10.0.0.9", ["garbage", "10.0.0.9"])
+
+
+def _write_inbound_calllog(tmp_path, source_ip, call_id=" in1"):
+    """Write a complete inbound (UAS) call's <log> lines to a temp file."""
+    path = tmp_path / f"uas_{call_id.strip()}.calllog"
+    path.write_text(
+        f"loop_uas direction=in call_id={call_id.strip()} from_number=100 "
+        f"to_number=200 source_ip={source_ip} t_invite_received=900\n"
+        f"loop_uas direction=in call_id={call_id.strip()} t_200ok_sent=1000\n"
+        f"loop_uas direction=in call_id={call_id.strip()} t_bye_received=61205\n",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_trust_filter_keeps_whitelisted_inbound(tmp_path, db):
+    """A whitelisted inbound source is kept and flagged trusted."""
+    calllog = _write_inbound_calllog(tmp_path, "10.0.0.9", call_id="ok1")
+    parser = CallRecordParser(db=db, trust_whitelist=["10.0.0.0/24"])
+    parser.add_log_file(calllog, campaign_id="c")
+    finalized = parser.poll_once()
+    assert len(finalized) == 1
+    assert finalized[0]["source_ip"] == "10.0.0.9"
+    assert finalized[0]["trusted"] is True
+    assert len(_fetch_records(db)) == 1
+
+
+def test_trust_filter_flags_non_whitelisted_inbound(tmp_path, db):
+    """A non-whitelisted inbound source is flagged untrusted (kept by default)."""
+    calllog = _write_inbound_calllog(tmp_path, "203.0.113.5", call_id="bad1")
+    parser = CallRecordParser(db=db, trust_whitelist=["10.0.0.0/24"])
+    parser.add_log_file(calllog, campaign_id="c")
+    finalized = parser.poll_once()
+    assert len(finalized) == 1
+    assert finalized[0]["trusted"] is False
+    # Default behaviour keeps the record (visible) rather than silently dropping.
+    assert len(_fetch_records(db)) == 1
+
+
+def test_trust_filter_drops_non_whitelisted_when_configured(tmp_path, db):
+    """With drop_untrusted, a non-whitelisted inbound record is dropped."""
+    calllog = _write_inbound_calllog(tmp_path, "203.0.113.5", call_id="bad2")
+    parser = CallRecordParser(
+        db=db, trust_whitelist=["10.0.0.0/24"], drop_untrusted=True)
+    parser.add_log_file(calllog, campaign_id="c")
+    finalized = parser.poll_once()
+    assert finalized == []
+    assert _fetch_records(db) == []
+
+
+def test_trust_filter_empty_whitelist_allows_all(tmp_path, db):
+    """An empty whitelist (fresh install) keeps every inbound record."""
+    calllog = _write_inbound_calllog(tmp_path, "203.0.113.5", call_id="fresh")
+    parser = CallRecordParser(db=db, trust_whitelist=[])
+    parser.add_log_file(calllog, campaign_id="c")
+    finalized = parser.poll_once()
+    assert len(finalized) == 1
+    assert finalized[0]["trusted"] is True
+    assert len(_fetch_records(db)) == 1

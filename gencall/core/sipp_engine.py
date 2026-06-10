@@ -25,6 +25,48 @@ logger = logging.getLogger("gencall.sipp")
 # session/process group so we can signal the whole group) unchanged.
 _HAS_SETSID = hasattr(os, "setsid") and hasattr(os, "killpg") and hasattr(os, "getpgid")
 
+# SIPp ResponseTime columns we read, in preference order: cumulative average
+# first (matches the dashboard's "avg" semantics), then the periodic value.
+_RESPONSE_TIME_COLUMNS = ("ResponseTime1(C)", "ResponseTime1(P)",
+                          "ResponseTime(C)", "ResponseTime(P)")
+
+
+def _parse_response_time_ms(stats_dict):
+    """Parse SIPp's ResponseTime column to milliseconds, or None if absent.
+
+    SIPp formats a ResponseTime as ``HH:MM:SS:mmm`` (colon-separated, the last
+    field milliseconds) — e.g. ``00:00:00:042`` is 42 ms. Some builds emit a
+    plain numeric seconds value instead. We accept both and return ms as a float;
+    a missing or unparseable column yields None so the caller leaves the field
+    unchanged (never fabricating a number SIPp didn't report).
+    """
+    raw = None
+    for col in _RESPONSE_TIME_COLUMNS:
+        if stats_dict.get(col):
+            raw = stats_dict[col].strip()
+            break
+    if not raw:
+        return None
+    if ":" in raw:
+        # HH:MM:SS:mmm (milliseconds in the final field).
+        parts = raw.split(":")
+        try:
+            nums = [int(p) for p in parts]
+        except ValueError:
+            return None
+        if len(nums) == 4:
+            hh, mm, ss, mmm = nums
+            return ((hh * 3600 + mm * 60 + ss) * 1000) + mmm
+        if len(nums) == 3:
+            hh, mm, ss = nums
+            return (hh * 3600 + mm * 60 + ss) * 1000.0
+        return None
+    # Plain numeric: SIPp reports seconds; convert to ms.
+    try:
+        return float(raw) * 1000.0
+    except ValueError:
+        return None
+
 
 class SIPpTransport(Enum):
     UDP = "u1"
@@ -455,6 +497,16 @@ class SIPpEngine:
                 instance.stats.failed_calls = int(stats_dict.get("FailedCall(C)", 0))
                 instance.stats.current_calls = int(stats_dict.get("CurrentCall", 0))
                 instance.stats.retransmissions = int(stats_dict.get("Retransmissions(C)", 0))
+
+                # Real average response time, when SIPp reports it. SIPp emits a
+                # cumulative ResponseTime column (a <responsetime>-paired scenario
+                # gives ResponseTime1(C)); older/unconfigured runs omit it. Parse
+                # it honestly into ms — when the column is absent the value stays
+                # at its prior value (0 on a run that never reports it) rather than
+                # the old dishonest constant 0 the metric used to be.
+                rt = _parse_response_time_ms(stats_dict)
+                if rt is not None:
+                    instance.stats.avg_response_time_ms = rt
 
                 elapsed = instance.stats.uptime
                 if elapsed > 0:

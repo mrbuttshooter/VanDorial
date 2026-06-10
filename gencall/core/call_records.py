@@ -27,6 +27,7 @@ the calls and media live in native SIPp.
 """
 
 import datetime
+import ipaddress
 import logging
 import os
 import threading
@@ -41,6 +42,43 @@ MIN_POLL_INTERVAL_S = 1.0
 
 def _now_iso():
     return datetime.datetime.now(datetime.UTC).isoformat()
+
+
+def ip_in_whitelist(source_ip, whitelist):
+    """Return True if ``source_ip`` matches any entry in ``whitelist``.
+
+    Implements the verification-only trust filter (design §4.1). Each whitelist
+    entry may be a plain IP (``10.0.0.9``) or a CIDR (``10.0.0.0/24``); a bare IP
+    is treated as a /32 (or /128) host. An **empty whitelist means "allow all"**
+    (a fresh install isn't broken — the caller notes it instead). A record with
+    no ``source_ip`` (e.g. an outbound leg, which has no inbound peer) is not the
+    subject of this check and is handled by the caller.
+
+    The host firewall remains the real boundary; this is the in-app visibility
+    check so a misconfigured firewall is *seen* rather than silently trusted.
+    """
+    if not whitelist:
+        # Empty whitelist: nothing configured to verify against → allow all.
+        return True
+    if not source_ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(source_ip)
+    except ValueError:
+        # An unparseable source can never match a whitelist entry → not trusted.
+        return False
+    for entry in whitelist:
+        entry = (entry or "").strip()
+        if not entry:
+            continue
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            # Skip a malformed whitelist token rather than abort the whole check.
+            continue
+        if addr in net:
+            return True
+    return False
 
 
 def parse_log_line(line):
@@ -252,11 +290,19 @@ class CallRecordParser:
     never re-read from the top.
     """
 
-    def __init__(self, db=None, poll_interval=MIN_POLL_INTERVAL_S):
+    def __init__(self, db=None, poll_interval=MIN_POLL_INTERVAL_S,
+                 trust_whitelist=None, drop_untrusted=False):
         # ``db`` is a gencall.db.models.Database (or None for parse-only tests).
         self.db = db
         # Floor the interval at the mandated minimum — never busy-poll (§4.2).
         self.poll_interval = max(float(poll_interval), MIN_POLL_INTERVAL_S)
+        # Verification-only trust filter (design §4.1). Inbound records whose
+        # source_ip is not in this list are flagged untrusted (and dropped if
+        # ``drop_untrusted``) so a misconfigured firewall is visible rather than
+        # silently trusted. The host firewall is the real boundary. An empty list
+        # means "allow all + note" so a fresh install isn't broken.
+        self.trust_whitelist = list(trust_whitelist or [])
+        self.drop_untrusted = bool(drop_untrusted)
         # path -> {"offset": int, "campaign_id": str|None, "acc": _CallAccumulator}
         self._files = {}
         self._lock = threading.Lock()
@@ -341,9 +387,55 @@ class CallRecordParser:
                     fields["campaign_id"] = default_campaign
                 acc.ingest(fields)
             for _key, row in acc.pop_complete():
+                row = self._apply_trust_filter(row)
+                if row is None:
+                    # Dropped: outside the whitelist and drop_untrusted is on.
+                    continue
                 self._persist(row)
                 finalized.append(row)
         return finalized
+
+    def _apply_trust_filter(self, row):
+        """Verification-only inbound trust check (design §4.1).
+
+        Tags every record with a ``trusted`` flag. Only *inbound* records carry a
+        ``source_ip`` (the network peer); an inbound record whose source is not in
+        ``trust_whitelist`` is flagged untrusted and a warning is logged so a
+        misconfigured firewall is visible rather than silently trusted. When
+        ``drop_untrusted`` is set such a record is dropped (returns None) instead
+        of persisted. Outbound records (no inbound peer) are always trusted. An
+        empty whitelist allows all (``ip_in_whitelist`` returns True) so a fresh
+        install isn't broken — but we still note the first such inbound call.
+        """
+        direction = row.get("direction")
+        if direction != "in":
+            row["trusted"] = True
+            return row
+
+        source_ip = row.get("source_ip")
+        if ip_in_whitelist(source_ip, self.trust_whitelist):
+            row["trusted"] = True
+            if not self.trust_whitelist:
+                # Allow-all-with-note: empty whitelist on a fresh install. Log
+                # once-ish at debug so the operator knows nothing is enforced.
+                logger.debug(
+                    "Inbound call_record %s from %s accepted: trust_whitelist "
+                    "empty (allow-all). Set [trust] whitelist to enforce.",
+                    row.get("call_uuid"), source_ip,
+                )
+            return row
+
+        # Outside the whitelist: flag (and optionally drop) so it is visible.
+        row["trusted"] = False
+        logger.warning(
+            "Inbound call_record %s from non-whitelisted source %s "
+            "(firewall misconfigured?); %s.",
+            row.get("call_uuid"), source_ip,
+            "dropping" if self.drop_untrusted else "flagged untrusted",
+        )
+        if self.drop_untrusted:
+            return None
+        return row
 
     # ── persistence (raw SQL, idempotent upsert) ─────────────────────────────
 

@@ -338,3 +338,30 @@ def test_health_unauthenticated_even_with_auth(client, fake_engine, auth):
     """Even with auth enabled, /api/health stays open (controller health-poll target)."""
     resp = client.get("/api/health")
     assert resp.status_code == 200, resp.text
+
+
+# ─── avg_response_time_ms: real SIPp ResponseTime parse (no longer const 0) ────
+
+def test_parse_response_time_ms_sipp_time_format():
+    """SIPp's HH:MM:SS:mmm ResponseTime parses to milliseconds."""
+    from gencall.core.sipp_engine import _parse_response_time_ms
+    assert _parse_response_time_ms({"ResponseTime1(C)": "00:00:00:042"}) == 42
+    assert _parse_response_time_ms({"ResponseTime1(C)": "00:00:01:250"}) == 1250
+    # Cumulative column is preferred over the periodic one.
+    assert _parse_response_time_ms(
+        {"ResponseTime1(C)": "00:00:00:030",
+         "ResponseTime1(P)": "00:00:00:099"}) == 30
+
+
+def test_parse_response_time_ms_numeric_seconds():
+    """A plain numeric ResponseTime is seconds → converted to ms."""
+    from gencall.core.sipp_engine import _parse_response_time_ms
+    assert _parse_response_time_ms({"ResponseTime(C)": "0.042"}) == 42.0
+
+
+def test_parse_response_time_ms_absent_returns_none():
+    """No ResponseTime column → None (caller leaves the field unchanged)."""
+    from gencall.core.sipp_engine import _parse_response_time_ms
+    assert _parse_response_time_ms({"TotalCallCreated": "10"}) is None
+    assert _parse_response_time_ms({"ResponseTime1(C)": ""}) is None
+    assert _parse_response_time_ms({"ResponseTime1(C)": "garbage"}) is None
