@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!--
+  GenCall v2 - Loop Campaign UAC (outbound originate leg) - design §4.1/§4.2.
+
+  Originates one INVITE per CSV row, plays G.711 audio for the call hold, then
+  BYEs. The A/B number pair is injected from the campaign's -inf CSV:
+
+      [field0] = a_number   (calling)
+      [field1] = b_number   (called)
+
+  Per-call <log> lines are written to SIPp's -trace_logs file. The CallRecord
+  tail-parser (gencall/core/call_records.py) ingests them. We emit ms-precision
+  timestamps at exactly the RFC 3261 reference events the loop accounting needs
+  (design §1):
+
+      A-side duration = t_bye_sent - t_200ok_received
+
+  [clock_tick] is SIPp's wall-clock in milliseconds; we capture it the instant
+  each reference event fires, so the parser never has to guess timing.
+
+  Audio: pcap play of a G.711 sample (alaw/ulaw). The media file is passed at
+  launch with -mp / the LoopEngine's exec rtp_stream; the placeholder name here
+  matches the media shipped in gencall/media. Two-way media is the UAS's job
+  (rtp_echo); the UAC only needs to source media so the call is "real".
+-->
+<scenario name="GenCall - Loop UAC">
+
+  <!-- ── Originate: INVITE with A/B from the CSV (-inf) ──────────────────
+       a_number = [field0], b_number = [field1]. t_invite is logged the
+       moment the INVITE goes out. -->
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
+      Max-Forwards: 70
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=GenCall 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=GenCall Loop
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 8 0 101
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=ptime:20
+      a=sendrecv
+    ]]>
+  </send>
+
+  <!-- Log the INVITE (t_invite). One field per token; the parser is
+       key=value and tolerant of column order. -->
+  <nop>
+    <action>
+      <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=invite t_invite=[clock_tick]" />
+    </action>
+  </nop>
+
+  <!-- Provisional responses are all optional. -->
+  <recv response="100" optional="true" />
+  <recv response="180" optional="true" />
+  <recv response="183" optional="true" />
+
+  <!-- ── 200 OK received → A-side clock STARTS here (t_200ok_received) ──── -->
+  <recv response="200" rtd="true" crlf="true">
+    <action>
+      <ereg regexp=".*" search_in="hdr" header="To:" assign_to="remote_tag" />
+      <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=answer t_200ok_received=[clock_tick] final_code=200" />
+    </action>
+  </recv>
+
+  <!-- ── ACK ──────────────────────────────────────────────────────────── -->
+  <send>
+    <![CDATA[
+      ACK sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      [last_To:]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- ── Play G.711 audio for the call hold ─────────────────────────────
+       The LoopEngine substitutes the real pcap path; default sample lives in
+       gencall/media. Looped so it covers the full hold duration. -->
+  <nop>
+    <action>
+      <exec play_pcap_audio="g711a.pcap" />
+    </action>
+  </nop>
+
+  <!-- ── Hold for the configured call duration ──────────────────────────
+       [field2] (per-call duration ms) when the CSV carries it, else the
+       LoopEngine injects -d and uses [last_*] timing. We default to field2
+       so a fixed/range duration travels in the same -inf row. -->
+  <pause milliseconds="[field2]" />
+
+  <!-- ── BYE → A-side clock STOPS here (t_bye_sent) ─────────────────────── -->
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      [last_To:]
+      Call-ID: [call_id]
+      CSeq: 2 BYE
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <nop>
+    <action>
+      <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=bye t_bye_sent=[clock_tick]" />
+    </action>
+  </nop>
+
+  <!-- 200 OK for the BYE. -->
+  <recv response="200" crlf="true" />
+
+  <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
+  <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000" />
+
+</scenario>

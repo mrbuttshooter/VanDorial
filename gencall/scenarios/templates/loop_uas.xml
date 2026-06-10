@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!--
+  GenCall v2 - Loop Answer UAS (permanent answering leg) - design §4.1/§4.2.
+
+  One long-lived SIPp UAS bound to the SIP port. It answers calls returning from
+  MADA, echoes media two-way (-rtp_echo passed at launch by the LoopEngine), and
+  waits for the BYE. A scenario-level max-duration guard BYEs any call that runs
+  past the answered-call ceiling so a wedged dialog can never pin a channel.
+
+  Per-call <log> lines feed the CallRecord tail-parser. We capture ms-precision
+  timestamps at the RFC 3261 reference events the loop accounting needs (§1):
+
+      B-side duration = t_bye_received - t_200ok_sent
+
+  [clock_tick] is SIPp's wall-clock in milliseconds. source_ip is taken from the
+  network peer ([senderip]) so the parser can tag each inbound record and flag
+  any call from outside the MADA whitelist (firewall is the real boundary; the
+  app layer is verification-only - design §4.1 trust filter).
+
+  The answered-call max-duration is injected as the recv timeout below; the
+  LoopEngine renders [duration_max_s] from config (default 7200 s).
+-->
+<scenario name="GenCall - Loop UAS">
+
+  <!-- ── Wait for INVITE (t_invite_received) ────────────────────────────
+       from_number / to_number parsed from the dialog; source_ip is the
+       sender's network address. -->
+  <recv request="INVITE" crlf="true">
+    <action>
+      <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="From:" assign_to="trash,from_number" />
+      <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="To:" assign_to="trash,to_number" />
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=invite t_invite_received=[clock_tick]" />
+    </action>
+  </recv>
+
+  <!-- ── 180 Ringing ────────────────────────────────────────────────── -->
+  <send>
+    <![CDATA[
+      SIP/2.0 180 Ringing
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- ── 200 OK with SDP → B-side clock STARTS here (t_200ok_sent) ────────
+       G.711 (PCMA/PCMU) only; two-way media via -rtp_echo at launch. -->
+  <send retrans="500">
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=GenCall 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=GenCall UAS
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 8 0 101
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=ptime:20
+      a=sendrecv
+    ]]>
+  </send>
+
+  <nop>
+    <action>
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=answer t_200ok_sent=[clock_tick]" />
+    </action>
+  </nop>
+
+  <!-- ── ACK ──────────────────────────────────────────────────────────── -->
+  <recv request="ACK" optional="true" rtd="true" crlf="true" />
+
+  <!-- ── Wait for BYE, bounded by the answered-call max-duration guard ───
+       ontimeout jumps to the guard label, which BYEs the stuck call from our
+       side so it can never hold a channel forever (design §4.1). -->
+  <recv request="BYE" timeout="[duration_max_s]000" ontimeout="max_duration_guard" crlf="true" />
+
+  <!-- ── BYE received → B-side clock STOPS here (t_bye_received) ─────────── -->
+  <nop>
+    <action>
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=bye t_bye_received=[clock_tick]" />
+    </action>
+  </nop>
+
+  <!-- 200 OK to the BYE. -->
+  <send>
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <label id="call_done" />
+  <!-- Reaching here ends this dialog; SIPp recycles the slot for the next call. -->
+
+  <!-- ── Max-duration guard: BYE a stuck call from our side ─────────────
+       Entered only when no BYE arrived within [duration_max_s]. We send our
+       own BYE, log t_bye_received as this guard fire (the parser still gets a
+       terminal event so the channel is accounted and freed), then fall
+       through to call_done. -->
+  <label id="max_duration_guard" />
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[$from_number]@[remote_ip]:[remote_port] SIP/2.0
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      CSeq: 2 BYE
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+  <nop>
+    <action>
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=bye t_bye_received=[clock_tick] guard=max_duration" />
+    </action>
+  </nop>
+  <recv response="200" optional="true" crlf="true" next="call_done" />
+
+  <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
+  <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000, 30000" />
+
+</scenario>
