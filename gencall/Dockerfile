@@ -51,34 +51,41 @@ LABEL maintainer="VanDorial / GenCall Team" \
 # root briefly to install system packages, then drop back.
 USER 0
 
-# ── System dependencies ──────────────────────────────────────────────────────
-# SIPp is the SIP load-test engine. It is NOT in the base UBI9 repos. We try to
-# install it from EPEL (Extra Packages for Enterprise Linux); if the package is
-# unavailable for the arch/release, the build MUST NOT fail — we instead leave
-# the build prerequisites in place and document how to add SIPp manually.
+# ── SIPp from source ─────────────────────────────────────────────────────────
+# SIPp is the SIP load-test engine and the product cannot place a call without
+# it (design §1, §7 stage 1). It is NOT in the UBI9 repos and EPEL ships NO
+# 'sipp' package for UBI9, so we BUILD IT FROM SOURCE and install the single
+# binary to /usr/local/bin/sipp (the default in gencall.cfg [sipp] command).
 #
-# To build SIPp from source on UBI9 instead (recommended for production), add:
+# Built with USE_SCTP=0: SCTP support needs lksctp-tools-devel, which lives in
+# the CRB/devel repo that is NOT reachable on an unsubscribed UBI host — and the
+# loop runner only uses UDP/TCP/TLS (design §3 non-goals), so SCTP is dead weight
+# that would only break the build. We keep PCAP (G.711 pcap play for media,
+# §4.1) and SSL (TLS transport) on.
 #
-#     RUN git clone --depth 1 -b v3.7.3 https://github.com/SIPp/sipp.git /tmp/sipp \
-#      && cd /tmp/sipp && cmake . -DUSE_PCAP=1 -DUSE_SSL=1 -DUSE_SCTP=1 \
-#      && make -j"$(nproc)" && make install && rm -rf /tmp/sipp
-#
-# and point [sipp] command at /usr/local/bin/sipp (the default in gencall.cfg).
-RUN dnf install -y --nodocs \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm \
-    || echo "WARN: could not enable EPEL — SIPp must be installed manually (see comment above)." ; \
-    dnf install -y --nodocs \
-        libpcap-devel \
-        libsctp-devel \
-        openssl-devel \
-        gcc gcc-c++ make cmake git \
-    && ( dnf install -y --nodocs sipp \
-         && echo "SIPp installed from EPEL." \
-         || echo "WARN: 'sipp' not available via dnf/EPEL on this arch/release. \
-Image build continues; install SIPp manually (EPEL package name 'sipp', or build \
-from source per the commented recipe above) before running live SIP traffic." ) \
-    && dnf clean all \
-    && rm -rf /var/cache/dnf
+# Pinned to a release tag for reproducibility. The toolchain (gcc/cmake/git and
+# the -devel headers) is installed, used, and then REMOVED in the same layer so
+# none of it survives into the final image — only the runtime shared libs
+# (libpcap, openssl) and the sipp binary remain. This keeps the image lean.
+ARG SIPP_VERSION=v3.7.3
+RUN set -eux; \
+    dnf install -y --nodocs --setopt=install_weak_deps=False \
+        libpcap-devel openssl-devel ncurses-devel \
+        gcc gcc-c++ make cmake git ; \
+    git clone --depth 1 -b "${SIPP_VERSION}" https://github.com/SIPp/sipp.git /tmp/sipp ; \
+    cmake -S /tmp/sipp -B /tmp/sipp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DUSE_PCAP=1 -DUSE_SSL=1 -DUSE_SCTP=0 ; \
+    cmake --build /tmp/sipp/build -j "$(nproc)" ; \
+    install -m 0755 /tmp/sipp/build/sipp /usr/local/bin/sipp ; \
+    /usr/local/bin/sipp -v ; \
+    rm -rf /tmp/sipp ; \
+    dnf remove -y --noautoremove \
+        libpcap-devel openssl-devel ncurses-devel \
+        gcc gcc-c++ make cmake git ; \
+    dnf install -y --nodocs libpcap openssl-libs ncurses-libs ; \
+    dnf clean all ; \
+    rm -rf /var/cache/dnf
 
 # ── GenCall package ──────────────────────────────────────────────────────────
 WORKDIR /opt/gencall

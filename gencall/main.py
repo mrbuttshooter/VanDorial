@@ -168,6 +168,16 @@ def create_app(config_path: str = None):
     loop_engine.matcher = loop_matcher
     loop_matcher.start()
 
+    # ── Retention (design §5, §7 stage 10) ───────────────────────────────────
+    # call_records is the growth table; the retention job prunes it INTERVAL-
+    # GATED (default once/24 h, rows older than 30 days), never per-iteration, so
+    # we never rebuild sigma's DELETE storm. The gate timestamp is persisted, so
+    # a restart loop cannot prune on every boot. No-op without a DB.
+    from gencall.core.retention import build_from_config
+
+    retention_job = build_from_config(config, db)
+    retention_job.start()
+
     # Start the answering side now so returning MADA calls are always answered.
     # Best-effort: a missing real SIPp must not stop the API from coming up.
     try:
@@ -200,6 +210,10 @@ def create_app(config_path: str = None):
                 loop_matcher.stop()
             except Exception as e:
                 logger.warning("Error stopping loop matcher: %s", e)
+            try:
+                retention_job.stop()
+            except Exception as e:
+                logger.warning("Error stopping retention job: %s", e)
             try:
                 logger.info("Shutdown: stopping all SIPp instances...")
                 sipp_engine.stop_all()

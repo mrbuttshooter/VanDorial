@@ -238,6 +238,38 @@ class Config:
     def loops_uas_restart_backoff_s(self):
         return self.getint("loops", "uas_restart_backoff_s", 5)
 
+    # --- Trust filter / inbound whitelist (design §4.1) ---
+    # The REAL security boundary is the host firewall (the deploy docs ship the
+    # nftables/ufw rule set restricting UDP/5060 + the RTP range to these IPs).
+    # The app layer is verification-only: the parser tags each inbound record
+    # with its source_ip and flags/drops anything outside this list, so a
+    # misconfigured firewall is *visible* rather than silently trusted.
+    @property
+    def trust_whitelist(self):
+        """Allowed inbound SIP source IPs/CIDRs (MADA + any extras).
+
+        Comma- or whitespace-separated in the config; returned as a list of
+        non-empty tokens. Empty by default — an empty list means "nothing is
+        verified as trusted" so a forgotten whitelist surfaces in the records
+        (every inbound call flagged) rather than being silently accepted.
+        """
+        raw = self.get("trust", "whitelist", "") or ""
+        return [tok for tok in raw.replace(",", " ").split() if tok]
+
+    # --- Retention (design §5 retention, §7 stage 10) ---
+    # The interval-gated pruner for the call_records growth table. Defaults tuned
+    # for the 4 GB box; the interval gate (never per-iteration) is what keeps us
+    # from rebuilding sigma's DELETE storm.
+    @property
+    def retention_call_records_days(self):
+        """Delete call_records older than this many days (0 disables pruning)."""
+        return self.getint("retention", "call_records_days", 30)
+
+    @property
+    def retention_interval_hours(self):
+        """Minimum hours between two actual prunes — the interval gate."""
+        return self.getint("retention", "interval_hours", 24)
+
     @classmethod
     def reset(cls):
         cls._instance = None

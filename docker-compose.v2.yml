@@ -1,0 +1,110 @@
+# VanDorial / GenCall v2 — Loop Runner compose (design §4.5, §7 stage 10)
+#
+# This is the SINGLE-BOX loop-runner topology for the 4 vCPU / 4 GB deploy
+# target. It is deliberately a SEPARATE file from docker-compose.yml (which is
+# kept for the bridged/multi-box fleet) — bring this one up explicitly:
+#
+#   build : docker compose -f docker-compose.v2.yml build
+#   up    : docker compose -f docker-compose.v2.yml up -d
+#
+# What is different from the v1 compose, and WHY (both learned on this fleet):
+#
+#   1. The worker uses HOST NETWORKING (network_mode: host). Docker's userland
+#      proxy spawns ONE process per published port; publishing the RTP range
+#      (thousands of UDP ports) OOMs a small host (the "docker-proxy memory
+#      blowup" called out in design §4.1 / §8). Host networking puts SIPp's
+#      signalling + RTP straight on the host NIC with no per-port proxy. The
+#      REAL trust boundary is therefore the HOST FIREWALL, not Docker port
+#      publishing — see docs/deploy/loop-runner.md for the nftables/ufw rules
+#      that restrict UDP/5060 + the RTP range to the MADA whitelist.
+#
+#   2. The RTP port range is configurable via ${RTP_PORT_RANGE} (and matched in
+#      gencall.cfg [sip] min_rtp_port/max_rtp_port + the firewall rules). With
+#      host networking there is no port-publish list to keep in sync, but the
+#      range is still surfaced here as documentation and for the firewall.
+#
+# With host networking the worker reaches Postgres on 127.0.0.1:5432 (Postgres
+# publishes that port on the host), and the browser reaches the controller on
+# the host's :8090. The controller stays on the bridge network (it publishes a
+# single port, so the proxy cost is negligible) and talks to the worker over
+# 127.0.0.1:8080.
+
+x-gencall-image: &gencall-image vandorial/gencall:latest
+
+services:
+  # ── Worker node (host networking — no docker-proxy on the RTP range) ───────
+  gencall:
+    image: *gencall-image
+    build:
+      context: .
+      dockerfile: gencall/Dockerfile
+    container_name: gencall
+    restart: unless-stopped
+    # Host networking: SIPp signalling (UDP/TCP 5060) + the whole RTP range bind
+    # directly on the host NIC. No `ports:` mapping is possible (or needed) in
+    # this mode — exposure is governed entirely by the host firewall.
+    network_mode: host
+    volumes:
+      - ./gencall/etc:/opt/gencall/gencall/etc
+      - ./gencall/media:/opt/gencall/media
+      - gencall-logs:/opt/gencall/logs
+      - gencall-db:/opt/gencall/data
+    environment:
+      - GENCALL_CONFIG=/opt/gencall/gencall/etc/gencall.cfg
+      # Configurable RTP window — keep in sync with gencall.cfg [sip] and the
+      # firewall rule set in docs/deploy/loop-runner.md.
+      - RTP_PORT_RANGE=${RTP_PORT_RANGE:-16384-16584}
+      # On host networking Postgres is reachable on the loopback host port.
+      - GENCALL_DB_ENGINE=${GENCALL_DB_ENGINE:-postgresql}
+      - GENCALL_PG_HOST=127.0.0.1
+      - GENCALL_PG_PORT=5432
+      - GENCALL_PG_USER=${POSTGRES_USER:-gencall}
+      - GENCALL_PG_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+      - GENCALL_PG_DATABASE=${POSTGRES_DB:-gencall}
+    depends_on:
+      - postgres
+    # The single-process guard (design §4.5) lives in the app; this image runs
+    # one worker process. Do NOT scale this service > 1 on one host.
+
+  # ── Controller / fleet control plane (bridge — single published port) ──────
+  controller:
+    image: *gencall-image
+    build:
+      context: .
+      dockerfile: gencall/Dockerfile
+    container_name: gencall-controller
+    restart: unless-stopped
+    command: ["--mode", "controller", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8090:8080"             # Fleet console + controller API (browser entry)
+    volumes:
+      - ./gencall/etc:/opt/gencall/gencall/etc
+      - controller-db:/opt/gencall/data
+    environment:
+      - GENCALL_CONFIG=/opt/gencall/gencall/etc/gencall.cfg
+      - GENCALL_DB_ENGINE=${CONTROLLER_DB_ENGINE:-sqlite}
+      - GENCALL_DATABASE_URL=${CONTROLLER_DATABASE_URL:-sqlite:////opt/gencall/data/controller.db}
+    depends_on:
+      - postgres
+
+  # ── PostgreSQL (worker persistence) ────────────────────────────────────────
+  # Publishes 5432 on the host loopback so the host-networked worker reaches it
+  # at 127.0.0.1:5432. Bind to 127.0.0.1 only — never expose Postgres off-box.
+  postgres:
+    image: postgres:16-alpine
+    container_name: gencall-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gencall}
+      POSTGRES_USER: ${POSTGRES_USER:-gencall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+    volumes:
+      - gencall-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+
+volumes:
+  gencall-logs:
+  gencall-db:
+  controller-db:
+  gencall-pgdata:
