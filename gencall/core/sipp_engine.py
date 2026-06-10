@@ -104,6 +104,7 @@ class SIPpInstance:
     auth_user: str = ""
     auth_pass: str = ""
     extra_args: str = ""
+    campaign_id: str = ""  # owning loop campaign (§4.5), "" for one-shot tests
     state: SIPpState = SIPpState.IDLE
     stats: SIPpStats = field(default_factory=SIPpStats)
     _process: Optional[subprocess.Popen] = field(default=None, repr=False)
@@ -201,9 +202,13 @@ class SIPpEngine:
     Handles launching, monitoring, and stopping SIPp processes.
     """
 
-    def __init__(self, config: Config = None):
+    def __init__(self, config: Config = None, registry=None):
         self.config = config or Config()
         self.instances: dict[str, SIPpInstance] = {}
+        # ProcessRegistry (gencall.core.process_registry) records every spawned
+        # SIPp PID for crash-orphan reconciliation (design §4.5). Optional so the
+        # engine still runs standalone (and in tests) without a registry wired.
+        self.registry = registry
         self._lock = threading.Lock()
         self._set_file_limit()
 
@@ -254,6 +259,31 @@ class SIPpEngine:
             instance.state = SIPpState.RUNNING
             instance.stats.start_time = time.time()
 
+            # Register the spawned PID for crash-orphan reconciliation (§4.5).
+            # We hash the exact argv so a recycled PID running something else is
+            # distinguishable at reconcile time. Best-effort: a registry failure
+            # must never stop a working SIPp from running.
+            if self.registry is not None:
+                try:
+                    from gencall.core.process_registry import (
+                        cmdline_hash,
+                        current_cmdline_hash,
+                    )
+
+                    pid = instance._process.pid
+                    # Prefer the OS-reported live cmdline so reconciliation
+                    # compares like-for-like; fall back to the argv we launched
+                    # if the OS won't report it (locked-down host).
+                    h = current_cmdline_hash(pid) or cmdline_hash(cmd)
+                    self.registry.record(
+                        pid=pid,
+                        role=instance.mode.value,
+                        cmdline_hash_value=h,
+                        campaign_id=instance.campaign_id or None,
+                    )
+                except Exception as e:
+                    logger.warning("Could not register PID for %s: %s", instance.id, e)
+
             # Start stats monitor thread
             instance._monitor_thread = threading.Thread(
                 target=self._monitor_instance,
@@ -288,6 +318,7 @@ class SIPpEngine:
             return False
 
         instance.state = SIPpState.STOPPING
+        stopped_pid = instance._process.pid if instance._process else None
         try:
             if instance._process and instance._process.poll() is None:
                 if _HAS_SETSID:
@@ -312,6 +343,12 @@ class SIPpEngine:
                         instance._process.wait(timeout=5)
 
             instance.state = SIPpState.STOPPED
+            # The PID is gone — forget it so reconciliation never targets it.
+            if self.registry is not None and stopped_pid is not None:
+                try:
+                    self.registry.clear(stopped_pid)
+                except Exception as e:
+                    logger.debug("Registry clear of PID %s failed: %s", stopped_pid, e)
             logger.info("SIPp instance %s stopped", instance_id)
             return True
         except Exception as e:
@@ -362,6 +399,20 @@ class SIPpEngine:
             try:
                 if instance._process and instance._process.poll() is not None:
                     exit_code = instance._process.returncode
+                    # Read the final stats row before breaking: a short finite
+                    # (-m) run can exit between poll intervals, so without this
+                    # last read its end-state counters would never be ingested.
+                    try:
+                        self._read_stats(instance)
+                    except Exception:
+                        pass
+                    # The process has exited on its own — forget its PID so a
+                    # later reconciliation never targets a now-dead/recycled PID.
+                    if self.registry is not None:
+                        try:
+                            self.registry.clear(instance._process.pid)
+                        except Exception:
+                            pass
                     if exit_code == 0:
                         instance.state = SIPpState.STOPPED
                         logger.info("SIPp instance %s completed normally", instance.id)

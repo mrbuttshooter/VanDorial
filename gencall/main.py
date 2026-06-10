@@ -73,9 +73,43 @@ def create_app(config_path: str = None):
         os.makedirs(db_dir, exist_ok=True)
         db = Database(config.db_url)
         db.create_tables()
+        # Plain ordered SQL migrations (no Alembic) for tables outside the ORM,
+        # e.g. managed_processes (design §4.5). Idempotent; safe every boot.
+        try:
+            from gencall.db.migrations import apply_migrations
+
+            applied = apply_migrations(db.engine)
+            if applied:
+                logger.info("Applied %d DB migration(s): %s", len(applied), ", ".join(applied))
+        except Exception as e:
+            logger.warning("DB migrations failed (reliability registry degraded): %s", e)
         logger.info("Database initialized: %s", config.db_engine)
     except Exception as e:
         logger.warning("Database init failed (running without persistence): %s", e)
+
+    # ── Reliability: managed-process registry (design §4.5) ──────────────────
+    # Records every spawned SIPp PID so we can reconcile crash-orphans on boot
+    # and stop everything on shutdown. Uses the DB (managed_processes table) with
+    # a JSON-file fallback when the DB is down. Wire it into the engine so every
+    # start/stop is tracked.
+    from gencall.core.process_registry import ProcessRegistry
+
+    registry = ProcessRegistry(db=db)
+    sipp_engine.registry = registry
+
+    # Startup reconciliation: kill any still-alive SIPp from a previous run whose
+    # cmdline still matches (PID-reuse guarded) and mark its campaign interrupted.
+    try:
+        summary = registry.reconcile()
+        if summary["killed"]:
+            logger.warning(
+                "Startup reconciliation killed %d stray process(es): %s",
+                len(summary["killed"]), summary["killed"],
+            )
+        else:
+            logger.info("Startup reconciliation: no stray SIPp processes found")
+    except Exception as e:
+        logger.warning("Startup reconciliation failed: %s", e)
 
     # Wire up the API
     routes.engine = sipp_engine
@@ -121,7 +155,17 @@ def create_app(config_path: str = None):
     async def _lifespan(_app):
         # The sync→async broadcast bridge needs the running loop.
         websocket.set_event_loop(asyncio.get_running_loop())
-        yield
+        try:
+            yield
+        finally:
+            # Graceful shutdown (design §4.5): stop every running SIPp so killing
+            # GenCall never leaves orphaned dialers. stop_all() runs the existing
+            # SIGUSR1→SIGKILL group logic per instance and clears the registry.
+            try:
+                logger.info("Shutdown: stopping all SIPp instances...")
+                sipp_engine.stop_all()
+            except Exception as e:
+                logger.warning("Error during shutdown stop_all: %s", e)
 
     app.router.lifespan_context = _lifespan
 
@@ -172,6 +216,20 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Single-process guard (design §4.5): GenCall keeps all running-test and
+    # managed-PID state in module-global / in-process structures, which are NOT
+    # shared across uvicorn worker processes. Running >1 worker would give each
+    # its own engine and registry — orphan tracking, shutdown stop_all, and
+    # startup reconciliation would all silently cover only one of N processes.
+    # Refuse it loudly rather than break reliability invariants.
+    if args.workers and args.workers > 1:
+        parser.error(
+            "--workers > 1 is not supported: GenCall keeps per-process state "
+            "(running tests, managed PIDs) that is not shared across workers, so "
+            "multiple workers would break orphan tracking and shutdown. Run a "
+            "single worker (scale out with the fleet controller instead)."
+        )
 
     if args.mode == "controller":
         from gencall.controller.app import create_controller_app
