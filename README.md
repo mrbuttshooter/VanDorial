@@ -17,31 +17,43 @@ separately.
 
 ## Install on Ubuntu (4 vCPU / 4 GB / 40 GB target)
 
-Prerequisites: Ubuntu 22.04+, Docker Engine + Compose v2 (`docker compose version`).
+### Native install (recommended — no Docker, systemd + apt)
+
+Runs straight on the host like sigma: PostgreSQL + SIPp + a systemd service. Needs UDP/5060
+free (don't co-locate with sigma unless you change GenCall's SIP port).
 
 ```bash
 # 1. get the code on the box (clone, or unzip the release)
 git clone https://github.com/mrbuttshooter/VanDorial.git
 cd VanDorial
 
-# 2. guided install: sets up .env + gencall.cfg, builds the SIPp image,
-#    starts postgres -> worker -> controller, runs health checks
+# 2. native installer: apt deps, builds SIPp from source, sets up PostgreSQL,
+#    installs into /opt/gencall (venv), writes config, starts the systemd worker
 chmod +x deploy/*.sh
-./deploy/install.sh
+sudo ./deploy/install-ubuntu.sh
 
-# 3. apply the firewall (the REAL trust boundary) — restrict UDP/5060 + the RTP
-#    range to your MADA whitelist. Rules are in:
-#       docs/deploy/loop-runner.md  (section 2: nftables AND ufw)
-
-# 4. prove the real-SIPp call path on the box
-./deploy/smoke-loopback.sh
+# 3. firewall (the REAL trust boundary): restrict UDP/5060 + the RTP range to your
+#    MADA whitelist — rules in docs/deploy/loop-runner.md section 2 (nftables/ufw)
 ```
 
-`./deploy/install.sh` is interactive (asks for the Postgres password and your MADA
-whitelist IPs) and idempotent — safe to re-run. Full step-by-step, firewall rules, and the
-post-deploy validation checklist are in **[docs/deploy/loop-runner.md](docs/deploy/loop-runner.md)**.
+It's interactive (asks for the MADA whitelist; generates a DB password) and idempotent.
+Then open the console + **Loops** page at `http://<box-ip>:8080/console/`.
+Logs: `journalctl -u gencall-worker -f`. The fleet controller is installed but optional
+(only for multi-box): `systemctl enable --now gencall-controller`.
 
-Open the console at `http://<box>:8090/console/` → the **Loops** page.
+### Docker install (alternative)
+
+If you'd rather run it containerised (Docker Engine + Compose v2):
+
+```bash
+git clone https://github.com/mrbuttshooter/VanDorial.git && cd VanDorial
+chmod +x deploy/*.sh
+./deploy/install.sh            # builds the image, starts postgres/worker/controller
+./deploy/smoke-loopback.sh     # proves the real-SIPp call path (Docker)
+```
+
+Full step-by-step, firewall rules, and the post-deploy validation checklist for both paths
+are in **[docs/deploy/loop-runner.md](docs/deploy/loop-runner.md)**.
 
 ---
 
