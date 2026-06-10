@@ -28,7 +28,11 @@ services:
       - "8080:8080"             # Web console + REST/WS API
       - "5060:5060/udp"         # SIP signalling (UDP)
       - "5060:5060/tcp"         # SIP signalling (TCP)
-      - "10000-20000:10000-20000/udp"  # RTP media
+      # RTP media. Docker publishes ONE userland-proxy process per port, so the
+      # full 10000-20000 range (10k procs) OOMs small hosts. Keep this modest and
+      # aligned with the SIPp media range in gencall.cfg. For high-volume RTP on a
+      # dedicated host, prefer `network_mode: host` (see note below) instead.
+      - "${RTP_PORT_RANGE:-10000-10100}:${RTP_PORT_RANGE:-10000-10100}/udp"  # RTP media
     volumes:
       - ./gencall/etc:/opt/gencall/gencall/etc
       - ./gencall/media:/opt/gencall/media
