@@ -96,6 +96,64 @@ def aggregate_snapshots(snapshots: list[dict]) -> dict:
     return out
 
 
+def aggregate_loop_stats(per_node: dict[int, Optional[dict]]) -> dict:
+    """Sum a map of node_id -> loop_stats snapshot into one combined view.
+
+    Each per-node snapshot is the shape produced by the worker's
+    ``LoopMatcher.latest_stats`` (design §4.3): calls_out, answered_out,
+    minutes_out_ms, calls_in_matched, minutes_in_ms, completion_pct,
+    delta_avg_ms, ... plus a ``failures`` dict ({out:{code:n}, in:{code:n}}).
+
+    Combined semantics (design §7 stage 9, §4.3):
+      - call / minute counters are summed across contributing nodes,
+      - completion_pct is recomputed from the summed matched/out totals so it is
+        a true fleet completion rather than an average of per-node percentages,
+      - delta_avg_ms is averaged over contributing nodes (count-weighted is not
+        available without the raw deltas; node-mean matches the per-node display),
+      - failures-by-SIP-code are merged (summed per code) for out and in.
+    """
+    summed = {
+        "calls_out": 0,
+        "answered_out": 0,
+        "minutes_out_ms": 0,
+        "calls_in_matched": 0,
+        "minutes_in_ms": 0,
+    }
+    failures_out: dict[str, int] = {}
+    failures_in: dict[str, int] = {}
+    delta_sum = 0.0
+    delta_count = 0
+    contributing = 0
+
+    for snap in per_node.values():
+        if not snap:
+            continue
+        contributing += 1
+        for field in summed:
+            summed[field] += snap.get(field, 0) or 0
+        delta = snap.get("delta_avg_ms")
+        if delta:
+            delta_sum += delta
+            delta_count += 1
+        fails = snap.get("failures") or {}
+        for code, n in (fails.get("out") or {}).items():
+            failures_out[str(code)] = failures_out.get(str(code), 0) + (n or 0)
+        for code, n in (fails.get("in") or {}).items():
+            failures_in[str(code)] = failures_in.get(str(code), 0) + (n or 0)
+
+    out = dict(summed)
+    out["completion_pct"] = (
+        round((summed["calls_in_matched"] / summed["calls_out"]) * 100, 2)
+        if summed["calls_out"] else 0.0
+    )
+    out["delta_avg_ms"] = round(delta_sum / delta_count, 2) if delta_count else 0.0
+    out["minutes_out"] = round(summed["minutes_out_ms"] / 60000.0, 4)
+    out["minutes_in"] = round(summed["minutes_in_ms"] / 60000.0, 4)
+    out["failures"] = {"out": failures_out, "in": failures_in}
+    out["nodes_contributing"] = contributing
+    return out
+
+
 def split_rate(mode: str, value: float, n_targets: int) -> list[float]:
     """Compute the per-node call rate for `n_targets` online targets.
 

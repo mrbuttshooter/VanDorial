@@ -113,6 +113,22 @@ class NodeClient:
         return await self._request_json(
             "POST", f"/api/tests/{test_id}/rate", json={"call_rate": rate})
 
+    # ─── loop campaign endpoints (design §4.4) ──────────────────────────────
+
+    async def start_loop(self, payload: dict) -> dict:
+        """POST /api/loops with a StartLoopRequest body → {status, campaign}."""
+        return await self._request_json("POST", "/api/loops", json=payload)
+
+    async def stop_loop(self, campaign_id: str) -> dict:
+        """POST /api/loops/{campaign_id}/stop → {status, campaign}."""
+        return await self._request_json(
+            "POST", f"/api/loops/{campaign_id}/stop")
+
+    async def get_loop(self, campaign_id: str) -> dict:
+        """GET /api/loops/{campaign_id} — live status incl. loop_stats."""
+        return await self._request_json(
+            "GET", f"/api/loops/{campaign_id}")
+
     # ─── generic passthrough proxy ──────────────────────────────────────────
 
     async def proxy(

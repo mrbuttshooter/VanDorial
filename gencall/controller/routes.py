@@ -102,6 +102,35 @@ class FleetLaunchRequest(BaseModel):
     auth: Optional[AuthSpec] = None
 
 
+class FleetLoopLaunchRequest(BaseModel):
+    """Fan-out launch of a Loop Campaign (design §4.4 / §7 stage 9).
+
+    Mirrors FleetLaunchRequest's target-resolution + rate-split contract, but
+    fans out POST /api/loops (StartLoopRequest) to every ONLINE target instead of
+    the one-shot /api/tests/start. `rate` is split exactly like a test launch
+    (per_node | total). Per-call loop params map straight onto the worker's
+    StartLoopRequest body.
+    """
+    name: str = ""
+    group_id: Optional[int] = None
+    node_ids: Optional[list[int]] = None
+    destination: Destination
+    rate: RateSpec = RateSpec()
+    csv_path: str = ""
+    max_concurrent: int = 10
+    duration_mode: str = "fixed"       # fixed | range
+    duration_s: int = 180
+    duration_max_s: int = 0
+    match_key: str = "exact"
+    target_calls: int = 0
+    target_minutes: int = 0
+
+
+# Marker stored in FleetRun.scenario to distinguish loop-campaign runs from
+# one-shot test runs (so the stop/aggregate paths dispatch to /api/loops).
+LOOP_RUN_SCENARIO = "__loop__"
+
+
 # ─── helpers ───────────────────────────────────────────────────────────────────
 
 def _require_db():
@@ -538,6 +567,208 @@ async def fleet_stop(run_id: int):
     controller_ws.emit_fleet_event({
         "event": "stop", "fleet_run_id": run_id, "status": "stopped"})
     return {"status": "stopped"}
+
+
+# ─── Fleet loop campaigns (design §4.4 / §7 stage 9) ────────────────────────────
+
+@router.post("/api/fleet/loops/launch", dependencies=[Depends(require_api_key)])
+async def fleet_loops_launch(req: FleetLoopLaunchRequest):
+    """Resolve targets, compute per-node rate, fan out POST /api/loops to every
+    ONLINE target in parallel, persist a FleetRun, return the dispatch.
+
+    Reuses the exact target-resolution + rate-splitting + FleetRun-persistence
+    pattern as /api/fleet/launch; the only differences are the per-node payload
+    (a StartLoopRequest) and that each result carries `campaign_id` rather than
+    `test_id`.
+    """
+    from gencall.controller.aggregator import split_rate
+
+    session = _require_db().get_session()
+    try:
+        targets = _resolve_targets(session, req)
+        online_targets = [n for n in targets if _is_target_online(n)]
+        offline_targets = [n for n in targets if not _is_target_online(n)]
+
+        rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
+
+        plan = []
+        for node, rate in zip(online_targets, rates):
+            plan.append({
+                "id": node.id, "address": node.address,
+                "api_key": node.api_key, "rate": rate,
+            })
+        offline_ids = [n.id for n in offline_targets]
+        target_ids = [n.id for n in targets]
+
+        run = FleetRun(
+            name=req.name or "",
+            group_id=req.group_id,
+            node_ids=json.dumps(target_ids),
+            scenario=LOOP_RUN_SCENARIO,
+            destination=json.dumps(req.destination.model_dump()),
+            rate_mode=req.rate.mode,
+            rate_value=str(req.rate.value),
+            status="running",
+            started_at=datetime.datetime.utcnow(),
+            results="[]",
+        )
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        fleet_run_id = run.id
+    finally:
+        session.close()
+
+    base_payload = {
+        "dest_host": req.destination.remote_host,
+        "dest_port": req.destination.remote_port,
+        "transport": req.destination.transport,
+        "csv_path": req.csv_path,
+        "max_concurrent": req.max_concurrent,
+        "duration_mode": req.duration_mode,
+        "duration_s": req.duration_s,
+        "duration_max_s": req.duration_max_s,
+        "match_key": req.match_key,
+        "target_calls": req.target_calls,
+        "target_minutes": req.target_minutes,
+    }
+
+    async def start_on(node_plan):
+        payload = dict(base_payload)
+        payload["rate"] = node_plan["rate"]
+        payload["name"] = f"fleet-loop-{fleet_run_id}-n{node_plan['id']}"
+        client = NodeClient(node_plan["address"], node_plan["api_key"],
+                            verify=verify_tls)
+        try:
+            resp = await client.start_loop(payload)
+            campaign = resp.get("campaign") or {}
+            return {"node_id": node_plan["id"], "ok": True,
+                    "campaign_id": campaign.get("id"), "error": None}
+        except Exception as exc:
+            return {"node_id": node_plan["id"], "ok": False,
+                    "campaign_id": None, "error": str(exc)}
+
+    dispatched = list(await asyncio.gather(*(start_on(p) for p in plan))) if plan else []
+    for nid in offline_ids:
+        dispatched.append({"node_id": nid, "ok": False,
+                           "campaign_id": None, "error": "node offline"})
+
+    ok_count = sum(1 for d in dispatched if d["ok"])
+    if ok_count == 0:
+        status = "failed"
+    elif ok_count < len(dispatched):
+        status = "partial"
+    else:
+        status = "running"
+
+    session = _require_db().get_session()
+    try:
+        run = session.query(FleetRun).filter_by(id=fleet_run_id).first()
+        if run:
+            run.results = json.dumps(dispatched)
+            run.status = status
+            if status in ("failed",):
+                run.completed_at = datetime.datetime.utcnow()
+            session.commit()
+    finally:
+        session.close()
+
+    controller_ws.emit_fleet_event({
+        "event": "loop_launch", "fleet_run_id": fleet_run_id,
+        "status": status, "dispatched": dispatched,
+    })
+
+    return {"fleet_run_id": fleet_run_id, "dispatched": dispatched}
+
+
+@router.post("/api/fleet/loops/{run_id}/stop", dependencies=[Depends(require_api_key)])
+async def fleet_loops_stop(run_id: int):
+    """Best-effort stop of every member loop campaign in a fleet loop run."""
+    session = _require_db().get_session()
+    try:
+        run = session.query(FleetRun).filter_by(id=run_id).first()
+        if not run:
+            raise HTTPException(404, f"Fleet run {run_id} not found")
+        results = run.get_results()
+        node_map = {n.id: (n.address, n.api_key) for n in session.query(Node).all()}
+    finally:
+        session.close()
+
+    async def stop_on(entry):
+        nid = entry.get("node_id")
+        campaign_id = entry.get("campaign_id")
+        if not entry.get("ok") or not campaign_id or nid not in node_map:
+            return
+        addr, key = node_map[nid]
+        client = NodeClient(addr, key, verify=verify_tls)
+        try:
+            await client.stop_loop(campaign_id)
+        except Exception:
+            logger.debug("loop stop failed for run %s node %s", run_id, nid,
+                         exc_info=True)
+
+    await asyncio.gather(*(stop_on(e) for e in results))
+
+    session = _require_db().get_session()
+    try:
+        run = session.query(FleetRun).filter_by(id=run_id).first()
+        if run:
+            run.status = "stopped"
+            run.completed_at = datetime.datetime.utcnow()
+            session.commit()
+    finally:
+        session.close()
+
+    controller_ws.emit_fleet_event({
+        "event": "loop_stop", "fleet_run_id": run_id, "status": "stopped"})
+    return {"status": "stopped"}
+
+
+@router.get("/api/fleet/loops/{run_id}", dependencies=[Depends(require_api_key)])
+async def fleet_loop_view(run_id: int):
+    """Combined loop_stats across all member nodes of a loop fleet run.
+
+    Polls each member node's GET /api/loops/{campaign_id} for its latest
+    loop_stats and sums minutes-out/in + completion across nodes (design §7
+    stage 9). Per-node snapshots are echoed so the console can drill in.
+    """
+    from gencall.controller.aggregator import aggregate_loop_stats
+
+    session = _require_db().get_session()
+    try:
+        run = session.query(FleetRun).filter_by(id=run_id).first()
+        if not run:
+            raise HTTPException(404, f"Fleet run {run_id} not found")
+        run_view = run.to_dict()
+        results = run.get_results()
+        node_map = {n.id: (n.address, n.api_key) for n in session.query(Node).all()}
+    finally:
+        session.close()
+
+    async def fetch(entry):
+        nid = entry.get("node_id")
+        campaign_id = entry.get("campaign_id")
+        if not entry.get("ok") or not campaign_id or nid not in node_map:
+            return nid, None
+        addr, key = node_map[nid]
+        client = NodeClient(addr, key, verify=verify_tls)
+        try:
+            campaign = await client.get_loop(campaign_id)
+            return nid, campaign.get("loop_stats")
+        except Exception:
+            logger.debug("loop fetch failed for run %s node %s", run_id, nid,
+                         exc_info=True)
+            return nid, None
+
+    pairs = await asyncio.gather(*(fetch(e) for e in results)) if results else []
+    per_node = {nid: stats for nid, stats in pairs}
+
+    return {
+        "fleet_run_id": run_id,
+        "status": run_view["status"],
+        "aggregate": aggregate_loop_stats(per_node),
+        "per_node": per_node,
+    }
 
 
 @router.get("/api/fleet/runs", dependencies=[Depends(require_api_key)])

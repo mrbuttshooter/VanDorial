@@ -51,6 +51,8 @@ def controller(monkeypatch):
     fleet: dict[int, dict] = {}
     # Record of start_test dispatches so launch tests can assert the fan-out.
     dispatched_calls: list[dict] = []
+    # Record of start_loop dispatches so loop-launch tests can assert the fan-out.
+    loop_dispatched_calls: list[dict] = []
 
     from gencall.controller import node_client as node_client_mod
     NodeClient = node_client_mod.NodeClient
@@ -89,10 +91,31 @@ def controller(monkeypatch):
     async def fake_stop_test(self, test_id):
         return {"status": "stopped", "id": test_id}
 
+    async def fake_start_loop(self, payload):
+        nid = _node_id_for(self.address)
+        spec = fleet.get(nid, {})
+        loop_dispatched_calls.append({"node_id": nid, "payload": payload})
+        if spec.get("start_raises"):
+            raise RuntimeError("worker rejected loop start")
+        return {"status": "started", "campaign": {"id": f"camp-{nid}"}}
+
+    async def fake_stop_loop(self, campaign_id):
+        loop_dispatched_calls.append({"stop_campaign": campaign_id})
+        return {"status": "stopped", "campaign": {"id": campaign_id}}
+
+    async def fake_get_loop(self, campaign_id):
+        nid = _node_id_for(self.address)
+        spec = fleet.get(nid, {})
+        return {"id": campaign_id, "status": "running",
+                "loop_stats": spec.get("loop_stats")}
+
     monkeypatch.setattr(NodeClient, "health", fake_health, raising=True)
     monkeypatch.setattr(NodeClient, "get_stats", fake_get_stats, raising=True)
     monkeypatch.setattr(NodeClient, "start_test", fake_start_test, raising=True)
     monkeypatch.setattr(NodeClient, "stop_test", fake_stop_test, raising=True)
+    monkeypatch.setattr(NodeClient, "start_loop", fake_start_loop, raising=True)
+    monkeypatch.setattr(NodeClient, "stop_loop", fake_stop_loop, raising=True)
+    monkeypatch.setattr(NodeClient, "get_loop", fake_get_loop, raising=True)
 
     # ── Build the app ───────────────────────────────────────────────────────
     from gencall.controller.app import create_controller_app
@@ -156,9 +179,10 @@ def controller(monkeypatch):
     ctx = Ctx()
     ctx.fleet = fleet
     ctx.dispatched_calls = dispatched_calls
+    ctx.loop_dispatched_calls = loop_dispatched_calls
 
     def register_node(client, nid_address, group_id=None, online=False, stats=None,
-                      start_raises=False, **node_fields):
+                      start_raises=False, loop_stats=None, **node_fields):
         """Create a node via the API and register its mocked state in `fleet`."""
         body = {"name": node_fields.get("name", f"node-{nid_address}"),
                 "address": nid_address,
@@ -170,7 +194,8 @@ def controller(monkeypatch):
         node = resp.json()
         fleet[node["id"]] = {"address": nid_address, "group_id": group_id,
                              "online": online, "stats": stats,
-                             "start_raises": start_raises}
+                             "start_raises": start_raises,
+                             "loop_stats": loop_stats}
         return node
 
     ctx.register_node = register_node
@@ -222,6 +247,7 @@ PROTECTED = [
     ("get", "/api/groups"),
     ("post", "/api/groups"),
     ("post", "/api/fleet/launch"),
+    ("post", "/api/fleet/loops/launch"),
     ("get", "/api/fleet/runs"),
     ("get", "/api/fleet/stats"),
     ("get", "/api/fleet/stats/history"),
@@ -529,3 +555,200 @@ def test_fleet_stats_empty_when_no_online_nodes(controller):
     stats = client.get("/api/fleet/stats", headers=headers).json()
     assert stats["aggregate"]["total_calls"] == 0
     assert stats["aggregate"]["success_rate"] == 0.0
+
+
+# ─── Fleet LOOP-campaign launch fan-out (design §4.4 / §7 stage 9) ─────────────
+
+
+def test_fleet_loop_launch_fans_out_per_node(controller):
+    client, headers, ctx = controller
+
+    # Three nodes: n1 online & OK, n2 online but start_loop raises, n3 offline.
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True,
+                           start_raises=True)
+    n3 = ctx.register_node(client, "http://node-3", online=False)
+
+    resp = client.post("/api/fleet/loops/launch", json={
+        "name": "loop-A",
+        "node_ids": [n1["id"], n2["id"], n3["id"]],
+        "destination": {"remote_host": "10.0.0.9", "remote_port": 5060,
+                        "transport": "udp"},
+        "rate": {"mode": "per_node", "value": 2.0},
+        "csv_path": "/data/pairs.csv",
+        "max_concurrent": 20,
+        "duration_s": 120,
+        "target_minutes": 600,
+    }, headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    run_id = body["fleet_run_id"]
+
+    by_node = {d["node_id"]: d for d in body["dispatched"]}
+    # n1 dispatched OK with a campaign id.
+    assert by_node[n1["id"]]["ok"] is True
+    assert by_node[n1["id"]]["campaign_id"] == f"camp-{n1['id']}"
+    # n2 online but worker rejected -> error recorded, no campaign id.
+    assert by_node[n2["id"]]["ok"] is False
+    assert by_node[n2["id"]]["error"]
+    assert by_node[n2["id"]]["campaign_id"] is None
+    # n3 offline -> never dispatched, marked offline.
+    assert by_node[n3["id"]]["ok"] is False
+    assert by_node[n3["id"]]["error"] == "node offline"
+
+    # Only ONLINE targets get a start_loop call (POST /api/loops per node);
+    # offline node was skipped.
+    started = [c for c in ctx.loop_dispatched_calls if "payload" in c]
+    called_ids = {c["node_id"] for c in started}
+    assert called_ids == {n1["id"], n2["id"]}
+    # Per-call loop params propagate onto the StartLoopRequest body, and
+    # per_node mode -> each online node got the full rate value.
+    for call in started:
+        assert call["payload"]["rate"] == 2.0
+        assert call["payload"]["csv_path"] == "/data/pairs.csv"
+        assert call["payload"]["max_concurrent"] == 20
+        assert call["payload"]["dest_host"] == "10.0.0.9"
+        assert call["payload"]["target_minutes"] == 600
+
+    # Mixed ok/error -> run status 'partial', persisted as a FleetRun.
+    run = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()
+    assert run["status"] == "partial"
+    assert run["scenario"] == "__loop__"
+    assert set(run["node_ids"]) == {n1["id"], n2["id"], n3["id"]}
+    assert len(run["results"]) == 3
+
+
+def test_fleet_loop_launch_total_rate_split(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True)
+
+    resp = client.post("/api/fleet/loops/launch", json={
+        "node_ids": [n1["id"], n2["id"]],
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "total", "value": 10.0},
+    }, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dispatched"]
+
+    started = [c for c in ctx.loop_dispatched_calls if "payload" in c]
+    rates = sorted(c["payload"]["rate"] for c in started)
+    assert rates == [5.0, 5.0]
+
+
+def test_fleet_loop_launch_requires_targets(controller):
+    client, headers, _ctx = controller
+    resp = client.post("/api/fleet/loops/launch", json={
+        "destination": {"remote_host": "10.0.0.9"},
+    }, headers=headers)
+    assert resp.status_code == 400
+
+
+def test_fleet_loop_stop_calls_each_node(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True)
+
+    launch = client.post("/api/fleet/loops/launch", json={
+        "node_ids": [n1["id"], n2["id"]],
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "per_node", "value": 1.0},
+    }, headers=headers).json()
+    run_id = launch["fleet_run_id"]
+
+    resp = client.post(f"/api/fleet/loops/{run_id}/stop", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "stopped"}
+
+    # Each running campaign's stop endpoint was called per node.
+    stopped = {c["stop_campaign"] for c in ctx.loop_dispatched_calls
+               if "stop_campaign" in c}
+    assert stopped == {f"camp-{n1['id']}", f"camp-{n2['id']}"}
+
+    run = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()
+    assert run["status"] == "stopped"
+
+
+def test_fleet_loop_stop_404(controller):
+    client, headers, _ctx = controller
+    assert client.post("/api/fleet/loops/999/stop",
+                       headers=headers).status_code == 404
+
+
+# ─── Fleet loop_stats aggregation across nodes ────────────────────────────────
+
+
+def _loop_stats(calls_out, answered_out, out_ms, calls_in, in_ms,
+                completion, delta_avg, failures=None):
+    return {
+        "calls_out": calls_out,
+        "answered_out": answered_out,
+        "minutes_out_ms": out_ms,
+        "calls_in_matched": calls_in,
+        "minutes_in_ms": in_ms,
+        "completion_pct": completion,
+        "delta_avg_ms": delta_avg,
+        "delta_p50_ms": delta_avg,
+        "delta_p95_ms": delta_avg,
+        "failures": failures or {"out": {}, "in": {}},
+    }
+
+
+def test_fleet_loop_view_sums_loop_stats_across_nodes(controller):
+    client, headers, ctx = controller
+
+    # Two online nodes, each running a loop with its own loop_stats snapshot.
+    n1 = ctx.register_node(
+        client, "http://node-1", online=True,
+        loop_stats=_loop_stats(
+            calls_out=100, answered_out=90, out_ms=600000,
+            calls_in=80, in_ms=660000, completion=80.0, delta_avg=200.0,
+            failures={"out": {"503": 5}, "in": {"487": 2}}))
+    n2 = ctx.register_node(
+        client, "http://node-2", online=True,
+        loop_stats=_loop_stats(
+            calls_out=40, answered_out=38, out_ms=240000,
+            calls_in=30, in_ms=246000, completion=75.0, delta_avg=300.0,
+            failures={"out": {"503": 1}, "in": {"480": 4}}))
+
+    launch = client.post("/api/fleet/loops/launch", json={
+        "node_ids": [n1["id"], n2["id"]],
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "per_node", "value": 1.0},
+    }, headers=headers).json()
+    run_id = launch["fleet_run_id"]
+
+    resp = client.get(f"/api/fleet/loops/{run_id}", headers=headers)
+    assert resp.status_code == 200
+    view = resp.json()
+    agg = view["aggregate"]
+
+    # Counters summed across both nodes.
+    assert agg["calls_out"] == 140
+    assert agg["answered_out"] == 128
+    assert agg["minutes_out_ms"] == 840000
+    assert agg["calls_in_matched"] == 110
+    assert agg["minutes_in_ms"] == 906000
+    # Minutes derived from summed ms.
+    assert agg["minutes_out"] == 14.0
+    assert agg["minutes_in"] == 15.1
+    # Completion recomputed from summed totals: 110 / 140 * 100 (NOT the mean of
+    # 80 and 75).
+    assert agg["completion_pct"] == round(110 / 140 * 100, 2)
+    # delta_avg_ms averaged over contributing nodes: (200 + 300) / 2.
+    assert agg["delta_avg_ms"] == 250.0
+    # Failures merged per SIP code across nodes and directions.
+    assert agg["failures"]["out"] == {"503": 6}
+    assert agg["failures"]["in"] == {"487": 2, "480": 4}
+    assert agg["nodes_contributing"] == 2
+
+    # per_node echo carries each node's raw snapshot.
+    per_node = view["per_node"]
+    assert per_node[str(n1["id"])]["calls_out"] == 100
+    assert per_node[str(n2["id"])]["calls_out"] == 40
+
+
+def test_fleet_loop_view_404(controller):
+    client, headers, _ctx = controller
+    assert client.get("/api/fleet/loops/999",
+                      headers=headers).status_code == 404
