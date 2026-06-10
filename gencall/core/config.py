@@ -214,6 +214,30 @@ class Config:
     def stats_history_size(self):
         return self.getint("stats", "history_size", 1000)
 
+    # --- Loops (LoopEngine caps, design §4.1) ---
+    # Conservative defaults tuned for the 4 vCPU / 4 GB deploy target. They cap
+    # how much native SIPp work the (control-plane-only) engine will spawn so a
+    # single box is never overcommitted: 50 concurrent loop campaigns (≈ 100
+    # channels), 120 simultaneously-answered inbound calls, and a hard
+    # answered-call ceiling of 7200 s so a wedged dialog can never pin a channel.
+    @property
+    def loops_max_concurrent(self):
+        return self.getint("loops", "max_concurrent_loops", 50)
+
+    @property
+    def loops_max_answered(self):
+        return self.getint("loops", "max_answered_calls", 120)
+
+    @property
+    def loops_answered_max_duration_s(self):
+        return self.getint("loops", "answered_max_duration_s", 7200)
+
+    # Minimum seconds between UAS restart attempts — the throttled backoff floor
+    # for the answer-side monitor (design §8). Never busy-restart a crash loop.
+    @property
+    def loops_uas_restart_backoff_s(self):
+        return self.getint("loops", "uas_restart_backoff_s", 5)
+
     @classmethod
     def reset(cls):
         cls._instance = None

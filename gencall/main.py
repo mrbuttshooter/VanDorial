@@ -146,6 +146,24 @@ def create_app(config_path: str = None):
 
     app = routes.app
 
+    # ── Loop subsystem (design §4.1 / §4.4) ──────────────────────────────────
+    # The LoopEngine owns one persistent UAS (answer side, started on boot) and
+    # N per-campaign UAC processes, built on the shared SIPpEngine so every PID
+    # is tracked by the registry above. Mount its API router and wire it in.
+    from gencall.core.loop_engine import LoopEngine
+    from gencall.api import loops as loops_api
+
+    loop_engine = LoopEngine(sipp_engine, db=db, config=config)
+    loops_api.loop_engine = loop_engine
+    app.include_router(loops_api.router)
+
+    # Start the answering side now so returning MADA calls are always answered.
+    # Best-effort: a missing real SIPp must not stop the API from coming up.
+    try:
+        loop_engine.start_answer()
+    except Exception as e:
+        logger.warning("Could not start loop answer side (UAS): %s", e)
+
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.
     app.include_router(websocket.router)
@@ -161,6 +179,12 @@ def create_app(config_path: str = None):
             # Graceful shutdown (design §4.5): stop every running SIPp so killing
             # GenCall never leaves orphaned dialers. stop_all() runs the existing
             # SIGUSR1→SIGKILL group logic per instance and clears the registry.
+            try:
+                # Stop the answer-side monitor first so it doesn't restart the
+                # UAS while we're tearing everything down.
+                loop_engine.stop_monitor()
+            except Exception as e:
+                logger.warning("Error stopping loop monitor: %s", e)
             try:
                 logger.info("Shutdown: stopping all SIPp instances...")
                 sipp_engine.stop_all()
