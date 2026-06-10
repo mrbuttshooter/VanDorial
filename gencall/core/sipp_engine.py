@@ -165,10 +165,24 @@ class SIPpInstance:
         # Remote target
         cmd.append(f"{self.remote_host}:{self.remote_port}")
 
-        # Local binding
+        # Local binding. -i sets the SIP signalling source address; -mi sets the
+        # media (RTP) source address. We bind both to local_ip when known so the
+        # SDP we advertise ([media_ip]) matches the socket SIPp actually echoes
+        # on — otherwise -rtp_echo and the SDP can land on the wrong interface.
         if self.local_ip:
             cmd.extend(["-i", self.local_ip])
+            cmd.extend(["-mi", self.local_ip])
         cmd.extend(["-p", str(self.local_port)])
+
+        # RTP media port window. ALWAYS pin SIPp's media ports inside the
+        # firewalled range (config [sip] min/max_rtp_port) — without this SIPp
+        # uses its built-in ~6000 base, which the host firewall drops, so return
+        # media never arrives. min < max is validated in Config (warn-only); we
+        # emit whatever is configured so the window is explicit on every launch.
+        cmd.extend([
+            "-min_rtp_port", str(config.min_rtp_port),
+            "-max_rtp_port", str(config.max_rtp_port),
+        ])
 
         # Transport
         cmd.extend(["-t", self.transport.value])
@@ -206,11 +220,15 @@ class SIPpInstance:
         self._stats_file = os.path.join(stats_dir, f"gencall_sipp_{self.id}.csv")
         cmd.extend(["-trace_stat", "-stf", self._stats_file, "-fd", "1"])
 
-        # Screen output control
+        # Screen output control. -trace_err writes SIPp's own error file, so we
+        # do NOT need (and must not keep) a stderr PIPE open — see start_instance,
+        # which routes stderr to DEVNULL to avoid a full-pipe deadlock on a busy
+        # run. We run SIPp in the FOREGROUND (no -bg): -bg daemonizes (forks and
+        # the parent exits immediately), which would leave Popen tracking a dead
+        # parent while the real dialer runs as an untracked orphan. Staying in the
+        # foreground under our os.setsid process group keeps the spawned PID the
+        # one we signal/reap and the one recorded for crash-orphan reconciliation.
         cmd.extend(["-trace_err", "-trace_logs"])
-
-        # Background mode (no curses)
-        cmd.append("-bg")
 
         # Extra args
         if self.extra_args:
@@ -268,20 +286,28 @@ class SIPpEngine:
         with self._lock:
             if instance.id in self.instances:
                 existing = self.instances[instance.id]
-                if existing.state == SIPpState.RUNNING:
-                    logger.warning("Instance %s is already running", instance.id)
+                if existing.state in (SIPpState.RUNNING, SIPpState.STARTING):
+                    logger.warning("Instance %s is already %s",
+                                   instance.id, existing.state.value)
                     return False
 
             self.instances[instance.id] = instance
+            # Set STARTING synchronously while we still hold the engine lock so a
+            # concurrent monitor pass (LoopEngine restart check) sees this
+            # instance as not-dead the instant it is registered — preventing a
+            # double-launch race for the SIP port (design §8).
+            instance.state = SIPpState.STARTING
 
         try:
             cmd = instance.build_command(self.config)
             logger.info("Starting SIPp: %s", " ".join(cmd))
 
-            instance.state = SIPpState.STARTING
             popen_kwargs = {
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
+                "stdout": subprocess.DEVNULL,
+                # SIPp writes its own error file via -trace_err; an unread stderr
+                # PIPE can fill its kernel buffer and deadlock a busy run, so we
+                # discard it here rather than holding a pipe we never drain.
+                "stderr": subprocess.DEVNULL,
             }
             if _HAS_SETSID:
                 # POSIX: start SIPp in a new session so we can later signal the
@@ -289,13 +315,21 @@ class SIPpEngine:
                 popen_kwargs["preexec_fn"] = os.setsid
             instance._process = subprocess.Popen(cmd, **popen_kwargs)
 
-            # Give it a moment to start
+            # Give it a moment to start. SIPp now runs in the FOREGROUND (no -bg),
+            # so a still-alive child after this poll is the real dialer — not a
+            # forked-and-exited daemon parent. An early exit here means a real
+            # startup failure (bad scenario, port in use, ...); SIPp's own
+            # -trace_err file holds the detail.
             time.sleep(0.5)
             if instance._process.poll() is not None:
-                stderr = instance._process.stderr.read().decode("utf-8", errors="replace")
+                exit_code = instance._process.returncode
                 instance.state = SIPpState.ERROR
-                instance.error_message = stderr[:500]
-                logger.error("SIPp failed to start: %s", stderr[:200])
+                instance.error_message = (
+                    f"SIPp exited during startup (code {exit_code}); "
+                    f"see SIPp -trace_err file"
+                )
+                logger.error("SIPp failed to start (exit %s): %s",
+                             exit_code, instance.error_message)
                 return False
 
             instance.state = SIPpState.RUNNING
@@ -350,54 +384,62 @@ class SIPpEngine:
             return False
 
     def stop_instance(self, instance_id: str) -> bool:
-        """Gracefully stop a SIPp instance."""
+        """Gracefully stop a SIPp instance.
+
+        The whole body runs under the engine lock so a concurrent monitor pass
+        (LoopEngine's UAS restart check) can never observe a half-stopped
+        instance and double-launch a replacement fighting for the SIP port
+        (design §8). A STARTING instance is stoppable too — start_instance sets
+        STARTING synchronously under this same lock, so by the time we hold it the
+        process either exists (and we signal it) or the start already failed.
+        """
         with self._lock:
             instance = self.instances.get(instance_id)
             if not instance:
                 return False
 
-        if instance.state != SIPpState.RUNNING:
-            return False
+            if instance.state not in (SIPpState.RUNNING, SIPpState.STARTING):
+                return False
 
-        instance.state = SIPpState.STOPPING
-        stopped_pid = instance._process.pid if instance._process else None
-        try:
-            if instance._process and instance._process.poll() is None:
-                if _HAS_SETSID:
-                    # POSIX: signal the whole process group. SIGUSR1 is SIPp's
-                    # convention for a graceful drain-and-exit.
-                    pgid = os.getpgid(instance._process.pid)
-                    os.killpg(pgid, signal.SIGUSR1)
-                    try:
-                        instance._process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        # Force kill if graceful shutdown failed
-                        os.killpg(pgid, signal.SIGKILL)
-                        instance._process.wait(timeout=5)
-                else:
-                    # Non-POSIX (e.g. Windows): no process groups / SIGUSR1.
-                    # Fall back to terminate(), escalating to kill() on timeout.
-                    instance._process.terminate()
-                    try:
-                        instance._process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        instance._process.kill()
-                        instance._process.wait(timeout=5)
+            instance.state = SIPpState.STOPPING
+            stopped_pid = instance._process.pid if instance._process else None
+            try:
+                if instance._process and instance._process.poll() is None:
+                    if _HAS_SETSID:
+                        # POSIX: signal the whole process group. SIGUSR1 is SIPp's
+                        # convention for a graceful drain-and-exit.
+                        pgid = os.getpgid(instance._process.pid)
+                        os.killpg(pgid, signal.SIGUSR1)
+                        try:
+                            instance._process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            # Force kill if graceful shutdown failed
+                            os.killpg(pgid, signal.SIGKILL)
+                            instance._process.wait(timeout=5)
+                    else:
+                        # Non-POSIX (e.g. Windows): no process groups / SIGUSR1.
+                        # Fall back to terminate(), escalating to kill() on timeout.
+                        instance._process.terminate()
+                        try:
+                            instance._process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            instance._process.kill()
+                            instance._process.wait(timeout=5)
 
-            instance.state = SIPpState.STOPPED
-            # The PID is gone — forget it so reconciliation never targets it.
-            if self.registry is not None and stopped_pid is not None:
-                try:
-                    self.registry.clear(stopped_pid)
-                except Exception as e:
-                    logger.debug("Registry clear of PID %s failed: %s", stopped_pid, e)
-            logger.info("SIPp instance %s stopped", instance_id)
-            return True
-        except Exception as e:
-            instance.state = SIPpState.ERROR
-            instance.error_message = str(e)
-            logger.exception("Error stopping SIPp instance %s", instance_id)
-            return False
+                instance.state = SIPpState.STOPPED
+                # The PID is gone — forget it so reconciliation never targets it.
+                if self.registry is not None and stopped_pid is not None:
+                    try:
+                        self.registry.clear(stopped_pid)
+                    except Exception as e:
+                        logger.debug("Registry clear of PID %s failed: %s", stopped_pid, e)
+                logger.info("SIPp instance %s stopped", instance_id)
+                return True
+            except Exception as e:
+                instance.state = SIPpState.ERROR
+                instance.error_message = str(e)
+                logger.exception("Error stopping SIPp instance %s", instance_id)
+                return False
 
     def stop_all(self):
         """Stop all running instances."""
@@ -459,11 +501,12 @@ class SIPpEngine:
                         instance.state = SIPpState.STOPPED
                         logger.info("SIPp instance %s completed normally", instance.id)
                     else:
-                        stderr = ""
-                        if instance._process.stderr:
-                            stderr = instance._process.stderr.read().decode("utf-8", errors="replace")
+                        # stderr is DEVNULL (not piped) — SIPp records the detail
+                        # in its own -trace_err file, so we just report the code.
                         instance.state = SIPpState.ERROR
-                        instance.error_message = f"Exit code {exit_code}: {stderr[:200]}"
+                        instance.error_message = (
+                            f"Exit code {exit_code}; see SIPp -trace_err file"
+                        )
                         logger.error("SIPp instance %s exited with code %d", instance.id, exit_code)
                     break
 

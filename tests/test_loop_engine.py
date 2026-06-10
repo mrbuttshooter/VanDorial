@@ -184,6 +184,70 @@ def test_records_csv_export_returns_rows(loop_engine, db):
     assert any("call-1@h" in ln for ln in lines)
 
 
+# ─── Call-path bug regressions (review-confirmed) ─────────────────────────────
+
+def _csv_rows(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return [ln.rstrip("\n") for ln in fh if ln.strip()]
+
+
+def test_fixed_duration_bakes_nonempty_field2_ms(loop_engine):
+    """Fixed mode writes a real per-call hold into the -inf field2 (ms).
+
+    The UAC scenario holds with <pause milliseconds="[field2]"/>; an empty
+    field2 made every call hold ~0s. The hold must now be present and in ms.
+    """
+    csv = loop_engine._prepare_csv("", "fixed", 3, 0)  # 3 s fixed
+    rows = _csv_rows(csv)
+    assert rows[0].upper() == "SEQUENTIAL"
+    # First data row: a;b;hold_ms;  -> field2 is column index 2 == 3000 ms.
+    cells = [c for c in rows[1].split(";")]
+    assert cells[2] == "3000"
+
+
+def test_fixed_duration_preserves_subsecond_via_ms(loop_engine):
+    """Hold travels in ms end-to-end (no //1000 then *1000 truncation)."""
+    # 1 s -> exactly 1000 ms, not collapsed to 0 by an integer round-trip.
+    csv = loop_engine._prepare_csv("", "fixed", 1, 0)
+    cells = _csv_rows(csv)[1].split(";")
+    assert cells[2] == "1000"
+
+
+def test_range_duration_field2_within_window(loop_engine):
+    """Range mode bakes a per-row uniform hold (ms) inside [lo, hi]."""
+    csv = loop_engine._prepare_csv("", "range", 2, 5)  # 2000..5000 ms
+    for row in _csv_rows(csv)[1:]:
+        hold = int(row.split(";")[2])
+        assert 2000 <= hold <= 5000
+
+
+def test_uas_command_has_i_mi_and_rtp_window(loop_engine, monkeypatch):
+    """The persistent UAS binds the SIP-facing IP (-i/-mi) + RTP window."""
+    # Set a SIP-facing local IP so -i/-mi are emitted.
+    monkeypatch.setattr(type(loop_engine.config), "sip_local_ip",
+                        property(lambda self: "10.9.9.9"))
+    inst = loop_engine._build_uas_instance()
+    cmd = inst.build_command(loop_engine.config)
+    assert "-i" in cmd and cmd[cmd.index("-i") + 1] == "10.9.9.9"
+    assert "-mi" in cmd and cmd[cmd.index("-mi") + 1] == "10.9.9.9"
+    assert "-min_rtp_port" in cmd and "-max_rtp_port" in cmd
+
+
+def test_uas_enforces_positive_duration_max_s(loop_engine, monkeypatch):
+    """A 0/unset answered-call guard is forced positive before launch.
+
+    The UAS recv timeout is "[duration_max_s]000" ms; a 0 guard would BYE every
+    call the instant it answers. _build_uas_instance must substitute a positive
+    value (the 7200 s fallback) into the -key.
+    """
+    monkeypatch.setattr(type(loop_engine.config),
+                        "loops_answered_max_duration_s",
+                        property(lambda self: 0))
+    inst = loop_engine._build_uas_instance()
+    assert "-key duration_max_s 0" not in inst.extra_args
+    assert "duration_max_s 7200" in inst.extra_args
+
+
 # ─── API router tests (FastAPI TestClient) ────────────────────────────────────
 
 @pytest.fixture

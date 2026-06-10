@@ -12,10 +12,12 @@
 
       B-side duration = t_bye_received - t_200ok_sent
 
-  [clock_tick] is SIPp's wall-clock in milliseconds. source_ip is taken from the
-  network peer ([senderip]) so the parser can tag each inbound record and flag
-  any call from outside the MADA whitelist (firewall is the real boundary; the
-  app layer is verification-only - design §4.1 trust filter).
+  [clock_tick] is SIPp's wall-clock in milliseconds. source_ip is captured from
+  the top Via host of the received INVITE into $source_ip (SIPp has no real
+  [senderip] keyword — using it aborts the scenario on load) so the parser can
+  tag each inbound record and flag any call from outside the MADA whitelist
+  (firewall is the real boundary; the app layer is verification-only - design
+  §4.1 trust filter).
 
   The answered-call max-duration is injected as the recv timeout below; the
   LoopEngine renders [duration_max_s] from config (default 7200 s).
@@ -29,7 +31,13 @@
     <action>
       <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="From:" assign_to="trash,from_number" />
       <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="To:" assign_to="trash,to_number" />
-      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=invite t_invite_received=[clock_tick]" />
+      <!-- Peer source IP: extracted from the top Via host
+           ("Via: SIP/2.0/<transport> <host>[:port];..."). [senderip] is NOT a
+           real SIPp keyword (SIPp aborts on load if it sees it), so we capture
+           the host from the received INVITE instead. An unmatched capture leaves
+           $source_ip empty (expands to nothing) rather than aborting. -->
+      <ereg regexp="SIP/2.0/[A-Za-z0-9]+[ \t]+([^:; \t\r\n]+)" search_in="hdr" header="Via:" assign_to="trash,source_ip" />
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=invite t_invite_received=[clock_tick]" />
     </action>
   </recv>
 
@@ -78,7 +86,7 @@
 
   <nop>
     <action>
-      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=answer t_200ok_sent=[clock_tick]" />
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=answer t_200ok_sent=[clock_tick]" />
     </action>
   </nop>
 
@@ -93,7 +101,7 @@
   <!-- ── BYE received → B-side clock STOPS here (t_bye_received) ─────────── -->
   <nop>
     <action>
-      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=bye t_bye_received=[clock_tick]" />
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=bye t_bye_received=[clock_tick]" />
     </action>
   </nop>
 
@@ -133,7 +141,7 @@
   </send>
   <nop>
     <action>
-      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[senderip] event=bye t_bye_received=[clock_tick] guard=max_duration" />
+      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=bye t_bye_received=[clock_tick] guard=max_duration" />
     </action>
   </nop>
   <recv response="200" optional="true" crlf="true" next="call_done" />

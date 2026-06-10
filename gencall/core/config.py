@@ -139,6 +139,17 @@ class Config:
         return self.getint("sip", "T2", 120)
 
     @property
+    def sip_local_ip(self):
+        """SIP-facing local address the UAS binds (signalling + media).
+
+        Empty default ("") means "let SIPp bind all interfaces" — fine for a
+        single-homed box. On a multi-homed deploy set [sip] local_ip to the
+        MADA-facing address so the UAS's -i/-mi and the SDP it advertises match
+        the interface return media actually arrives on.
+        """
+        return self.get("sip", "local_ip", "")
+
+    @property
     def min_rtp_port(self):
         return self.getint("sip", "min_rtp_port", 10000)
 

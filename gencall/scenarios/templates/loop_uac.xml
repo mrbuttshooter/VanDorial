@@ -2,11 +2,13 @@
 <!--
   GenCall v2 - Loop Campaign UAC (outbound originate leg) - design §4.1/§4.2.
 
-  Originates one INVITE per CSV row, plays G.711 audio for the call hold, then
-  BYEs. The A/B number pair is injected from the campaign's -inf CSV:
+  Originates one INVITE per CSV row, holds the call for the configured duration,
+  then BYEs. The A/B number pair AND the per-call hold are injected from the
+  campaign's -inf CSV:
 
-      [field0] = a_number   (calling)
-      [field1] = b_number   (called)
+      [field0] = a_number       (calling)
+      [field1] = b_number       (called)
+      [field2] = hold_ms        (per-call hold, milliseconds)
 
   Per-call <log> lines are written to SIPp's -trace_logs file. The CallRecord
   tail-parser (gencall/core/call_records.py) ingests them. We emit ms-precision
@@ -18,10 +20,11 @@
   [clock_tick] is SIPp's wall-clock in milliseconds; we capture it the instant
   each reference event fires, so the parser never has to guess timing.
 
-  Audio: pcap play of a G.711 sample (alaw/ulaw). The media file is passed at
-  launch with -mp / the LoopEngine's exec rtp_stream; the placeholder name here
-  matches the media shipped in gencall/media. Two-way media is the UAS's job
-  (rtp_echo); the UAC only needs to source media so the call is "real".
+  Media: the UAC originates SIP only and sources no RTP — the SIP dialog stays
+  up for the hold without it, and two-way media is the UAS's job (-rtp_echo).
+  Optional one-way originator audio could be added via <exec play_pcap_audio>
+  with an absolute path (SIPp built with pcap support; libpcap is in the
+  Dockerfile), but is omitted to avoid a missing-file load abort.
 -->
 <scenario name="GenCall - Loop UAC">
 
@@ -92,19 +95,19 @@
     ]]>
   </send>
 
-  <!-- ── Play G.711 audio for the call hold ─────────────────────────────
-       The LoopEngine substitutes the real pcap path; default sample lives in
-       gencall/media. Looped so it covers the full hold duration. -->
-  <nop>
-    <action>
-      <exec play_pcap_audio="g711a.pcap" />
-    </action>
-  </nop>
-
   <!-- ── Hold for the configured call duration ──────────────────────────
-       [field2] (per-call duration ms) when the CSV carries it, else the
-       LoopEngine injects -d and uses [last_*] timing. We default to field2
-       so a fixed/range duration travels in the same -inf row. -->
+       The per-call hold (ms) travels in the -inf row's third column ([field2]),
+       baked by LoopEngine._prepare_csv for both fixed and range modes. An
+       attributed <pause> deliberately ignores SIPp's -d flag, so the duration
+       MUST come from the CSV — never -d.
+
+       No originator-side media is played: keeping the SIP dialog up for the
+       hold does NOT require the UAC to source RTP, and two-way media is the
+       UAS's job (-rtp_echo). (Optional one-way originator media could be added
+       later via <exec play_pcap_audio="..."> with an ABSOLUTE path rendered by
+       LoopEngine and a SIPp build with pcap support — libpcap is in the
+       Dockerfile — but it is intentionally omitted here to avoid a missing-file
+       load abort.) -->
   <pause milliseconds="[field2]" />
 
   <!-- ── BYE → A-side clock STOPS here (t_bye_sent) ─────────────────────── -->

@@ -154,9 +154,24 @@ class LoopEngine:
         answered calls at the configured ceiling. The scenario renders its own
         max-duration guard from ``[duration_max_s]`` — we pass it as a
         ``-key`` so SIPp substitutes it in the recv timeout (design §4.1).
+
+        The UAS binds the SIP-facing address (config ``[sip] local_ip``) so
+        SIPpInstance.build_command emits ``-i``/``-mi`` and the RTP port window;
+        that keeps ``-rtp_echo`` and the advertised SDP on the same interface and
+        inside the firewalled media range.
         """
         max_answered = self.config.loops_max_answered
         max_dur = self.config.loops_answered_max_duration_s
+        # The recv timeout in loop_uas.xml is "[duration_max_s]000" (ms): a 0 or
+        # unset guard collapses to a 0 ms timeout that fires immediately and BYEs
+        # every call the instant it answers. Enforce a positive guard before
+        # launch (fall back to the config default if misconfigured to 0).
+        if max_dur <= 0:
+            logger.warning(
+                "loops_answered_max_duration_s=%s is not positive; the UAS recv "
+                "guard would BYE every call. Falling back to 7200s.", max_dur,
+            )
+            max_dur = 7200
         transport = _TRANSPORT_MAP.get(self.config.sipp_transport.lower(), SIPpTransport.UDP)
 
         # -rtp_echo: two-way media; -key duration_max_s: scenario guard value.
@@ -166,6 +181,7 @@ class LoopEngine:
             scenario_file=UAS_TEMPLATE,
             remote_host="0.0.0.0",   # UAS does not originate; placeholder target
             remote_port=self.config.web_port,  # unused by a pure answer scenario
+            local_ip=self.config.sip_local_ip,  # SIP-facing bind (-i/-mi); "" = all ifaces
             local_port=5060,
             mode=SIPpMode.UAS,
             transport=transport,
@@ -219,19 +235,25 @@ class LoopEngine:
         backoff = max(1, int(self.config.loops_uas_restart_backoff_s))
         while not self._monitor_stop.is_set():
             try:
-                inst = self.engine.get_instance(UAS_INSTANCE_ID)
-                dead = inst is None or inst.state in (
-                    SIPpState.STOPPED,
-                    SIPpState.ERROR,
-                )
-                # Only restart once the backoff window since the last start has
-                # elapsed — never busy-restart a crash loop.
-                if dead and (_time.time() - self._last_uas_start) >= backoff:
-                    logger.warning(
-                        "Loop UAS not running (state=%s); restarting (backoff %ds)",
-                        getattr(inst, "state", None), backoff,
+                # Hold the engine-level monitor lock across the WHOLE
+                # read-decide-restart so two passes (or a pass racing
+                # start_answer) can never both decide the UAS is dead and both
+                # launch a replacement fighting for :5060 (design §8). STARTING
+                # and RUNNING both count as "not dead": start_instance sets
+                # STARTING synchronously, so a UAS mid-launch is never restarted.
+                with self._lock:
+                    inst = self.engine.get_instance(UAS_INSTANCE_ID)
+                    dead = inst is None or inst.state in (
+                        SIPpState.STOPPED,
+                        SIPpState.ERROR,
                     )
-                    with self._lock:
+                    # Only restart once the backoff window since the last start
+                    # has elapsed — never busy-restart a crash loop.
+                    if dead and (_time.time() - self._last_uas_start) >= backoff:
+                        logger.warning(
+                            "Loop UAS not running (state=%s); restarting (backoff %ds)",
+                            getattr(inst, "state", None), backoff,
+                        )
                         # Drop the dead instance so start_instance re-creates it.
                         if inst is not None:
                             self.engine.remove_instance(UAS_INSTANCE_ID)
@@ -287,13 +309,13 @@ class LoopEngine:
             campaign_id = _new_campaign_id()
             instance_id = f"uac-{campaign_id}"
 
-            # Resolve the per-call hold. SIPp's -inf rows carry [field2] (ms);
-            # the engine renders the hold into a generated CSV when one isn't
-            # supplied, or appends a duration column. For a 'fixed' duration we
-            # pass -d so every call holds the same; for 'range' we cannot vary
-            # per-call from a single -d, so we bake a per-row duration into the
-            # CSV (a uniform pick per row).
-            resolved_csv, per_call_d_ms = self._prepare_csv(
+            # Resolve the per-call hold. loop_uac.xml holds with
+            # <pause milliseconds="[field2]"/>, so the hold is carried in the
+            # -inf row's THIRD column ([field2], ms) for BOTH fixed and range
+            # modes — we never pass -d (an attributed <pause> ignores -d, and
+            # -d would also lose the CSV's per-row range). _prepare_csv always
+            # returns a CSV whose field2 is the per-call hold in ms.
+            resolved_csv = self._prepare_csv(
                 csv_path, duration_mode, duration_s, duration_max_s
             )
 
@@ -313,7 +335,7 @@ class LoopEngine:
                 call_rate=float(rate),
                 max_calls=max_calls,
                 call_limit=int(max_concurrent),
-                duration=per_call_d_ms // 1000 if per_call_d_ms else 0,
+                duration=0,  # hold is per-row [field2] ms in the CSV, not -d
                 csv_file=resolved_csv,
                 campaign_id=campaign_id,
             )
@@ -436,33 +458,40 @@ class LoopEngine:
         return count
 
     def _prepare_csv(self, csv_path, duration_mode, duration_s, duration_max_s):
-        """Return (csv_for_sipp, per_call_duration_ms).
+        """Return a SIPp ``-inf`` path whose THIRD column ([field2]) is the
+        per-call hold in milliseconds.
 
-        For 'fixed' duration we leave the CSV untouched and return the duration
-        in ms so the engine passes ``-d``. For 'range' we generate a SIPp ``-inf``
-        file whose third column ([field2]) is a per-row uniform random hold in ms,
-        so the scenario's ``<pause milliseconds="[field2]"/>`` varies per call;
-        ``-d`` is then unused (return 0). When no CSV is supplied we still
-        synthesize a minimal one-row file so the UAC has a pair to dial.
+        loop_uac.xml holds each call with ``<pause milliseconds="[field2]"/>``,
+        so the hold MUST travel in the CSV row (an attributed <pause> ignores the
+        ``-d`` flag). We therefore ALWAYS render a generated -inf file carrying a
+        field2 hold, for both modes:
+
+          * 'fixed' (or any non-'range') — every row gets the same hold,
+            ``duration_s`` rendered to ms (sub-second precision preserved end to
+            end: there is no //1000 then *1000 round-trip).
+          * 'range' — each row gets an independent uniform-random hold in ms in
+            ``[duration_s*1000, duration_max_s*1000]``.
+
+        When no usable CSV is supplied we synthesize a single A/B pair so the UAC
+        still has a number pair to dial.
         """
-        fixed_ms = int(duration_s) * 1000 if duration_s else 0
-
-        if duration_mode != "range":
-            # Fixed (or none): pass-through CSV, per-call -d from duration_s.
-            if csv_path and os.path.isfile(csv_path):
-                return csv_path, fixed_ms
-            # No usable CSV: synthesize a single A/B pair so the UAC can run.
-            return self._write_inf([("1000000000", "2000000000")], None), fixed_ms
-
-        # Range: bake a per-row random hold (ms) into a generated -inf file.
-        lo = int(duration_s) * 1000 if duration_s else 1000
-        hi = int(duration_max_s) * 1000 if duration_max_s else lo
-        if hi < lo:
-            lo, hi = hi, lo
-
         pairs = self._read_pairs(csv_path) or [("1000000000", "2000000000")]
-        rows = [(a, b, random.randint(lo, hi)) for (a, b) in pairs]
-        return self._write_inf(rows, None), 0
+
+        if duration_mode == "range":
+            lo = int(duration_s) * 1000 if duration_s else 1000
+            hi = int(duration_max_s) * 1000 if duration_max_s else lo
+            if hi < lo:
+                lo, hi = hi, lo
+            rows = [(a, b, random.randint(lo, hi)) for (a, b) in pairs]
+        else:
+            # Fixed (or none): one shared hold in ms. Guard against a 0/empty
+            # duration collapsing the pause to nothing — fall back to 1000 ms.
+            fixed_ms = int(duration_s) * 1000 if duration_s else 0
+            if fixed_ms <= 0:
+                fixed_ms = 1000
+            rows = [(a, b, fixed_ms) for (a, b) in pairs]
+
+        return self._write_inf(rows, None)
 
     @staticmethod
     def _read_pairs(csv_path):
