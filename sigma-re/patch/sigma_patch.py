@@ -20,6 +20,18 @@ time via a .pth auto-loader, so it installs/removes cleanly without touching the
     Optional: SIGMA_PATCH_LOOP_FLOOR>0 also enforces a minimum loop period (sleep) in
     case run()'s own interval is too small.
 
+    v3 NOTE (487 regression fix): v2 implemented the loop floor by sleeping inside
+    monitorScenarios/checkPlannings/scanDatabase* on EVERY caller. Those methods are
+    also reached from scenario/web threads, and per-method sleeps compound across a
+    pass — under live load this delayed call processing enough that A-legs CANCELled
+    unanswered INVITEs (SIP 487 Request Terminated). v3 therefore:
+      * sleeps ONLY on the scheduler's own run() thread (run() is wrapped to record
+        its thread id; calls from any other thread pass through un-throttled),
+      * sleeps in ONE designated pass-entry method (default scanDatabaseScenarios)
+        so at most one floor-sleep happens per loop pass, never N of them,
+      * never touches monitorScenarios unless explicitly listed in
+        SIGMA_PATCH_FLOOR_METHODS (it is on the live-call progress path).
+
 (2) RTP socket/fd hygiene (secondary)
     sigma.core.RTP.RTPGenericStreamer (created per dialog) self-creates a UDP socket when
     manageSocket is truthy. Its stop() close path is guarded and swallows failures, so an
@@ -34,10 +46,17 @@ that specific spin recurs, the known lever is the pure-Python RTP.py swap, not t
 
 ============================ CONTROLS (env) ============================
 * SIGMA_PATCH_DISABLE=1            -> do nothing at all (no-op, without uninstalling).
+* SIGMA_PATCH_SCHED_DISABLE=1      -> skip the scheduler half only.
+* SIGMA_PATCH_RTP_DISABLE=1        -> skip the RTP half only.
 * SIGMA_PATCH_DRY_RUN=1           -> log every decision but DO NOT change behavior
                                      (cleanup still runs; sockets still left as-is).
 * SIGMA_PATCH_CLEANUP_INTERVAL=N  -> min seconds between retention cleanups (default 300).
 * SIGMA_PATCH_LOOP_FLOOR=N        -> min seconds per scheduler loop iteration (default 0=off).
+                                     Sleeps only on the scheduler thread, only once per pass.
+* SIGMA_PATCH_FLOOR_METHODS=a,b   -> which Scheduler method(s) carry the floor sleep
+                                     (default "scanDatabaseScenarios"). Listing several is
+                                     allowed but normally unnecessary; do NOT list
+                                     monitorScenarios unless you know why.
 * SIGMA_PATCH_LOG=<path>          -> where events are appended
                                      (default /var/log/sigma_patch.log, falls back to tempdir).
 
@@ -95,8 +114,17 @@ def _get(name, default=None):
     return default
 
 
-_DISABLED = str(_get("SIGMA_PATCH_DISABLE", "")) in ("1", "true", "TRUE", "yes")
-_DRY_RUN = str(_get("SIGMA_PATCH_DRY_RUN", "")) in ("1", "true", "TRUE", "yes")
+_VERSION = "3"
+
+
+def _flag(name):
+    return str(_get(name, "")) in ("1", "true", "TRUE", "yes")
+
+
+_DISABLED = _flag("SIGMA_PATCH_DISABLE")
+_SCHED_DISABLED = _flag("SIGMA_PATCH_SCHED_DISABLE")
+_RTP_DISABLED = _flag("SIGMA_PATCH_RTP_DISABLE")
+_DRY_RUN = _flag("SIGMA_PATCH_DRY_RUN")
 
 
 def _env_float(name, default):
@@ -108,6 +136,16 @@ def _env_float(name, default):
 
 _CLEANUP_INTERVAL = _env_float("SIGMA_PATCH_CLEANUP_INTERVAL", 300.0)
 _LOOP_FLOOR = _env_float("SIGMA_PATCH_LOOP_FLOOR", 0.0)
+
+# The method(s) that carry the per-pass floor sleep. One pass-entry method is enough
+# to cap the whole loop; per the recovered run() structure scanDatabaseScenarios is
+# the first call of every pass. monitorScenarios is deliberately NOT a default — it
+# is on the live-call progress path (v2 throttling it caused 487s under load).
+_FLOOR_METHODS = tuple(
+    m.strip() for m in
+    str(_get("SIGMA_PATCH_FLOOR_METHODS", "scanDatabaseScenarios")).split(",")
+    if m.strip()
+)
 
 _logger = logging.getLogger("sigma_patch")
 
@@ -189,18 +227,50 @@ def _make_gated(cls, method_name, interval):
         return False
 
 
-# Methods run() calls every loop iteration; throttling any of these caps the loop rate.
-_LOOP_METHODS = ("monitorScenarios", "checkPlannings",
-                 "scanDatabaseScenarios", "scanDatabaseTestCampaigns")
+_SCHED_TID_ATTR = "_sigma_sched_tid"
+
+
+def _wrap_run_capture_thread(cls):
+    """Wrap Scheduler.run() to record which thread the scheduler loop runs on.
+    The floor sleep below only ever fires on that thread — any other caller of the
+    wrapped poll methods (scenario threads, web/API controllers) passes through
+    untouched, so the throttle can never delay live call processing."""
+    import functools
+    import threading
+
+    orig = cls.__dict__.get("run", None)
+    if orig is None:
+        orig = getattr(cls, "run", None)
+    if orig is None or not callable(orig):
+        return False
+    if getattr(orig, "_sigma_floor_run_wrapper", False):
+        return True
+
+    @functools.wraps(orig)
+    def run_capturing(self, *args, **kwargs):
+        try:
+            setattr(self, _SCHED_TID_ATTR, threading.get_ident())
+        except Exception:
+            pass
+        return orig(self, *args, **kwargs)
+
+    run_capturing._sigma_floor_run_wrapper = True
+    try:
+        setattr(cls, "run", run_capturing)
+        return True
+    except (TypeError, AttributeError):
+        return False
 
 
 def _make_loop_throttle(cls, method_name, floor):
-    """Wrap cls.method_name so consecutive calls of THIS method are >= `floor` seconds
-    apart (sleeping to fill the gap). Per-method timestamps self-coordinate: once the
-    first per-iteration method sleeps, the others called right after already have ~floor
-    since their own previous call, so the net effect is ~one floor-sleep per loop pass
-    (no compounding). This caps run()'s poll frequency without touching its compiled body."""
+    """Wrap cls.method_name so the scheduler loop cannot pass through it faster than
+    once per `floor` seconds. Two hard safety rules (the v2->v3 487 fix):
+      1. The sleep fires ONLY on the thread recorded by the run() wrapper. Calls from
+         any other thread (scenario threads, web controllers) run immediately.
+      2. Only the methods in SIGMA_PATCH_FLOOR_METHODS are wrapped (default: one
+         pass-entry method), so sleeps cannot compound within a pass."""
     import functools
+    import threading
 
     orig = cls.__dict__.get(method_name, None)
     if orig is None:
@@ -208,9 +278,22 @@ def _make_loop_throttle(cls, method_name, floor):
     if orig is None or not callable(orig):
         return False
     state_attr = "_sigma_period_" + method_name
+    warned_attr = "_sigma_foreign_seen_" + method_name
 
     @functools.wraps(orig)
     def throttled(self, *args, **kwargs):
+        sched_tid = getattr(self, _SCHED_TID_ATTR, None)
+        if sched_tid is None or threading.get_ident() != sched_tid:
+            # Not the scheduler loop thread -> never sleep here (it would stall
+            # call processing; this is what produced 487s with the v2 throttle).
+            if not getattr(self, warned_attr, False):
+                try:
+                    setattr(self, warned_attr, True)
+                except Exception:
+                    pass
+                _log("floor: %s called from a non-scheduler thread; "
+                     "passing through un-throttled there" % method_name)
+            return orig(self, *args, **kwargs)
         now = time.monotonic()
         last = getattr(self, state_attr, 0.0)
         gap = now - last
@@ -230,8 +313,9 @@ def _make_loop_throttle(cls, method_name, floor):
 
 
 def _apply_scheduler_patch(module):
-    if _DISABLED:
-        _log("disabled via SIGMA_PATCH_DISABLE - scheduler untouched")
+    if _DISABLED or _SCHED_DISABLED:
+        _log("scheduler half disabled via SIGMA_PATCH_%sDISABLE - untouched"
+             % ("" if _DISABLED else "SCHED_"))
         return
     cls = getattr(module, "Scheduler", None)
     if cls is None:
@@ -250,11 +334,25 @@ def _apply_scheduler_patch(module):
             gated.append(name)
 
     # Cap the poll-loop frequency (kills the SELECT-poll busy-spin under load).
+    # Fail-safe ordering: the floor only attaches if run() could be wrapped to
+    # record the scheduler thread; otherwise sleeping would be unscoped (v2 bug).
     floored = []
     if _LOOP_FLOOR > 0:
-        for name in _LOOP_METHODS:
-            if _make_loop_throttle(cls, name, _LOOP_FLOOR):
-                floored.append(name)
+        if "monitorScenarios" in _FLOOR_METHODS:
+            _log("floor: monitorScenarios is explicitly listed in "
+                 "SIGMA_PATCH_FLOOR_METHODS - it is on the live-call path; "
+                 "expect call-processing delays", level=logging.WARNING)
+        if _wrap_run_capture_thread(cls):
+            for name in _FLOOR_METHODS:
+                if _make_loop_throttle(cls, name, _LOOP_FLOOR):
+                    floored.append(name)
+            if not floored:
+                _log("floor: none of %s found on Scheduler - loop floor inactive"
+                     % (_FLOOR_METHODS,), level=logging.WARNING)
+        else:
+            _log("floor: could not wrap Scheduler.run to scope the sleep to the "
+                 "scheduler thread - loop floor NOT applied (fail-safe)",
+                 level=logging.WARNING)
 
     try:
         setattr(cls, _PATCH_FLAG, True)
@@ -262,9 +360,11 @@ def _apply_scheduler_patch(module):
         pass
 
     if gated:
-        _log("scheduler CPU hotfix ACTIVE%s: throttled %s to >=%.0fs%s. log=%s"
-             % (" [DRY-RUN]" if _DRY_RUN else "", "+".join(gated), _CLEANUP_INTERVAL,
-                (" + loop floor %.3fs on %s" % (_LOOP_FLOOR, "+".join(floored)))
+        _log("scheduler CPU hotfix v%s ACTIVE%s: throttled %s to >=%.0fs%s. log=%s"
+             % (_VERSION, " [DRY-RUN]" if _DRY_RUN else "", "+".join(gated),
+                _CLEANUP_INTERVAL,
+                (" + loop floor %.3fs on %s (scheduler thread only)"
+                 % (_LOOP_FLOOR, "+".join(floored)))
                 if floored else " (loop floor OFF)", _LOG_PATH))
     else:
         _log("scheduler: no cleanup/do_cleanup method found to throttle "
@@ -387,8 +487,9 @@ def _wrap_streamer_class(cls):
 
 
 def _apply_rtp_patch(module):
-    if _DISABLED:
-        _log("disabled via SIGMA_PATCH_DISABLE - RTP untouched")
+    if _DISABLED or _RTP_DISABLED:
+        _log("RTP half disabled via SIGMA_PATCH_%sDISABLE - untouched"
+             % ("" if _DISABLED else "RTP_"))
         return
     patched_any = False
     primary = getattr(module, "RTPGenericStreamer", None)
@@ -471,8 +572,9 @@ class _PostImportFinder:
 
 def install():
     if _CONF.get("__source__"):
-        _log("loaded config from %s (loop_floor=%.3fs cleanup_interval=%.0fs)"
-             % (_CONF["__source__"], _LOOP_FLOOR, _CLEANUP_INTERVAL))
+        _log("loaded config from %s (loop_floor=%.3fs on %s, cleanup_interval=%.0fs)"
+             % (_CONF["__source__"], _LOOP_FLOOR, "+".join(_FLOOR_METHODS),
+                _CLEANUP_INTERVAL))
     if _DISABLED:
         _log("SIGMA_PATCH_DISABLE set - hook not installed")
         return

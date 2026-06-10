@@ -24,8 +24,16 @@ def main():
     print("python:", sys.executable)
     try:
         import sigma_patch
-        print("sigma_patch: imported OK; log =", getattr(sigma_patch, "_LOG_PATH", "?"))
+        print("sigma_patch: v%s imported OK; log = %s"
+              % (getattr(sigma_patch, "_VERSION", "?"),
+                 getattr(sigma_patch, "_LOG_PATH", "?")))
         print("cleanup throttle interval:", getattr(sigma_patch, "_CLEANUP_INTERVAL", "?"), "s")
+        floor = getattr(sigma_patch, "_LOOP_FLOOR", 0.0)
+        if floor > 0:
+            print("loop floor: %.3fs on %s (scheduler thread only)"
+                  % (floor, "+".join(getattr(sigma_patch, "_FLOOR_METHODS", ()))))
+        else:
+            print("loop floor: OFF")
     except Exception as e:
         print("FAIL: could not import sigma_patch:", repr(e))
         return 1
@@ -53,6 +61,8 @@ def _check_scheduler():
     patched = getattr(cls, "_sigma_patched", False)
     print("Scheduler patched:", patched,
           "| patchable:", "yes" if _is_patchable(cls) else "NO (cdef extension type)")
+    run_wrapped = getattr(cls.__dict__.get("run", None), "_sigma_floor_run_wrapper", False)
+    print("Scheduler.run thread-capture wrapper (scopes the floor sleep):", run_wrapped)
     has_cleanup = hasattr(cls, "cleanup") or hasattr(cls, "do_cleanup")
     print("Scheduler has cleanup/do_cleanup:", has_cleanup)
     if not has_cleanup:
