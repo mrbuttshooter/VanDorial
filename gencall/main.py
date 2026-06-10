@@ -151,11 +151,22 @@ def create_app(config_path: str = None):
     # N per-campaign UAC processes, built on the shared SIPpEngine so every PID
     # is tracked by the registry above. Mount its API router and wire it in.
     from gencall.core.loop_engine import LoopEngine
+    from gencall.core.loop_matcher import LoopMatcher
     from gencall.api import loops as loops_api
 
     loop_engine = LoopEngine(sipp_engine, db=db, config=config)
     loops_api.loop_engine = loop_engine
     app.include_router(loops_api.router)
+
+    # ── Loop accounting (design §4.3) ────────────────────────────────────────
+    # The LoopMatcher joins out/in call_records into per-campaign loop_stats on a
+    # throttled (>= 10 s) schedule and feeds each snapshot to the WS 'loops'
+    # topic. The engine tracks/untracks campaigns on start/stop so the matcher
+    # only works running campaigns.
+    loop_matcher = LoopMatcher(db=db, on_stats=websocket.on_loop_stats)
+    loops_api.loop_matcher = loop_matcher
+    loop_engine.matcher = loop_matcher
+    loop_matcher.start()
 
     # Start the answering side now so returning MADA calls are always answered.
     # Best-effort: a missing real SIPp must not stop the API from coming up.
@@ -185,6 +196,10 @@ def create_app(config_path: str = None):
                 loop_engine.stop_monitor()
             except Exception as e:
                 logger.warning("Error stopping loop monitor: %s", e)
+            try:
+                loop_matcher.stop()
+            except Exception as e:
+                logger.warning("Error stopping loop matcher: %s", e)
             try:
                 logger.info("Shutdown: stopping all SIPp instances...")
                 sipp_engine.stop_all()

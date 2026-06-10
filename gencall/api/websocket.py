@@ -1,8 +1,13 @@
 """
 GenCall WebSocket API.
-Real-time streaming endpoints for live stats, CDRs, SIP messages,
-and alerts via FastAPI WebSocket with per-topic subscription support
-and sync-to-async bridging for listener callbacks.
+
+Real-time streaming over a FastAPI WebSocket hub with per-topic subscription
+support and a sync→async bridge for listener callbacks.
+
+Live topics (design §4.4): ``stats`` (engine stats snapshots), ``loops`` (per-
+campaign loop_stats from the LoopMatcher), ``logs``, and per-``test`` streams.
+The never-fed ``cdr`` / ``sip`` / ``alerts`` topics and their dead broadcast
+plumbing were removed in the v2 loop-runner work — what exists here is fed.
 """
 
 from __future__ import annotations
@@ -24,9 +29,7 @@ logger = logging.getLogger("gencall.api.websocket")
 
 class StreamTopic(Enum):
     STATS = "stats"
-    CDR = "cdr"
-    SIP = "sip"
-    ALERTS = "alerts"
+    LOOPS = "loops"     # per-campaign loop_stats (fed by LoopMatcher, §4.3)
     LOGS = "logs"
     TEST = "test"       # per-test stats (requires test_id)
     ALL = "all"         # subscribe to everything
@@ -94,12 +97,12 @@ class ConnectionManager:
     def __init__(self):
         self._clients: dict[str, WSClient] = {}
         self._lock = asyncio.Lock()
-        # Legacy channel-based sets (backward compat with old API)
+        # Legacy channel-based sets (backward compat with old API). Only the
+        # live topics remain — the never-fed cdr/sip/alerts channels were removed
+        # with their broadcast plumbing in the v2 loop-runner work.
         self._channels: dict[str, set[WebSocket]] = {
             "stats": set(),
-            "cdr": set(),
-            "sip": set(),
-            "alerts": set(),
+            "loops": set(),
             "logs": set(),
         }
         self._test_channels: dict[str, set[WebSocket]] = {}
@@ -322,8 +325,8 @@ async def _handle_client_message(client: WSClient, raw: str) -> dict:
     Supported protocols:
 
     New (topic-based):
-        {"action": "subscribe",   "topics": ["stats", "cdr"]}
-        {"action": "unsubscribe", "topics": ["sip"]}
+        {"action": "subscribe",   "topics": ["stats", "loops"]}
+        {"action": "unsubscribe", "topics": ["loops"]}
         {"action": "subscribe",   "topics": ["test"], "test_ids": ["test-abc"]}
 
     Legacy (channel-based, backward compat):
@@ -476,7 +479,7 @@ async def websocket_main(ws: WebSocket):
     Main WebSocket endpoint. Clients send JSON commands to manage subscriptions.
 
     New protocol (topic-based, supports multi-subscribe):
-        {"action": "subscribe", "topics": ["stats", "cdr", "sip", "alerts"]}
+        {"action": "subscribe", "topics": ["stats", "loops"]}
         {"action": "subscribe", "topics": ["test"], "test_ids": ["my-test-1"]}
         {"action": "subscribe", "topics": ["all"]}
 
@@ -517,50 +520,12 @@ async def websocket_stats(ws: WebSocket):
         await manager.disconnect_client(client)
 
 
-@router.websocket("/ws/cdr")
-async def websocket_cdr(ws: WebSocket):
-    """Convenience endpoint: auto-subscribes to CDR stream."""
+@router.websocket("/ws/loops")
+async def websocket_loops(ws: WebSocket):
+    """Convenience endpoint: auto-subscribes to the loop_stats stream (§4.3)."""
     client = await manager.connect(ws)
-    client.subscriptions.add(StreamTopic.CDR)
-    await manager.subscribe(ws, "cdr")
-    try:
-        while True:
-            raw = await ws.receive_text()
-            response = await _handle_client_message(client, raw)
-            await client.send_json(response)
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
-    finally:
-        await manager.disconnect_client(client)
-
-
-@router.websocket("/ws/sip")
-async def websocket_sip(ws: WebSocket):
-    """Convenience endpoint: auto-subscribes to SIP debug stream."""
-    client = await manager.connect(ws)
-    client.subscriptions.add(StreamTopic.SIP)
-    await manager.subscribe(ws, "sip")
-    try:
-        while True:
-            raw = await ws.receive_text()
-            response = await _handle_client_message(client, raw)
-            await client.send_json(response)
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
-    finally:
-        await manager.disconnect_client(client)
-
-
-@router.websocket("/ws/alerts")
-async def websocket_alerts(ws: WebSocket):
-    """Convenience endpoint: auto-subscribes to alerts stream."""
-    client = await manager.connect(ws)
-    client.subscriptions.add(StreamTopic.ALERTS)
-    await manager.subscribe(ws, "alerts")
+    client.subscriptions.add(StreamTopic.LOOPS)
+    await manager.subscribe(ws, "loops")
     try:
         while True:
             raw = await ws.receive_text()
@@ -595,19 +560,9 @@ async def broadcast_stats(data: dict):
     await manager.broadcast("stats", data)
 
 
-async def broadcast_cdr(cdr_data: dict):
-    """Broadcast a new CDR to all CDR subscribers."""
-    await manager.broadcast("cdr", cdr_data)
-
-
-async def broadcast_sip_message(msg_data: dict):
-    """Broadcast a captured SIP message."""
-    await manager.broadcast("sip", msg_data)
-
-
-async def broadcast_alert(alert_data: dict):
-    """Broadcast an alert event."""
-    await manager.broadcast("alerts", alert_data)
+async def broadcast_loop_stats(data: dict):
+    """Broadcast a loop_stats snapshot to all loops subscribers (§4.3)."""
+    await manager.broadcast("loops", data)
 
 
 async def broadcast_test_stats(test_id: str, data: dict):
@@ -618,8 +573,8 @@ async def broadcast_test_stats(test_id: str, data: dict):
 # ─── Sync Bridge Functions ───────────────────────────────────────────────────
 #
 # These are callback-style functions designed to be registered as listeners
-# on StatsEngine, CDRStore, AlertEngine, and SIPDebugger. They bridge
-# synchronous listener callbacks into async WebSocket broadcasts.
+# on the StatsEngine and the LoopMatcher. They bridge synchronous listener
+# callbacks into async WebSocket broadcasts.
 #
 
 def on_stats_update(snapshot: Any) -> None:
@@ -628,22 +583,15 @@ def on_stats_update(snapshot: Any) -> None:
     manager.broadcast_topic_sync(StreamTopic.STATS, data)
 
 
-def on_cdr_recorded(cdr: Any) -> None:
-    """Bridge for CDRStore.add_listener(). Broadcasts new CDRs."""
-    data = cdr.to_dict() if hasattr(cdr, "to_dict") else cdr
-    manager.broadcast_topic_sync(StreamTopic.CDR, data)
+def on_loop_stats(stats: Any) -> None:
+    """Bridge for LoopMatcher(on_stats=...). Broadcasts loop_stats snapshots.
 
-
-def on_alert_event(event: Any) -> None:
-    """Bridge for AlertEngine.add_listener(). Broadcasts alert events."""
-    data = event.to_dict() if hasattr(event, "to_dict") else event
-    manager.broadcast_topic_sync(StreamTopic.ALERTS, data)
-
-
-def on_sip_message(msg: Any) -> None:
-    """Bridge for SIPDebugger.add_listener(). Broadcasts SIP messages."""
-    data = msg.to_dict() if hasattr(msg, "to_dict") else msg
-    manager.broadcast_topic_sync(StreamTopic.SIP, data)
+    The matcher hands a plain stats dict (campaign_id, out/in minutes,
+    completion %, per-call delta, failures by code); we relay it on the
+    ``loops`` topic so the console's Loops page updates live (design §4.3/§4.4).
+    """
+    data = stats.to_dict() if hasattr(stats, "to_dict") else stats
+    manager.broadcast_topic_sync(StreamTopic.LOOPS, data)
 
 
 def on_test_stats(test_id: str, stats: Any) -> None:

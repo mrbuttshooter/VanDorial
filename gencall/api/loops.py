@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from gencall.api.routes import require_api_key
 from gencall.core.loop_engine import CapExceeded, LoopEngine
+from gencall.core.loop_matcher import LoopMatcher
 
 logger = logging.getLogger("gencall.api.loops")
 
@@ -32,6 +33,11 @@ router = APIRouter()
 # Wired in main.py (create_app) once the LoopEngine is constructed. None means
 # the loop subsystem is not configured — endpoints then return 503.
 loop_engine: Optional[LoopEngine] = None
+
+# The shared LoopMatcher (design §4.3), wired in main.py alongside the engine.
+# When present, GET /api/loops/{id} folds the latest loop_stats snapshot into the
+# campaign's live status. None => no matcher (e.g. no DB); the field is omitted.
+loop_matcher: Optional[LoopMatcher] = None
 
 
 def _engine() -> LoopEngine:
@@ -104,11 +110,21 @@ def list_loops():
 
 @router.get("/api/loops/{campaign_id}", dependencies=[Depends(require_api_key)])
 def get_loop(campaign_id: str):
-    """Live status for one campaign incl. its UAC's current SIPp stats."""
+    """Live status for one campaign incl. its UAC's SIPp stats + latest loop_stats.
+
+    The ``loop_stats`` field carries the most recent matcher snapshot (out/in
+    minutes, completion %, per-call delta percentiles, failures by SIP code —
+    design §4.3); it is ``None`` until the matcher has run a pass (or when no
+    matcher/DB is wired).
+    """
     try:
-        return _engine().get_campaign(campaign_id)
+        campaign = _engine().get_campaign(campaign_id)
     except KeyError:
         raise HTTPException(404, f"Loop campaign '{campaign_id}' not found")
+    campaign["loop_stats"] = (
+        loop_matcher.latest_stats(campaign_id) if loop_matcher is not None else None
+    )
+    return campaign
 
 
 @router.get(

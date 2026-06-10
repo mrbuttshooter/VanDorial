@@ -149,9 +149,7 @@ export interface ConnectorRequest {
    `stream` singleton can subscribe to controller streams unchanged. */
 export type StreamTopic =
   | "stats"
-  | "cdr"
-  | "sip"
-  | "alerts"
+  | "loops"
   | "logs"
   | "test"
   | "fleet_stats"

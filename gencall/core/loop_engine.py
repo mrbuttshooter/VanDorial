@@ -102,6 +102,10 @@ class LoopEngine:
         self.engine = sipp_engine
         self.db = db
         self.config = config or Config()
+        # Optional LoopMatcher (design §4.3), wired in main.py. When set, the
+        # engine tracks/untracks each campaign on start/stop so the matcher only
+        # joins records for running campaigns. None => no loop accounting.
+        self.matcher = None
         self._lock = threading.RLock()
         # campaign_id -> in-memory campaign dict (mirrors the DB row + the SIPp
         # instance id owning it). The DB is the source of truth across restarts;
@@ -345,6 +349,13 @@ class LoopEngine:
             }
             self._campaigns[campaign_id] = campaign
             self._persist_campaign(campaign)
+            # Tell the matcher to start joining this campaign's records (§4.3).
+            if self.matcher is not None:
+                try:
+                    self.matcher.track(campaign_id, match_key)
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.warning("Could not track campaign %s for matching: %s",
+                                   campaign_id, e)
             logger.info(
                 "Loop campaign %s started (UAC %s -> %s:%s)",
                 campaign_id, instance_id, dest_host, dest_port,
@@ -372,6 +383,17 @@ class LoopEngine:
             self._update_campaign_status(
                 campaign_id, "stopped", stopped_at=campaign["stopped_at"]
             )
+            # Run a final match pass then stop tracking (§4.3): a stopped campaign
+            # should still get its last loop_stats snapshot before going quiet.
+            if self.matcher is not None:
+                try:
+                    self.matcher.match_campaign(
+                        campaign_id, match_key=campaign.get("match_key", "exact")
+                    )
+                    self.matcher.untrack(campaign_id)
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.warning("Final match pass for %s failed: %s",
+                                   campaign_id, e)
             logger.info("Loop campaign %s stopped", campaign_id)
             return self._public_campaign(campaign)
 
