@@ -29,6 +29,16 @@
 # single port, so the proxy cost is negligible) and talks to the worker over
 # 127.0.0.1:8080.
 
+# Distinct Compose project name so this stack never collides with the v1
+# docker-compose.yml stack (which uses the default project name). Compose
+# prefixes container and network names with the project, so the two files can
+# coexist on one host (blue/green) WITHOUT hardcoded container_name clashes.
+# NOTE: published HOST ports (controller 8090, postgres 127.0.0.1:5432, plus the
+# worker's host-networked 5060/RTP) are still shared host resources — only one
+# stack can bind them at a time. The project name + dropped container_name fix
+# the NAME collisions; bring up only one stack's port-bound services at once.
+name: gencall-v2
+
 x-gencall-image: &gencall-image vandorial/gencall:latest
 
 services:
@@ -38,7 +48,8 @@ services:
     build:
       context: .
       dockerfile: gencall/Dockerfile
-    container_name: gencall
+    # No explicit container_name: let Compose project-prefix it (gencall-v2-*)
+    # so it never collides with the v1 stack's `gencall` container.
     restart: unless-stopped
     # Host networking: SIPp signalling (UDP/TCP 5060) + the whole RTP range bind
     # directly on the host NIC. No `ports:` mapping is possible (or needed) in
@@ -62,7 +73,10 @@ services:
       - GENCALL_PG_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
       - GENCALL_PG_DATABASE=${POSTGRES_DB:-gencall}
     depends_on:
-      - postgres
+      # Wait for PG readiness (healthcheck), not just container start, so startup
+      # migrations never race a not-yet-accepting Postgres.
+      postgres:
+        condition: service_healthy
     # The single-process guard (design §4.5) lives in the app; this image runs
     # one worker process. Do NOT scale this service > 1 on one host.
 
@@ -72,7 +86,6 @@ services:
     build:
       context: .
       dockerfile: gencall/Dockerfile
-    container_name: gencall-controller
     restart: unless-stopped
     command: ["--mode", "controller", "--host", "0.0.0.0", "--port", "8080"]
     ports:
@@ -92,7 +105,6 @@ services:
   # at 127.0.0.1:5432. Bind to 127.0.0.1 only — never expose Postgres off-box.
   postgres:
     image: postgres:16-alpine
-    container_name: gencall-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gencall}
@@ -102,6 +114,15 @@ services:
       - gencall-pgdata:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
+    # Readiness gate: the worker runs DB migrations at startup, so it must not
+    # start until PG actually ACCEPTS connections (host networking means there is
+    # no Docker DNS retry to lean on). pg_isready against the configured DB/user.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gencall} -d ${POSTGRES_DB:-gencall}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
   gencall-logs:

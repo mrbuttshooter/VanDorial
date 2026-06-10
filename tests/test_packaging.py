@@ -76,11 +76,46 @@ def test_compose_v2_parses_and_uses_host_networking():
     env = worker.get("environment", [])
     env_text = "\n".join(env) if isinstance(env, list) else str(env)
     assert "RTP_PORT_RANGE" in env_text
+    # The default RTP window must be the conservative 16384-16584 that the deploy
+    # doc + firewall + shipped gencall.cfg all use (the three-way "must match").
+    # A regression to the old 10000-20000 (the docker-proxy-OOM / too-large range
+    # the v1 compose warns against) would put media outside the firewall window.
+    assert "RTP_PORT_RANGE=${RTP_PORT_RANGE:-16384-16584}" in env_text, \
+        "v2 worker RTP default must be 16384-16584 (matches cfg + firewall doc)"
 
     # Postgres bound to loopback only — never exposed off-box.
     pg_ports = services["postgres"].get("ports", [])
     assert any("127.0.0.1:5432" in str(p) for p in pg_ports), \
         "Postgres must publish only on 127.0.0.1"
+
+    # Postgres readiness gate: the worker runs DB migrations at startup, so it
+    # must wait for PG to ACCEPT connections, not merely start (host networking,
+    # no Docker DNS retry). Healthcheck on postgres + service_healthy on worker.
+    assert "healthcheck" in services["postgres"], \
+        "postgres must define a healthcheck for the readiness gate"
+    worker_dep = worker.get("depends_on", {})
+    assert isinstance(worker_dep, dict) and \
+        worker_dep.get("postgres", {}).get("condition") == "service_healthy", \
+        "worker must depend_on postgres with condition: service_healthy"
+
+    # De-conflict from the v1 stack: a distinct project name + no hardcoded
+    # container_name on any service, so both compose files can coexist by name.
+    assert doc.get("name") == "gencall-v2", \
+        "v2 compose must set a distinct project name to avoid v1 collisions"
+    for svc_name, svc in services.items():
+        assert "container_name" not in svc, \
+            f"{svc_name} must not hardcode container_name (lets Compose prefix it)"
+
+
+def test_shipped_cfg_rtp_window_matches_deploy_doc():
+    """The on-disk gencall.cfg (bind-mounted, so it wins over code defaults) must
+    ship the 16384-16584 RTP window that compose + the firewall doc use."""
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read(os.path.join(REPO_ROOT, "gencall/etc/gencall.cfg"))
+    assert cfg.getint("sip", "min_rtp_port") == 16384
+    assert cfg.getint("sip", "max_rtp_port") == 16584
 
 
 def test_compose_v2_does_not_replace_v1():
