@@ -112,6 +112,97 @@ export interface Health {
   active_tests: number;
 }
 
+/* ---- Loop campaigns (gencall/core/loop_engine.py · _public_campaign) -------
+   A minutes-for-minutes loop campaign: one UAC originating from a number-pair
+   CSV at a rate/concurrency, holding each call for a fixed or random duration
+   until stopped or a calls/minutes target is hit. */
+export type LoopStatus =
+  | "running"
+  | "stopped"
+  | "completed"
+  | "interrupted";
+
+export type LoopDurationMode = "fixed" | "range";
+
+export interface LoopCampaign {
+  id: string;
+  name: string;
+  status: LoopStatus;
+  node_id: number | null;
+  dest_host: string;
+  dest_port: number;
+  transport: string;
+  csv_path: string;
+  rate: number;
+  max_concurrent: number;
+  duration_mode: LoopDurationMode;
+  duration_s: number;
+  duration_max_s: number;
+  match_key: string;
+  target_calls: number;
+  target_minutes: number;
+  created_at: string | null;
+  started_at: string | null;
+  stopped_at: string | null;
+  /* Folded in by GET /api/loops/{id} (the live SIPp instance + latest match). */
+  sipp?: TestInstance | null;
+  loop_stats?: LoopStats | null;
+}
+
+/* One bucket of the per-call delta histogram (gencall/core/loop_matcher.py). */
+export interface LoopDeltaBucket {
+  ge_ms: number | null;
+  lt_ms: number | null;
+  count: number;
+}
+
+/* An answered outbound call whose inbound return never matched (the loop never
+   closed). */
+export interface LoopUnmatchedPair {
+  a_number: string;
+  b_number: string;
+  call_uuid: string;
+}
+
+/* Per-campaign loop accounting snapshot — the WS 'loops' topic payload and the
+   `loop_stats` field of GET /api/loops/{id}. Mirrors LoopMatcher.match_campaign.
+   `failures.out` / `failures.in` map a SIP code string → count. */
+export interface LoopStats {
+  campaign_id: string;
+  ts: string;
+  calls_out: number;
+  answered_out: number;
+  minutes_out_ms: number;
+  calls_in_matched: number;
+  minutes_in_ms: number;
+  completion_pct: number;
+  delta_avg_ms: number;
+  delta_p50_ms: number;
+  delta_p95_ms: number;
+  failures: {
+    out: Record<string, number>;
+    in: Record<string, number>;
+  };
+  delta_histogram: LoopDeltaBucket[];
+  unmatched_pairs: LoopUnmatchedPair[];
+}
+
+export interface StartLoopRequest {
+  name?: string;
+  dest_host: string;
+  dest_port?: number;
+  transport?: Transport;
+  csv_path?: string;
+  rate?: number;
+  max_concurrent?: number;
+  duration_mode?: LoopDurationMode;
+  duration_s?: number;
+  duration_max_s?: number;
+  match_key?: string;
+  target_calls?: number;
+  target_minutes?: number;
+}
+
 export interface StartTestRequest {
   name?: string;
   scenario: string;

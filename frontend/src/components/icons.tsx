@@ -102,6 +102,21 @@ export const IconRefresh = (p: P) => (
     <path d="M13 8a5 5 0 1 1-1.5-3.5M13 2v3h-3" />
   </svg>
 );
+export const IconLoop = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 8a4 4 0 0 1 4-4h2.5" />
+    <path d="M9 2l2 2-2 2" />
+    <path d="M12 8a4 4 0 0 1-4 4H5.5" />
+    <path d="M7 14l-2-2 2-2" />
+  </svg>
+);
+export const IconDownload = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M8 2v8" />
+    <path d="M5 7l3 3 3-3" />
+    <path d="M3 13h10" />
+  </svg>
+);
 export const IconSliders = (p: P) => (
   <svg {...base(p)}>
     <path d="M3 4h10M3 8h10M3 12h10" />

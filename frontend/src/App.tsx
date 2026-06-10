@@ -6,7 +6,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Campaigns } from "./pages/Campaigns";
 import { Scenarios } from "./pages/Scenarios";
 import { Connectors } from "./pages/Connectors";
-import { Scheduler } from "./pages/Scheduler";
+import { Loops } from "./pages/Loops";
 import { Console } from "./pages/Console";
 import { Performance } from "./pages/Performance";
 import { History } from "./pages/History";
@@ -34,7 +34,7 @@ export default function App() {
               <Route path="campaigns" element={<Campaigns />} />
               <Route path="scenarios" element={<Scenarios />} />
               <Route path="connectors" element={<Connectors />} />
-              <Route path="scheduler" element={<Scheduler />} />
+              <Route path="loops" element={<Loops />} />
               <Route path="console" element={<Console />} />
               <Route path="performance" element={<Performance />} />
               <Route path="history" element={<History />} />

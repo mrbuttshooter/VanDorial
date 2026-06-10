@@ -7,7 +7,9 @@ import type {
   Connector,
   ConnectorRequest,
   Health,
+  LoopCampaign,
   Scenario,
+  StartLoopRequest,
   StartTestRequest,
   StatsSnapshot,
   TestInstance,
@@ -191,4 +193,23 @@ export const api = {
       () => request(`/api/history?limit=${limit}`),
       () => mockApi.history(limit),
     ),
+
+  // ---- Loop campaigns (gencall/api/loops.py) ----
+  // Not part of the in-browser mock surface — these always hit the real worker.
+  listLoops: () => request<{ campaigns: LoopCampaign[] }>("/api/loops"),
+  getLoop: (id: string) =>
+    request<LoopCampaign>(`/api/loops/${encodeURIComponent(id)}`),
+  startLoop: (req: StartLoopRequest) =>
+    request<{ status: string; campaign: LoopCampaign }>("/api/loops", {
+      method: "POST",
+      body: req,
+    }),
+  stopLoop: (id: string) =>
+    request<{ status: string; campaign: LoopCampaign }>(
+      `/api/loops/${encodeURIComponent(id)}/stop`,
+      { method: "POST" },
+    ),
+  /** Absolute path to the CSV export (used as a download <a href>). */
+  loopRecordsCsvUrl: (id: string) =>
+    `/api/loops/${encodeURIComponent(id)}/records.csv`,
 };

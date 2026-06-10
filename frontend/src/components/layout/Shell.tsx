@@ -22,7 +22,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/campaigns": { title: "Campaigns", sub: "Active & queued test runs" },
   "/scenarios": { title: "Scenarios", sub: "SIP message flows" },
   "/connectors": { title: "Connectors", sub: "SIP endpoints & trunks" },
-  "/scheduler": { title: "Scheduler", sub: "Recurring & one-shot jobs" },
+  "/loops": { title: "Loops", sub: "Minutes-for-minutes loop campaigns" },
   "/console": { title: "Console", sub: "Live event stream" },
   "/performance": { title: "Performance", sub: "Throughput & latency telemetry" },
   "/history": { title: "History", sub: "Completed run archive" },

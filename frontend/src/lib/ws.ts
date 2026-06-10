@@ -106,7 +106,7 @@ class StreamClient {
   private startMock() {
     if (this.mockTimer != null) return;
     this.setConnected(true);
-    const sources = ["sipp.uac", "stats.engine", "core.cdr", "ws.hub", "scheduler"];
+    const sources = ["sipp.uac", "stats.engine", "core.cdr", "ws.hub", "loop.matcher"];
     const levels: LogLine["level"][] = ["INFO", "INFO", "INFO", "DEBUG", "WARN"];
     this.mockTimer = window.setInterval(async () => {
       const s: StatsSnapshot = await mockApi.stats();
