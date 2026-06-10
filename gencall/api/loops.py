@@ -20,9 +20,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from gencall.api.routes import require_api_key
+from gencall.api.loop_validation import (
+    DestHostError,
+    validate_caps,
+    validate_dest_host,
+    validate_transport,
+)
+from gencall.core.config import Config
 from gencall.core.loop_engine import CapExceeded, LoopEngine
 from gencall.core.loop_matcher import LoopMatcher
 
@@ -49,26 +56,64 @@ def _engine() -> LoopEngine:
 # ─── Request model ───────────────────────────────────────────────────────────
 
 class StartLoopRequest(BaseModel):
+    """Loop-campaign start request with bounded, security-validated inputs.
+
+    Structural bounds (negatives, zero, port range, transport set) are enforced
+    here and surface as 422. Config-dependent checks — the dest_host
+    private/loopback/SSRF block and the rate/channel upper caps — run in the
+    endpoint (they need the runtime Config) and also surface as 422.
+    """
+
     name: str = ""
     dest_host: str
-    dest_port: int = 5060
+    # Port must be a real, routable port (1-65535); 0 / negatives rejected.
+    dest_port: int = Field(default=5060, ge=1, le=65535)
     transport: str = "udp"
     csv_path: str = ""
-    rate: float = 1.0
-    max_concurrent: int = 10
+    # Rate must be positive (a 0/negative rate is a misconfiguration, never an
+    # "until stopped" sentinel). Upper bound is enforced against config.
+    rate: float = Field(default=1.0, gt=0)
+    # At least one channel; upper bound enforced against the config channel cap.
+    max_concurrent: int = Field(default=10, gt=0)
     duration_mode: str = "fixed"       # fixed | range
-    duration_s: int = 180
-    duration_max_s: int = 0            # used only for duration_mode == range
+    # Hold durations are non-negative seconds.
+    duration_s: int = Field(default=180, ge=0)
+    duration_max_s: int = Field(default=0, ge=0)  # used only for mode == range
     match_key: str = "exact"
-    target_calls: int = 0              # 0 = until stopped
-    target_minutes: int = 0            # 0 = until stopped
+    # Targets are non-negative; 0 == "until stopped".
+    target_calls: int = Field(default=0, ge=0)
+    target_minutes: int = Field(default=0, ge=0)
+
+    @field_validator("transport")
+    @classmethod
+    def _check_transport(cls, v: str) -> str:
+        # Reject an unknown transport with 422 rather than silently downgrading
+        # to UDP (which could send a TLS-intended campaign in cleartext).
+        return validate_transport(v)
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 @router.post("/api/loops", dependencies=[Depends(require_api_key)])
 def start_loop(req: StartLoopRequest):
-    """Start a Loop Campaign. Refuses (409) when the concurrent cap is reached."""
+    """Start a Loop Campaign. Refuses (409) when the concurrent cap is reached.
+
+    Before spawning, validate the destination against the SSRF/private-range
+    block and bound rate/channels against the config caps (both 422 on reject).
+    """
+    config = _engine().config or Config()
+    # SSRF / open-originator guard: reject private/loopback/multicast/0.0.0.0
+    # unless explicitly allow-listed.
+    try:
+        validate_dest_host(req.dest_host, config.loops_dest_allowlist)
+    except DestHostError as e:
+        raise HTTPException(422, str(e))
+    # OOM guard: rate/channel upper bounds.
+    try:
+        validate_caps(req.rate, req.max_concurrent, config)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
     try:
         campaign = _engine().start_campaign(
             name=req.name,

@@ -387,11 +387,41 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
 # ─── API router tests (FastAPI TestClient) ────────────────────────────────────
 
 @pytest.fixture
-def api_client(loop_engine, monkeypatch):
+def api_client(loop_engine, db, monkeypatch):
     """A TestClient over the worker app with the loops router mounted.
 
-    Auth is disabled (gateway=None, as in degraded/no-db mode) so require_api_key
-    short-circuits. The router's module-level loop_engine is pointed at ours.
+    Auth is now fail-CLOSED: a missing gateway returns 503, so the fixture wires
+    a REAL gateway (key store backed by the test sqlite db) and mints a known
+    key. Every request carries that key via the client's default headers. The
+    router's module-level loop_engine is pointed at ours.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gencall.api import routes
+    from gencall.api import loops as loops_api
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key("loop-test")
+    monkeypatch.setattr(routes, "gateway", gateway, raising=False)
+    monkeypatch.setattr(loops_api, "loop_engine", loop_engine, raising=False)
+
+    app = FastAPI()
+    app.include_router(loops_api.router)
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    return client
+
+
+def test_loop_endpoint_fails_closed_503_when_no_gateway(loop_engine, monkeypatch):
+    """A loop endpoint must FAIL CLOSED (503), not open (200), when no gateway.
+
+    Regression for the auth fail-OPEN bug: require_api_key previously returned
+    None (allow) when gateway was None — opening every loop/fleet endpoint the
+    moment the DB went away. With the key store absent, a state-changing /api/loops
+    request must be refused with 503, never served.
     """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -404,7 +434,13 @@ def api_client(loop_engine, monkeypatch):
 
     app = FastAPI()
     app.include_router(loops_api.router)
-    return TestClient(app)
+    client = TestClient(app)
+
+    # List (read) loop endpoint: closed.
+    assert client.get("/api/loops").status_code == 503
+    # State-changing start: closed (never reaches the engine).
+    resp = client.post("/api/loops", json={"dest_host": "9.9.9.9", "duration_s": 1})
+    assert resp.status_code == 503, resp.text
 
 
 def test_api_start_stop_and_list(api_client, loop_engine):
@@ -478,3 +514,168 @@ def test_api_records_csv(api_client, loop_engine, db):
     lines = [ln for ln in resp.text.splitlines() if ln.strip()]
     assert lines[0].startswith("id,campaign_id,direction,")
     assert any("x@h" in ln for ln in lines)
+
+
+# ─── Input-validation hardening (review-confirmed security bugs) ──────────────
+
+def test_api_rejects_out_of_range_rate(api_client):
+    """rate <= 0 and rate above the config cap are both refused with 422."""
+    # Zero/negative rate: structural 422 (pydantic gt=0).
+    r = api_client.post("/api/loops", json={"dest_host": "9.9.9.9", "rate": 0})
+    assert r.status_code == 422, r.text
+    r = api_client.post("/api/loops", json={"dest_host": "9.9.9.9", "rate": -1})
+    assert r.status_code == 422, r.text
+    # Above the per-campaign cap (default 500 cps): config 422.
+    r = api_client.post("/api/loops", json={"dest_host": "9.9.9.9", "rate": 100000})
+    assert r.status_code == 422, r.text
+
+
+def test_api_rejects_out_of_range_concurrency(api_client):
+    """max_concurrent <= 0 and above the channel cap are both refused with 422."""
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "max_concurrent": 0})
+    assert r.status_code == 422, r.text
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "max_concurrent": -5})
+    assert r.status_code == 422, r.text
+    # Above the per-campaign channel cap (default 100).
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "max_concurrent": 9999})
+    assert r.status_code == 422, r.text
+
+
+def test_api_rejects_negative_durations_and_targets(api_client):
+    """Negative durations / targets are refused with 422 (no negatives)."""
+    for field in ("duration_s", "duration_max_s", "target_calls", "target_minutes"):
+        r = api_client.post(
+            "/api/loops", json={"dest_host": "9.9.9.9", field: -1})
+        assert r.status_code == 422, f"{field}: {r.text}"
+
+
+def test_api_rejects_out_of_range_port(api_client):
+    """dest_port outside 1-65535 is refused with 422."""
+    r = api_client.post("/api/loops", json={"dest_host": "9.9.9.9", "dest_port": 0})
+    assert r.status_code == 422, r.text
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "dest_port": 70000})
+    assert r.status_code == 422, r.text
+
+
+def test_api_rejects_unknown_transport(api_client):
+    """An unknown transport is a 422, never a silent downgrade to UDP."""
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "transport": "sctp"})
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("bad_host", [
+    "127.0.0.1",       # loopback
+    "10.20.8.40",      # private (RFC1918)
+    "192.168.1.10",    # private
+    "172.16.0.5",      # private
+    "0.0.0.0",         # unspecified
+    "224.0.0.1",       # multicast
+    "169.254.1.1",     # link-local
+])
+def test_api_rejects_private_loopback_dest_host(api_client, bad_host):
+    """A private/loopback/multicast/0.0.0.0 dest_host is refused with 422 (SSRF)."""
+    r = api_client.post("/api/loops", json={"dest_host": bad_host, "duration_s": 1})
+    assert r.status_code == 422, f"{bad_host}: {r.text}"
+
+
+def test_api_allows_public_dest_host(api_client, loop_engine):
+    """A public dest_host is accepted (the block is targeted, not blanket)."""
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "9.9.9.9", "duration_s": 1})
+    assert r.status_code == 200, r.text
+    _wait_running(loop_engine.engine, f"uac-{r.json()['campaign']['id']}")
+
+
+def test_dest_allowlist_permits_blocked_range(api_client, loop_engine, monkeypatch):
+    """An explicit allow-list entry lets an otherwise-blocked private IP through."""
+    monkeypatch.setattr(type(loop_engine.config), "loops_dest_allowlist",
+                        property(lambda self: ["10.20.8.0/24"]))
+    r = api_client.post(
+        "/api/loops", json={"dest_host": "10.20.8.40", "duration_s": 1})
+    assert r.status_code == 200, r.text
+    _wait_running(loop_engine.engine, f"uac-{r.json()['campaign']['id']}")
+
+
+def test_engine_rejects_unbounded_inputs_directly(loop_engine):
+    """A direct engine caller (controller dispatch) is also bounded (OOM guard).
+
+    The API model can't protect a non-HTTP caller, so start_campaign itself
+    refuses non-positive rate/concurrency and over-cap values.
+    """
+    with pytest.raises(CapExceeded):
+        loop_engine.start_campaign(dest_host="9.9.9.9", rate=0, duration_s=1)
+    with pytest.raises(CapExceeded):
+        loop_engine.start_campaign(dest_host="9.9.9.9", max_concurrent=0, duration_s=1)
+    with pytest.raises(CapExceeded):
+        loop_engine.start_campaign(
+            dest_host="9.9.9.9", max_concurrent=99999, duration_s=1)
+
+
+def test_records_csv_quotes_comma_and_defangs_formula(loop_engine, db):
+    """CSV export quotes a comma field and de-fangs a leading '=' (injection)."""
+    campaign = loop_engine.start_campaign(dest_host="9.9.9.9", duration_s=1)
+    cid = campaign["id"]
+
+    from sqlalchemy import text
+    with db.engine.begin() as conn:
+        # a_number carries a formula-injection payload; b_number embeds a comma.
+        conn.execute(
+            text(
+                "INSERT INTO call_records "
+                "(campaign_id, direction, call_uuid, a_number, b_number, "
+                " source_ip, duration_ms, final_code, created_at) VALUES "
+                "(:cid, 'out', 'evil@h', :a, :b, :ip, 1000, 200, "
+                " '2026-06-10T00:00:00Z')"
+            ),
+            {
+                "cid": cid,
+                "a": "=cmd|'/c calc'!A0",   # formula injection
+                "b": "100,200",             # contains a comma
+                "ip": "@SUM(1+1)",          # another formula lead
+            },
+        )
+
+    csv_text = loop_engine.records_csv(cid)
+
+    # Parse it back with the stdlib reader — proves the quoting is well-formed.
+    import csv as _csv
+    import io as _io
+    rows = list(_csv.reader(_io.StringIO(csv_text)))
+    header = rows[0]
+    data = rows[1]
+    record = dict(zip(header, data))
+
+    # The comma field round-trips as ONE cell (was quoted, not split).
+    assert record["b_number"] == "100,200"
+    # The formula leads are de-fanged with a leading apostrophe.
+    assert record["a_number"].startswith("'="), record["a_number"]
+    assert record["source_ip"].startswith("'@"), record["source_ip"]
+
+
+# ─── dest_host validation unit tests ──────────────────────────────────────────
+
+def test_validate_dest_host_unit():
+    from gencall.api.loop_validation import DestHostError, validate_dest_host
+
+    # Public address passes.
+    assert validate_dest_host("9.9.9.9") == "9.9.9.9"
+    # Blocked ranges raise.
+    for bad in ("127.0.0.1", "10.0.0.1", "192.168.0.1", "0.0.0.0", "224.0.0.1"):
+        with pytest.raises(DestHostError):
+            validate_dest_host(bad)
+    # Allow-list bypasses the block for the exact CIDR.
+    assert validate_dest_host("10.0.0.5", ["10.0.0.0/8"]) == "10.0.0.5"
+
+
+def test_validate_transport_unit():
+    from gencall.api.loop_validation import validate_transport
+
+    assert validate_transport("UDP") == "udp"
+    assert validate_transport("tls") == "tls"
+    with pytest.raises(ValueError):
+        validate_transport("sctp")

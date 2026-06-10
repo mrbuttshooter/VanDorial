@@ -178,9 +178,25 @@ def stats_engine(monkeypatch, fake_engine):
 
 
 @pytest.fixture
-def no_auth(monkeypatch):
-    """Degraded/no-db mode: gateway is None so require_api_key short-circuits."""
-    monkeypatch.setattr(routes, "gateway", None, raising=False)
+def no_auth(monkeypatch, tmp_path, client):
+    """Authenticated client for tests that focus on endpoint logic, not auth.
+
+    Auth now FAILS CLOSED (a missing gateway returns 503, not "open"), so we can
+    no longer null the gateway to bypass it. Instead we stand up a real gateway
+    backed by a tmp sqlite DB, mint a key, and attach it to the TestClient's
+    default headers so every request in the test is authenticated. The endpoint
+    logic under test is unchanged; the requests just carry a valid key.
+    """
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+    from gencall.db.models import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'noauth.db'}")
+    db.create_tables()
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key("test-noauth")
+    monkeypatch.setattr(routes, "gateway", gateway, raising=False)
+    client.headers.update({"X-API-Key": raw_key})
 
 
 @pytest.fixture
@@ -338,6 +354,27 @@ def test_health_unauthenticated_even_with_auth(client, fake_engine, auth):
     """Even with auth enabled, /api/health stays open (controller health-poll target)."""
     resp = client.get("/api/health")
     assert resp.status_code == 200, resp.text
+
+
+def test_worker_fails_closed_when_gateway_none(client, fake_engine, monkeypatch):
+    """No gateway => protected worker endpoints FAIL CLOSED (503), never open.
+
+    Regression for the auth fail-OPEN bug: require_api_key used to return None
+    (allow) when the gateway was unset (e.g. DB unavailable), opening every
+    /api/tests/* endpoint. It must now refuse with 503.
+    """
+    monkeypatch.setattr(routes, "gateway", None, raising=False)
+    # Read endpoint: closed.
+    assert client.get("/api/tests").status_code == 503
+    # State-changing endpoint: closed (engine never touched).
+    resp = client.post(
+        "/api/tests/start",
+        json={"name": "x", "scenario": "basic_call", "remote_host": "1.2.3.4"},
+    )
+    assert resp.status_code == 503, resp.text
+    assert "x" not in fake_engine.instances
+    # Health stays open regardless.
+    assert client.get("/api/health").status_code == 200
 
 
 # ─── avg_response_time_ms: real SIPp ResponseTime parse (no longer const 0) ────

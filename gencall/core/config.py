@@ -249,6 +249,42 @@ class Config:
     def loops_uas_restart_backoff_s(self):
         return self.getint("loops", "uas_restart_backoff_s", 5)
 
+    # ── Loop input bounds (security: keep unbounded inputs from OOMing the box) ──
+    # Per-campaign caps applied at the API/engine boundary so a single start can
+    # never request more channels/rate than the 4 GB box can serve. The cap of
+    # 100 channels per campaign mirrors the loops_max_answered / 100-channel
+    # envelope in the design.
+    @property
+    def loops_max_rate_cps(self):
+        """Hard ceiling on a campaign's call rate (calls per second)."""
+        return self.getfloat("loops", "max_rate_cps", 500.0)
+
+    @property
+    def loops_max_channels(self):
+        """Hard ceiling on a campaign's max_concurrent (per-campaign channels)."""
+        return self.getint("loops", "max_channels", 100)
+
+    @property
+    def loops_max_duration_s(self):
+        """Hard ceiling on a single call's hold duration (seconds)."""
+        return self.getint("loops", "max_call_duration_s", 86400)
+
+    # ── Loop destination allow-list (security: open SIP originator / SSRF) ──────
+    # dest_host comes off the wire and flows to the SIPp target. Private,
+    # loopback, multicast and 0.0.0.0 destinations are rejected by default so the
+    # box can't be turned into an internal-network SIP originator/scanner. List
+    # exact IPs or CIDRs here to explicitly permit otherwise-blocked ranges (e.g.
+    # a MADA peer that legitimately lives on an RFC1918 lab network).
+    @property
+    def loops_dest_allowlist(self):
+        """Allowed loop dest_host IPs/CIDRs that bypass the private/loopback block.
+
+        Comma- or whitespace-separated; empty by default (no exceptions —
+        private/loopback/multicast destinations are refused).
+        """
+        raw = self.get("loops", "dest_allowlist", "") or ""
+        return [tok for tok in raw.replace(",", " ").split() if tok]
+
     # --- Trust filter / inbound whitelist (design §4.1) ---
     # The REAL security boundary is the host firewall (the deploy docs ship the
     # nftables/ufw rule set restricting UDP/5060 + the RTP range to these IPs).

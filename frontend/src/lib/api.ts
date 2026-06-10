@@ -209,7 +209,53 @@ export const api = {
       `/api/loops/${encodeURIComponent(id)}/stop`,
       { method: "POST" },
     ),
-  /** Absolute path to the CSV export (used as a download <a href>). */
-  loopRecordsCsvUrl: (id: string) =>
-    `/api/loops/${encodeURIComponent(id)}/records.csv`,
+  /** Fetch a campaign's records.csv WITH the X-API-Key header and trigger a
+   *  browser download. A plain <a href> can't send the auth header, so it 401s
+   *  whenever auth is on — this fetches the blob authenticated, then clicks a
+   *  synthetic <a download>. */
+  downloadLoopRecordsCsv: (id: string) =>
+    downloadAuthed(
+      `/api/loops/${encodeURIComponent(id)}/records.csv`,
+      `${id}_records.csv`,
+    ),
 };
+
+/** Authenticated file download: GET `path` with the X-API-Key header, read the
+ *  body as a blob, and save it under `filename` via a transient object URL +
+ *  synthetic anchor click. Throws ApiError on a non-2xx response so the caller
+ *  can surface a toast (e.g. a 401 when no key is configured). */
+async function downloadAuthed(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const apiKey = getApiKey();
+  if (apiKey) headers["X-API-Key"] = apiKey;
+
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { headers });
+  } catch (networkErr) {
+    throw new ApiError(0, `Network unreachable: ${String(networkErr)}`);
+  }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail ?? body.error ?? detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(res.status, detail);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}

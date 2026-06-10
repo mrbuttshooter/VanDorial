@@ -252,11 +252,34 @@ def _():
     assert data["version"] == "2.0.0"
     Config.reset()
 
-@test("List scenarios endpoint")
-def _():
+# Auth now fails CLOSED: protected endpoints need a wired gateway + a key. These
+# three list/stats tests exercise endpoint logic, so we mint an in-memory key and
+# send it. (The fail-open path they used to rely on no longer exists.)
+def _authed_worker_client():
+    import os
+    import tempfile
     from fastapi.testclient import TestClient
     from gencall.api import routes
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+    from gencall.db.models import Database
+
+    # A temp FILE sqlite DB (not :memory:) so the TestClient's threadpool sees the
+    # same key the test thread minted — :memory: gives each connection its own DB.
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    db = Database(f"sqlite:///{db_path}")
+    db.create_tables()
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key("test-selfcheck")
+    routes.gateway = gateway
     client = TestClient(routes.app)
+    client.headers.update({"X-API-Key": raw_key})
+    return client
+
+@test("List scenarios endpoint")
+def _():
+    client = _authed_worker_client()
     resp = client.get("/api/scenarios")
     assert resp.status_code == 200
     data = resp.json()
@@ -265,9 +288,7 @@ def _():
 
 @test("Stats endpoint returns data")
 def _():
-    from fastapi.testclient import TestClient
-    from gencall.api import routes
-    client = TestClient(routes.app)
+    client = _authed_worker_client()
     resp = client.get("/api/stats")
     assert resp.status_code == 200
     data = resp.json()
@@ -276,9 +297,7 @@ def _():
 
 @test("List tests endpoint")
 def _():
-    from fastapi.testclient import TestClient
-    from gencall.api import routes
-    client = TestClient(routes.app)
+    client = _authed_worker_client()
     resp = client.get("/api/tests")
     assert resp.status_code == 200
     assert "tests" in resp.json()

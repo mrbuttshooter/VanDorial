@@ -35,7 +35,9 @@ monitor thread sleeps ≥ 1 s between passes — no busy loops (per this codebas
 standard).
 """
 
+import csv
 import datetime
+import io
 import logging
 import os
 import random
@@ -133,6 +135,16 @@ class LoopEngine:
         no-op. Returns True if the UAS is running on return.
         """
         with self._lock:
+            # Prominent boundary warning: with no trust whitelist the app layer
+            # verifies nothing, so the host firewall is the ONLY thing keeping a
+            # 0.0.0.0:5060 UAS from answering the open internet.
+            if not self.config.trust_whitelist:
+                logger.warning(
+                    "UAS answering 0.0.0.0:5060 with empty trust whitelist — "
+                    "firewall is the ONLY boundary. Set [trust] whitelist to the "
+                    "MADA source IPs/CIDRs so inbound calls are verified."
+                )
+
             existing = self.engine.get_instance(UAS_INSTANCE_ID)
             if existing is not None and existing.state == SIPpState.RUNNING:
                 self._ensure_monitor()
@@ -319,6 +331,34 @@ class LoopEngine:
                 raise CapExceeded(
                     f"max concurrent loops reached ({running}/{cap})"
                 )
+
+            # Per-campaign resource envelope (OOM guard, design §4.1). Enforced
+            # here too — not just at the API model — so a direct engine caller
+            # (controller dispatch) can't spawn an unbounded UAC. Reject
+            # negatives/zero and anything above the configured caps before we
+            # spend a process on it.
+            if rate is None or float(rate) <= 0:
+                raise CapExceeded(f"rate must be > 0 (got {rate})")
+            if float(rate) > self.config.loops_max_rate_cps:
+                raise CapExceeded(
+                    f"rate {rate} exceeds per-campaign cap "
+                    f"{self.config.loops_max_rate_cps} cps"
+                )
+            if max_concurrent is None or int(max_concurrent) <= 0:
+                raise CapExceeded(
+                    f"max_concurrent must be > 0 (got {max_concurrent})"
+                )
+            if int(max_concurrent) > self.config.loops_max_channels:
+                raise CapExceeded(
+                    f"max_concurrent {max_concurrent} exceeds per-campaign "
+                    f"channel cap {self.config.loops_max_channels}"
+                )
+            for label, val in (("duration_s", duration_s),
+                               ("duration_max_s", duration_max_s),
+                               ("target_calls", target_calls),
+                               ("target_minutes", target_minutes)):
+                if val is not None and int(val) < 0:
+                    raise CapExceeded(f"{label} must be >= 0 (got {val})")
 
             campaign_id = _new_campaign_id()
             instance_id = f"uac-{campaign_id}"
@@ -708,37 +748,63 @@ class LoopEngine:
 
     # ── CSV export of call_records (design §4.4) ─────────────────────────────
 
+    # CSV-injection guard: a leading one of these makes spreadsheet apps treat
+    # the cell as a formula. a_number/b_number/source_ip arrive off the wire, so
+    # any cell starting with one is de-fanged with a leading apostrophe.
+    _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+    @classmethod
+    def _csv_safe(cls, value) -> str:
+        """Neutralize formula injection in an exported CSV cell.
+
+        Quoting is handled by ``csv.writer``; this only addresses the formula
+        vector (a leading =/+/-/@ executing in Excel/Sheets) by prefixing such a
+        cell with an apostrophe. Tab/CR/LF leads are treated the same way since
+        a cell may be re-trimmed by the consumer.
+        """
+        if value is None:
+            return ""
+        s = str(value)
+        if s and (s[0] in cls._CSV_FORMULA_PREFIXES or s[0] in ("\t", "\r", "\n")):
+            return "'" + s
+        return s
+
     def records_csv(self, campaign_id: str) -> str:
         """Export this campaign's ``call_records`` as a CSV string (header + rows).
 
-        Returns just the header row when there are no records (or no DB) so the
-        endpoint always yields a valid CSV.
+        Uses ``csv.writer`` for correct RFC-4180 quoting (a field containing a
+        comma/quote/newline is quoted, not naively joined) and de-fangs formula
+        injection in attacker-influenced cells. Returns just the header row when
+        there are no records (or no DB) so the endpoint always yields valid CSV.
         """
         columns = [
             "id", "campaign_id", "direction", "call_uuid", "a_number",
             "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
             "duration_ms", "final_code", "matched_record_id", "created_at",
         ]
-        header = ",".join(columns)
-        if self.db is None:
-            return header + "\n"
-        try:
-            from sqlalchemy import text
+        buf = io.StringIO()
+        # \r\n line terminator is the CSV (RFC-4180) standard; quoting is QUOTE_MINIMAL.
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow(columns)
 
-            with self.db.engine.connect() as conn:
-                rows = conn.execute(
-                    text(
-                        "SELECT " + ", ".join(columns) + " FROM call_records "
-                        "WHERE campaign_id = :cid ORDER BY id"
-                    ),
-                    {"cid": campaign_id},
-                ).fetchall()
-        except Exception as e:
-            logger.warning("Could not export call_records for %s: %s",
-                           campaign_id, e)
-            return header + "\n"
+        rows = []
+        if self.db is not None:
+            try:
+                from sqlalchemy import text
 
-        out = [header]
+                with self.db.engine.connect() as conn:
+                    rows = conn.execute(
+                        text(
+                            "SELECT " + ", ".join(columns) + " FROM call_records "
+                            "WHERE campaign_id = :cid ORDER BY id"
+                        ),
+                        {"cid": campaign_id},
+                    ).fetchall()
+            except Exception as e:
+                logger.warning("Could not export call_records for %s: %s",
+                               campaign_id, e)
+                rows = []
+
         for r in rows:
-            out.append(",".join("" if v is None else str(v) for v in r))
-        return "\n".join(out) + "\n"
+            writer.writerow([self._csv_safe(v) for v in r])
+        return buf.getvalue()

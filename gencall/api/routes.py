@@ -46,12 +46,18 @@ def require_api_key(request: Request,
     """FastAPI dependency enforcing a valid `X-API-Key` header.
 
     Validates the key against the persisted key store, applies the per-key rate
-    limit, and records the call in the audit log. If no gateway is wired (e.g.
-    the database is unavailable, or in unit tests that don't configure auth),
-    the check is skipped so the endpoint behaves as before.
+    limit, and records the call in the audit log.
+
+    Fail CLOSED: if no gateway is wired (e.g. the database is unavailable so
+    auth could not be configured) every protected endpoint is refused with 503
+    rather than silently allowed. Previously this returned None (allow), which
+    opened EVERY endpoint — including state-changing loop/fleet control — the
+    moment the DB went away. Only the explicitly-unauthenticated read-only
+    `/api/health` endpoints stay reachable, because they do not depend on this
+    guard at all.
     """
     if gateway is None:
-        return None
+        raise HTTPException(503, "Authentication is not configured (no key store)")
 
     if not x_api_key:
         raise HTTPException(401, "Missing API key (set the X-API-Key header)")

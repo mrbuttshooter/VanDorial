@@ -119,6 +119,14 @@ export function Loops() {
     }
   };
 
+  const download = async (id: string) => {
+    try {
+      await api.downloadLoopRecordsCsv(id);
+    } catch (e) {
+      toast.error(`Download failed: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   const campaigns = loops.data?.campaigns ?? [];
   // Running campaigns first, then most-recently created.
   const ordered = useMemo(() => {
@@ -172,6 +180,7 @@ export function Loops() {
               campaign={c}
               stats={stats[c.id]}
               onStop={() => stop(c.id)}
+              onDownload={() => download(c.id)}
             />
           ))}
         </div>
@@ -311,10 +320,12 @@ function LoopCard({
   campaign,
   stats,
   onStop,
+  onDownload,
 }: {
   campaign: LoopCampaign;
   stats: LoopStats | undefined;
   onStop: () => void;
+  onDownload: () => void;
 }) {
   const isRunning = campaign.status === "running";
   const st = stats;
@@ -459,15 +470,9 @@ function LoopCard({
       </div>
 
       <div className={s.cardActions}>
-        <a
-          href={api.loopRecordsCsvUrl(campaign.id)}
-          download={`${campaign.id}_records.csv`}
-          style={{ textDecoration: "none" }}
-        >
-          <Button size="sm" variant="ghost">
-            <IconDownload /> Download CSV
-          </Button>
-        </a>
+        <Button size="sm" variant="ghost" onClick={onDownload}>
+          <IconDownload /> Download CSV
+        </Button>
         <div style={{ flex: 1 }} />
         {isRunning && (
           <Button size="sm" variant="danger" onClick={onStop}>
