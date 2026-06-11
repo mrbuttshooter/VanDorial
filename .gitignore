@@ -24,8 +24,14 @@ frontend/.vite/
 # have no Node) serve the UI. The Docker build regenerates it (stage 1).
 # gencall/web/console/   <- intentionally tracked
 
-# Offline wheelhouse + release zips (build artifacts, never commit)
-vendor/wheelhouse/
+# Offline wheelhouse — COMMITTED on purpose so a clone / the GitHub zip is a
+# complete air-gapped install bundle (Python 3.10 linux wheels). Regenerate with:
+#   pip download --only-binary=:all: --platform manylinux_2_17_x86_64 \
+#     --platform manylinux_2_28_x86_64 --python-version 3.10 --abi cp310 \
+#     --implementation cp -r requirements.txt -d vendor/wheelhouse
+#   (+ explicit: uvloop sniffio exceptiongroup — markers drop these off-Linux)
+
+# Release zips (build artifacts, never commit)
 *.zip
 
 # Tooling / editor
