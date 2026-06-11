@@ -95,6 +95,39 @@ def test_match_value_exact_and_suffix():
     assert match_value("123456", "suffixZ") == "123456"
 
 
+def test_matches_outbound_with_null_t_start_ms(db):
+    """Real loop UAC rows carry NO t_start_ms (the scenario logs at 200-OK and BYE,
+    not at the INVITE) — only t_answer_ms. The matcher must fall back to
+    t_answer_ms for both the inbound window and the nearest-match, otherwise it
+    loads zero inbound and matches nothing (the bug seen on the box: minutes_out
+    counted but calls_in_matched=0)."""
+    from sqlalchemy import text
+
+    base = 1_700_000_000_000
+    with db.engine.begin() as conn:
+        # outbound: t_start_ms NULL, t_answer_ms set (mirrors loop_uac.xml)
+        conn.execute(
+            text("INSERT INTO call_records (campaign_id,direction,call_uuid,a_number,"
+                 "b_number,source_ip,t_start_ms,t_answer_ms,t_end_ms,duration_ms,"
+                 "final_code,created_at) VALUES (:c,'out','out-1','1000','2000',NULL,"
+                 "NULL,:ans,:end,:dur,200,'2026-01-01T00:00:00+00:00')"),
+            {"c": CID, "ans": base, "end": base + 3000, "dur": 3000})
+        # inbound returns ~4 s later (loop latency), t_start_ms set
+        conn.execute(
+            text("INSERT INTO call_records (campaign_id,direction,call_uuid,a_number,"
+                 "b_number,source_ip,t_start_ms,t_answer_ms,t_end_ms,duration_ms,"
+                 "final_code,created_at) VALUES (NULL,'in','in-1','1000','2000',"
+                 "'127.0.0.1',:st,:st,:end,:dur,200,'2026-01-01T00:00:00+00:00')"),
+            {"st": base + 4000, "end": base + 7000, "dur": 3000})
+
+    stats = LoopMatcher(db=db).match_campaign(CID, match_key="exact")
+    assert stats["calls_out"] == 1
+    assert stats["answered_out"] == 1
+    assert stats["calls_in_matched"] == 1, "inbound must match even when out t_start_ms is NULL"
+    assert stats["minutes_in_ms"] == 3000
+    assert stats["completion_pct"] == 100.0
+
+
 def test_percentile_nearest_rank():
     vals = [10, 20, 30, 40, 100]
     assert _percentile(sorted(vals), 50) == 30
