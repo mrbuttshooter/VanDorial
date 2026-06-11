@@ -473,7 +473,20 @@ def test_node_group_start_stop_fans_out_over_http(stub_sipp, tmp_path, monkeypat
         grp = next(x for x in groups if x["id"] == gid)
         assert grp["node_count"] == 2
 
-        # Start the group → a loop fans out to BOTH nodes.
+        # Member node ids (for the subset-start check).
+        member_ids = [n["id"] for n in client.get("/api/servers").json()["servers"]
+                      if n["group_id"] == gid]
+        assert len(member_ids) == 2
+
+        # Partial start: run ONLY the first node (we don't always run the whole group).
+        one = client.post(f"/api/node-groups/{gid}/start",
+                          json={"node_ids": [member_ids[0]]})
+        assert one.status_code == 200, one.text
+        assert one.json()["started"] == 1
+        # Stop it again so the full-start below is clean.
+        client.post(f"/api/node-groups/{gid}/stop")
+
+        # Start the group → a loop fans out to BOTH nodes (no subset).
         started = client.post(f"/api/node-groups/{gid}/start")
         assert started.status_code == 200, started.text
         body = started.json()

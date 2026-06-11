@@ -18,7 +18,7 @@ the same ``require_api_key`` dependency the rest of the worker API uses.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -370,14 +370,23 @@ def delete_node_group(group_id: int):
         session.close()
 
 
+class GroupStartRequest(BaseModel):
+    """Optionally start only a SUBSET of a group's nodes. ``node_ids`` = None or
+    empty means "all member nodes" (the common case)."""
+    node_ids: Optional[list[int]] = None
+
+
 @router.post("/api/node-groups/{group_id}/start", dependencies=[Depends(require_api_key)])
-def start_node_group(group_id: int):
-    """Start a loop on EVERY member node (each on its own IP + pool), using the
-    group's shared destination + loop settings. Returns a per-node result list;
-    nodes without a pool or whose IP is already looping are reported, not fatal."""
+def start_node_group(group_id: int, req: GroupStartRequest = Body(default=None)):
+    """Start a loop on the group's member nodes (each on its own IP + pool), using
+    the group's shared destination + loop settings. By default every member is
+    started; pass ``node_ids`` to run only a subset. Returns a per-node result
+    list; nodes without a pool or whose IP is already looping are reported, not
+    fatal."""
     from gencall.db.models import NodeGroup, Server
 
     config = _engine().config or Config()
+    wanted = set(req.node_ids) if (req and req.node_ids) else None
     session = _db().get_session()
     try:
         g = session.query(NodeGroup).filter_by(id=group_id).first()
@@ -399,6 +408,7 @@ def start_node_group(group_id: int):
             {"id": m.id, "name": m.name, "ip": m.ip,
              "csv_path": m.csv_path, "enabled": m.enabled}
             for m in session.query(Server).filter_by(group_id=group_id).all()
+            if wanted is None or m.id in wanted
         ]
     finally:
         session.close()

@@ -269,8 +269,11 @@ export const api = {
     request<{ status: string; id: number }>(`/api/node-groups/${id}`, {
       method: "DELETE",
     }),
-  startNodeGroup: (id: number) =>
-    request<GroupStartResult>(`/api/node-groups/${id}/start`, { method: "POST" }),
+  startNodeGroup: (id: number, nodeIds?: number[]) =>
+    request<GroupStartResult>(`/api/node-groups/${id}/start`, {
+      method: "POST",
+      body: nodeIds && nodeIds.length ? { node_ids: nodeIds } : {},
+    }),
   stopNodeGroup: (id: number) =>
     request<{ status: string; group: string; stopped: number }>(
       `/api/node-groups/${id}/stop`,
