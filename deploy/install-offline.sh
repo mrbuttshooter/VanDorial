@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+#
+# GenCall v2 "Loop Runner" — OFFLINE / AIR-GAPPED Ubuntu installer.
+#
+# NO internet, NO apt, NO SIPp build, NO PostgreSQL. It uses:
+#   - the system SIPp        (apt 'sip-tester', /usr/bin/sipp)
+#   - SQLite                 (built into Python — no DB server to install)
+#   - a bundled wheelhouse   (vendor/wheelhouse/ — all Python libs as offline files)
+#
+# Run as root from inside the unzipped offline bundle:
+#     sudo ./deploy/install-offline.sh
+#
+# Idempotent. Needs: python3 >= 3.10, python3-venv, and a sipp on PATH (all present
+# on this box). Needs UDP/5060 free.
+#
+set -euo pipefail
+
+INSTALL_DIR=/opt/gencall
+GC_USER=gencall
+RTP_RANGE="${RTP_RANGE:-16384-16584}"
+
+say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+ok()   { printf '   \033[1;32m✓\033[0m %s\n' "$*"; }
+warn() { printf '   \033[1;33m!\033[0m %s\n' "$*"; }
+die()  { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "Run as root:  sudo $0"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+[ -f "$REPO/setup.py" ] && [ -d "$REPO/gencall" ] || die "Run from inside the unzipped bundle (setup.py not found)."
+WHEELHOUSE="$REPO/vendor/wheelhouse"
+[ -d "$WHEELHOUSE" ] && ls "$WHEELHOUSE"/*.whl >/dev/null 2>&1 || die "Wheelhouse missing: $WHEELHOUSE (this must be the OFFLINE bundle, not the plain repo zip)."
+RTP_LO="${RTP_RANGE%-*}"; RTP_HI="${RTP_RANGE#*-}"
+
+# ── 1. Preconditions (everything must already be on the box) ───────────────────
+say "Checking prerequisites (offline — nothing is downloaded)"
+SIPP_BIN="${SIPP_BIN:-$(command -v sipp || true)}"
+[ -n "$SIPP_BIN" ] || die "No 'sipp' on PATH. Install sip-tester or copy a sipp binary, then re-run (or set SIPP_BIN=/path/to/sipp)."
+ok "SIPp: $SIPP_BIN ($("$SIPP_BIN" -v 2>/dev/null | head -1))"
+command -v python3 >/dev/null || die "python3 missing"
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' || die "Need Python >= 3.10 (have $(python3 -V))"
+python3 -c 'import venv' 2>/dev/null || die "python3-venv missing (apt install python3-venv)"
+ok "Python: $(python3 -V 2>&1)"
+
+# ── 2. Service user ───────────────────────────────────────────────────────────
+id "$GC_USER" >/dev/null 2>&1 || { useradd --system --create-home --shell /usr/sbin/nologin "$GC_USER"; ok "created system user '$GC_USER'"; }
+
+# ── 3. Install the app into /opt/gencall ──────────────────────────────────────
+say "Installing GenCall into $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+tar -C "$REPO" --exclude='.git' --exclude='node_modules' --exclude='__pycache__' \
+    --exclude='*.pyc' --exclude='.env' -cf - . | tar -C "$INSTALL_DIR" -xf -
+mkdir -p "$INSTALL_DIR/logs" "$INSTALL_DIR/data" "$INSTALL_DIR/gencall/media"
+[ -d "$INSTALL_DIR/gencall/web/console" ] && ok "console bundle present (served at /console)" \
+  || warn "prebuilt console not found — API still works"
+
+# ── 4. venv + OFFLINE pip from the wheelhouse ─────────────────────────────────
+say "Building venv and installing Python libs from the wheelhouse (no network)"
+python3 -m venv "$INSTALL_DIR/venv"
+PIP="$INSTALL_DIR/venv/bin/pip"
+# Upgrade pip/setuptools/wheel from the wheelhouse if present (tolerant — the
+# venv already ships a usable pip+setuptools, so failure here is non-fatal).
+"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+"$PIP" install --no-index --find-links="$WHEELHOUSE" -r "$INSTALL_DIR/requirements.txt"
+# Install the package itself (editable; --no-build-isolation so pip uses the
+# venv's setuptools instead of trying to fetch build deps from the internet).
+"$PIP" install --no-index --no-build-isolation -e "$INSTALL_DIR"
+ok "Python libs + gencall installed offline"
+
+# ── 5. Configuration (system sipp, RTP window, MADA whitelist) ────────────────
+say "Writing configuration"
+CFG="$INSTALL_DIR/gencall/etc/gencall.cfg"
+set_cfg() { # section key value
+  python3 - "$CFG" "$1" "$2" "$3" <<'PY'
+import configparser, sys
+p, s, k, v = sys.argv[1:5]
+c = configparser.ConfigParser(); c.read(p)
+if not c.has_section(s): c.add_section(s)
+c.set(s, k, v)
+with open(p, "w") as f: c.write(f)
+PY
+}
+set_cfg sipp command "$SIPP_BIN"
+set_cfg sip min_rtp_port "$RTP_LO"
+set_cfg sip max_rtp_port "$RTP_HI"
+MADA="${MADA_IPS:-}"
+if [ -z "$MADA" ]; then
+  read -rp "   MADA signalling IP(s) for the inbound whitelist [blank = set later]: " MADA || true
+fi
+[ -n "$MADA" ] && { set_cfg trust whitelist "$MADA"; ok "[trust] whitelist = $MADA"; } \
+               || warn "trust whitelist empty — inbound calls will be FLAGGED until you set it"
+ok "config: sipp=$SIPP_BIN, RTP $RTP_LO-$RTP_HI, DB=SQLite"
+chown -R "$GC_USER":"$GC_USER" "$INSTALL_DIR"
+
+# ── 6. systemd service (SQLite — no DB server) ────────────────────────────────
+say "Installing systemd service"
+cat > /etc/systemd/system/gencall-worker.service <<EOF
+[Unit]
+Description=GenCall v2 worker (SIP traffic generator + loop engine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${GC_USER}
+WorkingDirectory=${INSTALL_DIR}
+Environment=GENCALL_CONFIG=${CFG}
+Environment=GENCALL_DB_ENGINE=sqlite
+Environment=GENCALL_DATABASE_URL=sqlite:////${INSTALL_DIR#/}/data/gencall.db
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${INSTALL_DIR}/venv/bin/gencall-server --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now gencall-worker >/dev/null 2>&1
+ok "gencall-worker enabled + started (SQLite DB at ${INSTALL_DIR}/data/gencall.db; migrations auto-apply)"
+
+# ── 7. Health check + next steps ──────────────────────────────────────────────
+say "Health check"
+sleep 4
+if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
+  ok "worker /api/health OK"
+elif python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4).status==200 else 1)" 2>/dev/null; then
+  ok "worker /api/health OK"
+else
+  warn "worker not healthy yet — check:  journalctl -u gencall-worker -n 50 --no-pager"
+fi
+
+say "Done — two things left for YOU"
+cat <<EOF
+   1) API KEY (shown once at first boot):
+        journalctl -u gencall-worker | grep -A1 'X-API-Key' | tail -2
+
+   2) FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to
+      the MADA whitelist (${MADA:-<set this>}). Rules: docs/deploy/loop-runner.md section 2.
+
+   Console + Loops page:   http://<box-ip>:8080/console/
+   Logs:                   journalctl -u gencall-worker -f
+   SIPp sanity:            $SIPP_BIN -v
+EOF
+ok "install-offline.sh finished"
