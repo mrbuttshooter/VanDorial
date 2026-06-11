@@ -13,21 +13,29 @@ interface Props {
 /** Accessible modal: focus trap, Escape to close, scrim click to dismiss. */
 export function Modal({ open, title, onClose, footer, children }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose in a ref so the keydown handler always calls the
+  // current one WITHOUT putting onClose in the effect deps. Parents pass a fresh
+  // arrow each render; if onClose were a dep the effect would re-run on every
+  // keystroke and yank focus back to the dialog — losing the field you're typing in.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab") trapFocus(e, ref.current);
     };
     document.addEventListener("keydown", onKey);
-    // Move focus into the dialog.
-    const first = ref.current?.querySelector<HTMLElement>(
+    // Move focus to the first field in the BODY (not the header's close X, which
+    // would otherwise win as the first <button> in DOM order). Runs ONCE per open.
+    const first = bodyRef.current?.querySelector<HTMLElement>(
       "input, select, textarea, button",
     );
     first?.focus();
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -46,7 +54,7 @@ export function Modal({ open, title, onClose, footer, children }: Props) {
             <XIcon />
           </button>
         </header>
-        <div className={styles.modalBody}>{children}</div>
+        <div className={styles.modalBody} ref={bodyRef}>{children}</div>
         {footer && <footer className={styles.modalFoot}>{footer}</footer>}
       </div>
     </div>

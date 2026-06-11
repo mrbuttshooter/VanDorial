@@ -40,6 +40,22 @@ export function Dashboard() {
 
   return (
     <>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: "var(--space-3)",
+          marginBottom: "var(--space-4)",
+        }}
+      >
+        <Link to="/loops">
+          <Button variant="primary">+ New Loop Campaign</Button>
+        </Link>
+        <Link to="/campaigns">
+          <Button variant="ghost">+ New Test</Button>
+        </Link>
+      </div>
+
       <div className={s.tiles}>
         <StatTile
           label="Active Tests"
