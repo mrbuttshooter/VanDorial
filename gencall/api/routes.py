@@ -211,10 +211,25 @@ def update_rate(test_id: str, req: UpdateRateRequest):
     return {"status": "updated", "id": test_id, "call_rate": req.call_rate}
 
 
+def _is_loop_managed(test_id: str) -> bool:
+    """The loop answer side ('loop-uas') and per-campaign dialers ('uac-loop-*')
+    are owned by the LoopEngine and surfaced on the Loops page. They must NOT
+    appear in — or be deletable from — the one-shot test list: deleting the UAS
+    is futile (the engine restarts it to keep answering), which is why it kept
+    'showing up' again after a delete.
+    """
+    return test_id == "loop-uas" or test_id.startswith("uac-loop-")
+
+
 @app.get("/api/tests", dependencies=[Depends(require_api_key)])
 def list_tests():
-    """List all test instances (active and completed)."""
-    return {"tests": engine.list_instances()}
+    """List one-shot test instances (loop UAS/UAC are excluded — see Loops page)."""
+    return {
+        "tests": [
+            t for t in engine.list_instances()
+            if not _is_loop_managed(t.get("id", ""))
+        ]
+    }
 
 
 @app.get("/api/tests/{test_id}", dependencies=[Depends(require_api_key)])
@@ -228,7 +243,14 @@ def get_test(test_id: str):
 
 @app.delete("/api/tests/{test_id}", dependencies=[Depends(require_api_key)])
 def remove_test(test_id: str):
-    """Remove a stopped test instance."""
+    """Remove a stopped test instance (loop UAS/UAC are engine-managed — refused)."""
+    if _is_loop_managed(test_id):
+        raise HTTPException(
+            409,
+            f"'{test_id}' is managed by the loop engine and cannot be deleted here "
+            "(the answer side is restarted automatically). Manage loop traffic on "
+            "the Loops page.",
+        )
     success = engine.remove_instance(test_id)
     if not success:
         raise HTTPException(400, f"Cannot remove '{test_id}' (still running or not found)")
