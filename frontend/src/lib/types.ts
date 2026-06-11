@@ -129,6 +129,7 @@ export interface LoopCampaign {
   name: string;
   status: LoopStatus;
   node_id: number | null;
+  local_ip?: string | null;
   dest_host: string;
   dest_port: number;
   transport: string;
@@ -192,6 +193,8 @@ export interface StartLoopRequest {
   dest_host: string;
   dest_port?: number;
   transport?: Transport;
+  /* Node ("each IP one loop"): source IP + number pool come from this node. */
+  node_id?: number;
   /* Source IP this loop originates from ("Node = IP"). Empty => OS-routed. */
   local_ip?: string;
   csv_path?: string;
@@ -205,13 +208,20 @@ export interface StartLoopRequest {
   target_minutes?: number;
 }
 
-/* An origination server = a source IP a loop can run from (one loop per IP). */
+/* A node = a source IP a loop runs from, carrying its own number pool (origin +
+   drop sale zone). "Each IP one loop", so a node is a ready-to-run loop unit. */
 export interface Server {
   id: number;
   name: string;
   ip: string;
   description: string;
   enabled: boolean;
+  origin_zone: string;
+  dest_zone: string;
+  pool_count: number;
+  pool_length: number;
+  csv_path: string;
+  has_pool: boolean;
   created_at: string | null;
 }
 
@@ -219,31 +229,24 @@ export interface ServerRequest {
   name: string;
   ip: string;
   description?: string;
+  origin_zone?: string;
+  dest_zone?: string;
+  count?: number;
+  length?: number;
+}
+
+export interface GeneratePoolRequest {
+  origin_zone?: string;
+  dest_zone?: string;
+  count?: number;
+  length?: number;
 }
 
 /* A country with its sale zones (GET /api/sale-zones), for the cascading
-   Country -> Sale Zone pickers on the loop form. */
+   Country -> Sale Zone pickers on the Nodes page. */
 export interface SaleZoneCountry {
   name: string;
   zones: string[];
-}
-
-export interface GenerateNumbersRequest {
-  origin_zone: string;
-  dest_zone: string;
-  origin_code?: string;
-  dest_code?: string;
-  count?: number;
-  length?: number;
-  seed?: number;
-}
-
-export interface GenerateNumbersResult {
-  csv_path: string;
-  count: number;
-  origin_zone: string;
-  dest_zone: string;
-  preview: string[];
 }
 
 export interface StartTestRequest {

@@ -54,6 +54,21 @@ def _engine() -> LoopEngine:
     return loop_engine
 
 
+def _lookup_node(node_id: int) -> Optional[dict]:
+    """Resolve a node (Server row) to a dict, or None. Uses the engine's DB."""
+    db = getattr(_engine(), "db", None)
+    if db is None:
+        raise HTTPException(503, "Database not configured on this worker")
+    from gencall.db.models import Server
+
+    session = db.get_session()
+    try:
+        s = session.query(Server).filter_by(id=node_id).first()
+        return s.to_dict() if s else None
+    finally:
+        session.close()
+
+
 # ─── Request model ───────────────────────────────────────────────────────────
 
 class StartLoopRequest(BaseModel):
@@ -70,6 +85,10 @@ class StartLoopRequest(BaseModel):
     # Port must be a real, routable port (1-65535); 0 / negatives rejected.
     dest_port: int = Field(default=5060, ge=1, le=65535)
     transport: str = "udp"
+    # Node ("each IP one loop"): when set, the loop's source IP AND number pool
+    # are taken from this node (gencall.db.models.Server), overriding local_ip /
+    # csv_path below. This is the primary path from the UI.
+    node_id: Optional[int] = None
     # Source IP this loop originates from ("Node = IP"). "" => OS-routed (legacy
     # single-IP behaviour). The engine enforces one running loop per non-empty IP.
     local_ip: str = ""
@@ -118,13 +137,28 @@ def start_loop(req: StartLoopRequest):
     except ValueError as e:
         raise HTTPException(422, str(e))
 
+    # Resolve the node ("each IP one loop"): its source IP and number pool drive
+    # the campaign. This is how the UI launches — pick a node, it carries both.
+    local_ip = req.local_ip
+    csv_path = req.csv_path
+    if req.node_id is not None:
+        node = _lookup_node(req.node_id)
+        if node is None:
+            raise HTTPException(404, f"Node {req.node_id} not found")
+        local_ip = node["ip"]
+        csv_path = node.get("csv_path") or ""
+        if not csv_path:
+            raise HTTPException(
+                422, f"Node '{node['name']}' has no number pool — generate one first"
+            )
+
     try:
         campaign = _engine().start_campaign(
             name=req.name,
             dest_host=req.dest_host,
             dest_port=req.dest_port,
             transport=req.transport,
-            csv_path=req.csv_path,
+            csv_path=csv_path,
             rate=req.rate,
             max_concurrent=req.max_concurrent,
             duration_mode=req.duration_mode,
@@ -133,7 +167,8 @@ def start_loop(req: StartLoopRequest):
             match_key=req.match_key,
             target_calls=req.target_calls,
             target_minutes=req.target_minutes,
-            local_ip=req.local_ip,
+            local_ip=local_ip,
+            node_id=req.node_id,
         )
     except IPBusy as e:
         raise HTTPException(409, str(e))
@@ -245,30 +280,20 @@ def generate_numbers(req: GenerateNumbersRequest):
     -inf). Numbers are validated to start with a real zone code so MADA routes
     them to the chosen drop zone.
     """
-    import os
-    import tempfile
-
-    zones = _zones()
     try:
-        pairs = gen_loop_csv.generate_pairs(
-            zones,
-            oad_zone=req.origin_zone, oad_code=req.origin_code or None,
-            dad_zone=req.dest_zone, dad_code=req.dest_code or None,
+        path, n, preview = gen_loop_csv.generate_pool_file(
+            origin_zone=req.origin_zone, dest_zone=req.dest_zone,
+            origin_code=req.origin_code, dest_code=req.dest_code,
             count=req.count, length=req.length, seed=req.seed,
         )
     except (ValueError, RuntimeError) as e:
         raise HTTPException(422, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
 
-    numbers_dir = os.path.join(tempfile.gettempdir(), "gencall_numbers")
-    os.makedirs(numbers_dir, exist_ok=True)
-    fd, path = tempfile.mkstemp(prefix="numbers_", suffix=".csv", dir=numbers_dir)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-        gen_loop_csv.write_csv(pairs, fh)
-
-    preview = [f"{a};{b}" for a, b in pairs[:10]]
     return {
         "csv_path": path,
-        "count": len(pairs),
+        "count": n,
         "origin_zone": req.origin_zone,
         "dest_zone": req.dest_zone,
         "preview": preview,

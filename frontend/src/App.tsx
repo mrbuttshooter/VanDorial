@@ -7,7 +7,6 @@ import { Campaigns } from "./pages/Campaigns";
 import { Scenarios } from "./pages/Scenarios";
 import { Connectors } from "./pages/Connectors";
 import { Loops } from "./pages/Loops";
-import { Servers } from "./pages/Servers";
 import { Console } from "./pages/Console";
 import { Performance } from "./pages/Performance";
 import { History } from "./pages/History";
@@ -36,7 +35,6 @@ export default function App() {
               <Route path="scenarios" element={<Scenarios />} />
               <Route path="connectors" element={<Connectors />} />
               <Route path="loops" element={<Loops />} />
-              <Route path="servers" element={<Servers />} />
               <Route path="console" element={<Console />} />
               <Route path="performance" element={<Performance />} />
               <Route path="history" element={<History />} />

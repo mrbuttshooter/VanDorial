@@ -65,6 +65,13 @@ class Server(Base):
     description = Column(Text, default="")
     api_url = Column(String(512), default="")  # reserved: remote fleet node URL
     enabled = Column(Boolean, default=True)
+    # Per-node number pool ("each IP one loop", so the node IS the loop unit):
+    # the origin/drop sale zones it dials and the generated A/B pool file.
+    origin_zone = Column(String(255), default="")
+    dest_zone = Column(String(255), default="")
+    pool_count = Column(Integer, default=0)
+    pool_length = Column(Integer, default=11)
+    csv_path = Column(String(1024), default="")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self):
@@ -74,6 +81,12 @@ class Server(Base):
             "ip": self.ip,
             "description": self.description,
             "enabled": self.enabled,
+            "origin_zone": self.origin_zone or "",
+            "dest_zone": self.dest_zone or "",
+            "pool_count": self.pool_count or 0,
+            "pool_length": self.pool_length or 11,
+            "csv_path": self.csv_path or "",
+            "has_pool": bool(self.csv_path),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -207,6 +220,38 @@ class Database:
 
     def create_tables(self):
         Base.metadata.create_all(self.engine)
+        self.ensure_added_columns()
+
+    # Columns added to an ORM table AFTER it was first created. create_all() makes
+    # NEW tables with all columns but never ALTERs an existing one, so a box that
+    # created `servers` before the per-node number-pool columns existed would be
+    # missing them (every node op would 500). Add any missing ones idempotently; a
+    # duplicate-column error (fresh DB where create_all already added them) or an
+    # absent table is ignored. Each ALTER runs in its own transaction so one
+    # "already exists" does not abort the rest. SQLite 3.37 + PostgreSQL both
+    # support single-column ``ALTER TABLE ... ADD COLUMN``.
+    _ADDED_COLUMNS = {
+        "servers": [
+            ("origin_zone", "VARCHAR(255) DEFAULT ''"),
+            ("dest_zone", "VARCHAR(255) DEFAULT ''"),
+            ("pool_count", "INTEGER DEFAULT 0"),
+            ("pool_length", "INTEGER DEFAULT 11"),
+            ("csv_path", "VARCHAR(1024) DEFAULT ''"),
+        ],
+    }
+
+    def ensure_added_columns(self):
+        from sqlalchemy import text
+
+        for table, cols in self._ADDED_COLUMNS.items():
+            for col, ddl in cols:
+                try:
+                    with self.engine.begin() as conn:
+                        conn.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                        )
+                except Exception:
+                    pass  # already present (or table absent) — safe to ignore
 
     def get_session(self):
         return self.SessionLocal()

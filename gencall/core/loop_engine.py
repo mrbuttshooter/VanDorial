@@ -326,6 +326,7 @@ class LoopEngine:
         target_calls=0,
         target_minutes=0,
         local_ip="",
+        node_id=None,
     ) -> dict:
         """Start a Loop Campaign: spawn one UAC and persist a 'running' row.
 
@@ -443,7 +444,7 @@ class LoopEngine:
                 "id": campaign_id,
                 "name": name or campaign_id,
                 "status": "running",
-                "node_id": None,
+                "node_id": node_id,
                 "local_ip": effective_ip,
                 "dest_host": dest_host,
                 "dest_port": int(dest_port),
@@ -593,7 +594,13 @@ class LoopEngine:
         return count
 
     def _ip_has_running_loop(self, ip: str) -> bool:
-        """True if some campaign with source IP ``ip`` has a RUNNING UAC."""
+        """True if some campaign with source IP ``ip`` has a RUNNING UAC.
+
+        In-memory (the check + start hold ``self._lock``, so it is race-free
+        within this process). Assumes a SINGLE worker process: a systemd restart
+        kills all SIPp children and startup reconciliation marks survivors
+        interrupted, so there is no live loop the empty in-memory set would miss.
+        Do NOT run multiple uvicorn workers without a DB-backed guard."""
         for cid, c in self._campaigns.items():
             if (c.get("local_ip") or "").strip() != ip:
                 continue

@@ -516,6 +516,152 @@ def test_servers_crud_roundtrip(loop_engine, db, monkeypatch):
     assert all(s["id"] != sid for s in client.get("/api/servers").json()["servers"])
 
 
+def test_create_node_with_pool_generates_numbers(loop_engine, db, monkeypatch):
+    """Creating a node with origin/drop zones generates its A/B pool file."""
+    import os
+
+    from fastapi.testclient import TestClient
+    from gencall.api import routes
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key("pool-test")
+    monkeypatch.setattr(routes, "gateway", gateway, raising=False)
+    monkeypatch.setattr(routes, "db", db, raising=False)
+    client = TestClient(routes.app)
+    client.headers.update({"X-API-Key": raw_key})
+
+    resp = client.post("/api/servers", json={
+        "name": "vd-ng", "ip": "10.0.0.9",
+        "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+        "count": 20, "length": 11,
+    })
+    assert resp.status_code == 200, resp.text
+    node = resp.json()["server"]
+    assert node["has_pool"] and node["pool_count"] == 20
+    assert os.path.isfile(node["csv_path"])
+    with open(node["csv_path"], encoding="utf-8") as fh:
+        a, b = fh.readline().strip().split(";")
+    assert a.startswith("2341")
+    os.remove(node["csv_path"])
+
+
+def test_start_loop_by_node_id_uses_node_ip_and_pool(api_client, loop_engine, db, tmp_path):
+    """A loop started with node_id binds the node's IP and dials its pool."""
+    pool = tmp_path / "pool.csv"
+    pool.write_text("2341000001;2246200001\n2341000002;2246200002\n")
+    from gencall.db.models import Server
+    session = db.get_session()
+    try:
+        s = Server(name="vd-node", ip="10.7.7.7", csv_path=str(pool),
+                   origin_zone="Nigeria-Lagos", dest_zone="Guinea-Mobile (Orange)",
+                   pool_count=2)
+        session.add(s)
+        session.commit()
+        nid = s.id
+    finally:
+        session.close()
+
+    resp = api_client.post("/api/loops", json={
+        "node_id": nid, "dest_host": "1.2.3.4", "rate": 1.0, "duration_s": 1,
+    })
+    assert resp.status_code == 200, resp.text
+    camp = resp.json()["campaign"]
+    assert camp["local_ip"] == "10.7.7.7"
+    assert camp["node_id"] == nid  # the node FK is persisted on the campaign
+
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT node_id, local_ip FROM loop_campaigns WHERE id = :id"),
+            {"id": camp["id"]},
+        ).fetchone()
+    assert str(row[0]) == str(nid) and row[1] == "10.7.7.7"
+
+
+def _routes_client(db, monkeypatch, label):
+    """A TestClient over the worker app (routes.app) with auth + db wired."""
+    from fastapi.testclient import TestClient
+    from gencall.api import routes
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key(label)
+    monkeypatch.setattr(routes, "gateway", gateway, raising=False)
+    monkeypatch.setattr(routes, "db", db, raising=False)
+    client = TestClient(routes.app)
+    client.headers.update({"X-API-Key": raw_key})
+    return client
+
+
+def test_cannot_delete_or_regen_node_with_running_loop(loop_engine, db, monkeypatch):
+    """Delete/regenerate is refused (409) while a loop runs on the node's IP."""
+    camp = loop_engine.start_campaign(
+        dest_host="1.2.3.4", rate=1.0, duration_s=30, local_ip="10.5.5.5")
+    _wait_running(loop_engine.engine, f"uac-{camp['id']}")
+
+    client = _routes_client(db, monkeypatch, "busy-test")
+    created = client.post("/api/servers", json={"name": "n5", "ip": "10.5.5.5"})
+    sid = created.json()["server"]["id"]
+
+    assert client.delete(f"/api/servers/{sid}").status_code == 409
+    assert client.post(f"/api/servers/{sid}/generate", json={
+        "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+        "count": 10,
+    }).status_code == 409
+
+
+def test_node_pool_count_is_bounded(db, monkeypatch):
+    """An over-large pool request is rejected (422), not generated."""
+    client = _routes_client(db, monkeypatch, "bound-test")
+    resp = client.post("/api/servers", json={
+        "name": "big", "ip": "10.6.6.6",
+        "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+        "count": 9_999_999,
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_ensure_added_columns_idempotent_and_upgrades(tmp_path):
+    """create_tables() is idempotent, and a legacy `servers` table missing the
+    pool columns gets them added (the deployed-box upgrade path)."""
+    from sqlalchemy import text
+    from gencall.db.models import Database
+
+    url = f"sqlite:///{tmp_path / 'srv.db'}"
+    # Simulate a legacy box: a `servers` table WITHOUT the new pool columns.
+    legacy = Database.__new__(Database)
+    from sqlalchemy import create_engine
+    legacy.engine = create_engine(url)
+    with legacy.engine.begin() as conn:
+        conn.execute(text("CREATE TABLE servers (id INTEGER PRIMARY KEY, "
+                          "name VARCHAR(255), ip VARCHAR(45))"))
+    # Now bring up the real Database: create_tables() must add missing columns.
+    db = Database(url)
+    db.create_tables()           # second call must also be a no-op (idempotent)
+    db.create_tables()
+    with db.engine.connect() as conn:
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(servers)"))}
+    assert {"origin_zone", "dest_zone", "pool_count", "pool_length", "csv_path"} <= cols
+
+
+def test_start_loop_by_node_without_pool_is_422(api_client, db):
+    """A node with no generated pool can't launch a loop (422, not a silent run)."""
+    from gencall.db.models import Server
+    session = db.get_session()
+    try:
+        s = Server(name="vd-empty", ip="10.7.7.8")
+        session.add(s)
+        session.commit()
+        nid = s.id
+    finally:
+        session.close()
+    resp = api_client.post("/api/loops", json={"node_id": nid, "dest_host": "1.2.3.4"})
+    assert resp.status_code == 422, resp.text
+
+
 def test_loop_endpoint_fails_closed_503_when_no_gateway(loop_engine, monkeypatch):
     """A loop endpoint must FAIL CLOSED (503), not open (200), when no gateway.
 

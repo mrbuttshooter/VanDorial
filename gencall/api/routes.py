@@ -3,6 +3,7 @@ GenCall REST API Routes.
 FastAPI-based API for controlling the traffic generator.
 """
 
+import os
 import uuid
 import datetime
 import logging
@@ -11,7 +12,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Header, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from gencall.core.sipp_engine import (
     SIPpEngine, SIPpInstance, SIPpMode, SIPpTransport, SIPpState
@@ -114,6 +115,24 @@ class ServerRequest(BaseModel):
     name: str
     ip: str
     description: str = ""
+    # Optional per-node number pool. When origin_zone + dest_zone are given the
+    # pool is generated on create; otherwise the node starts with no pool and you
+    # generate it later via POST /api/servers/{id}/generate.
+    origin_zone: str = ""
+    dest_zone: str = ""
+    # Pool size is bounded: generation is synchronous, so an unbounded count
+    # could pin a request thread + RAM. 2M is plenty for a random-draw pool.
+    count: int = Field(default=500000, ge=1, le=2_000_000)
+    length: int = Field(default=11, ge=4, le=18)
+
+
+class GeneratePoolRequest(BaseModel):
+    """(Re)generate a node's number pool. Empty fields reuse the node's stored
+    zones/length so a bare POST just refreshes the pool."""
+    origin_zone: str = ""
+    dest_zone: str = ""
+    count: int = Field(default=500000, ge=1, le=2_000_000)
+    length: int = Field(default=0, ge=0, le=18)  # 0 => keep the node's stored length
 
 
 class ScenarioRequest(BaseModel):
@@ -443,9 +462,62 @@ def list_servers():
         session.close()
 
 
+def _ip_has_running_loop(ip: str) -> bool:
+    """True if a loop campaign is currently RUNNING on source IP ``ip`` (DB-backed
+    so it holds across worker restarts). Used to refuse delete/regen of a busy
+    node. Best-effort: returns False if the DB is unavailable."""
+    if not db or not ip:
+        return False
+    from sqlalchemy import text
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT 1 FROM loop_campaigns "
+                     "WHERE local_ip = :ip AND status = 'running' LIMIT 1"),
+                {"ip": ip},
+            ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
+                        count: int, length: int) -> None:
+    """Generate ``s``'s number pool from its zones and store path/count on it.
+    Removes the node's previous pool file. Raises HTTPException(422) on an unknown
+    zone / impossible request."""
+    from gencall.scripts.gen_loop_csv import generate_pool_file
+
+    try:
+        path, n, _preview = generate_pool_file(
+            origin_zone=origin_zone, dest_zone=dest_zone,
+            count=count, length=length,
+        )
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(422, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
+    _unlink_quiet(s.csv_path)  # drop the superseded pool file
+    s.origin_zone = origin_zone
+    s.dest_zone = dest_zone
+    s.pool_count = n
+    s.pool_length = length
+    s.csv_path = path
+
+
+def _unlink_quiet(path: str) -> None:
+    """Remove a generated pool file if it exists, ignoring errors."""
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 @app.post("/api/servers", dependencies=[Depends(require_api_key)])
 def create_server(req: ServerRequest):
-    """Register a server. ``name`` is unique; ``ip`` is the source bind address."""
+    """Register a node (a source IP). If origin_zone + dest_zone are supplied,
+    its A/B number pool is generated immediately (each node = one loop's numbers)."""
     if not db:
         raise HTTPException(500, "Database not configured")
     name = (req.name or "").strip()
@@ -454,13 +526,51 @@ def create_server(req: ServerRequest):
         raise HTTPException(422, "name and ip are required")
     session = db.get_session()
     try:
-        s = Server(name=name, ip=ip, description=req.description or "")
+        s = Server(name=name, ip=ip, description=req.description or "",
+                   pool_length=req.length)
+        if req.origin_zone and req.dest_zone:
+            _generate_node_pool(s, req.origin_zone, req.dest_zone,
+                                req.count, req.length)
         session.add(s)
         session.commit()
         return {"status": "created", "server": s.to_dict()}
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as e:
         session.rollback()
         raise HTTPException(400, f"could not create server (duplicate name?): {e}")
+    finally:
+        session.close()
+
+
+@app.post("/api/servers/{server_id}/generate", dependencies=[Depends(require_api_key)])
+def generate_server_pool(server_id: int, req: GeneratePoolRequest):
+    """(Re)generate a node's number pool. Empty zones/length reuse the node's
+    stored values, so a bare POST refreshes the existing pool."""
+    if not db:
+        raise HTTPException(500, "Database not configured")
+    session = db.get_session()
+    try:
+        s = session.query(Server).filter_by(id=server_id).first()
+        if not s:
+            raise HTTPException(404, f"Server {server_id} not found")
+        if _ip_has_running_loop(s.ip):
+            raise HTTPException(
+                409, f"Node '{s.name}' ({s.ip}) has a running loop — stop it before "
+                "regenerating its numbers (the live loop keeps its current pool)."
+            )
+        origin = (req.origin_zone or s.origin_zone or "").strip()
+        dest = (req.dest_zone or s.dest_zone or "").strip()
+        if not origin or not dest:
+            raise HTTPException(422, "origin_zone and dest_zone are required")
+        length = req.length or s.pool_length or 11
+        _generate_node_pool(s, origin, dest, req.count, length)
+        session.commit()
+        return {"status": "generated", "server": s.to_dict()}
+    except HTTPException:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -475,8 +585,14 @@ def delete_server(server_id: int):
         s = session.query(Server).filter_by(id=server_id).first()
         if not s:
             raise HTTPException(404, f"Server {server_id} not found")
+        if _ip_has_running_loop(s.ip):
+            raise HTTPException(
+                409, f"Node '{s.name}' ({s.ip}) has a running loop — stop it first."
+            )
+        pool_file = s.csv_path
         session.delete(s)
         session.commit()
+        _unlink_quiet(pool_file)  # remove the node's generated pool file
         return {"status": "deleted", "id": server_id}
     finally:
         session.close()

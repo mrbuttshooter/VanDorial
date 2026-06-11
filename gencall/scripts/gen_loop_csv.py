@@ -265,6 +265,34 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
     return pairs
 
 
+def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
+                       seed=None, origin_code="", dest_code="", out_dir=None):
+    """Generate an A/B number pool for a node and write it to a file.
+
+    Resolves the deck, builds ``count`` validated pairs for the origin/drop sale
+    zones, writes a bare ``A;B`` pool (no header/trailing) to ``out_dir`` (default
+    ``$TMP/gencall_numbers``), and returns ``(csv_path, count, preview_rows)``.
+    Raises ``ValueError`` on an unknown zone / impossible request.
+    """
+    import os
+    import tempfile
+
+    zones = load_zones(resolve_deck_path())
+    pairs = generate_pairs(
+        zones,
+        oad_zone=origin_zone, oad_code=origin_code or None,
+        dad_zone=dest_zone, dad_code=dest_code or None,
+        count=count, length=length, seed=seed,
+    )
+    out_dir = out_dir or os.path.join(tempfile.gettempdir(), "gencall_numbers")
+    os.makedirs(out_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="numbers_", suffix=".csv", dir=out_dir)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+        write_csv(pairs, fh)
+    preview = [f"{a};{b}" for a, b in pairs[:10]]
+    return path, len(pairs), preview
+
+
 def write_csv(pairs: List[Pair], out, order: Optional[str] = None) -> None:
     """Write A/B pairs as ``A;B`` rows, one pair per line (no trailing ``;``).
 

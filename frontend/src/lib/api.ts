@@ -6,8 +6,7 @@
 import type {
   Connector,
   ConnectorRequest,
-  GenerateNumbersRequest,
-  GenerateNumbersResult,
+  GeneratePoolRequest,
   Health,
   LoopCampaign,
   SaleZoneCountry,
@@ -224,20 +223,20 @@ export const api = {
       `${id}_records.csv`,
     ),
 
-  // ---- Sale zones + number generation (web "drop zone" flow) ----
+  // ---- Sale zones (Country -> Zone pickers on the Nodes page) ----
   saleZones: () =>
     request<{ countries: SaleZoneCountry[] }>("/api/sale-zones"),
-  generateNumbers: (req: GenerateNumbersRequest) =>
-    request<GenerateNumbersResult>("/api/loops/numbers", {
-      method: "POST",
-      body: req,
-    }),
 
-  // ---- Servers (source-IP "nodes") ----
+  // ---- Nodes (source-IP servers, each carrying its own number pool) ----
   listServers: () => request<{ servers: Server[] }>("/api/servers"),
   sourceIps: () => request<{ source_ips: string[] }>("/api/source-ips"),
   createServer: (req: ServerRequest) =>
     request<{ status: string; server: Server }>("/api/servers", {
+      method: "POST",
+      body: req,
+    }),
+  generateServerPool: (id: number, req: GeneratePoolRequest) =>
+    request<{ status: string; server: Server }>(`/api/servers/${id}/generate`, {
       method: "POST",
       body: req,
     }),

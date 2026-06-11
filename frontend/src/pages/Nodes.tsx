@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
 import s from "./pages.module.css";
 import ui from "@/components/ui/ui.module.css";
 import { Panel } from "@/components/ui/Panel";
@@ -7,178 +6,144 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal, ModalActions } from "@/components/ui/Modal";
 import { Field, FieldRow, EmptyState, Spinner } from "@/components/ui/Misc";
-import { IconPlus, IconRefresh, IconTrash, IconSliders, IconBolt } from "@/components/icons";
+import { IconPlug, IconPlus, IconTrash, IconRefresh } from "@/components/icons";
 import { useAsync } from "@/hooks/useAsync";
+import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
-import { ago } from "@/lib/format";
-import { fleetApi } from "@/fleet/fleetApi";
-import { useFleetScope } from "@/fleet/scope";
-import type { CreateNodeRequest, GroupView, NodeView, UpdateNodeRequest } from "@/fleet/types";
+import { ago, int } from "@/lib/format";
+import type { ServerRequest } from "@/lib/types";
 
-/* Node inventory: the controller's worker registry (design §4 Nodes). Supports
-   add / edit / delete, an on-demand health probe (POST /api/nodes/{id}/check),
-   and "drill in" which sets the global node scope so the existing console pages
-   operate against that node via the controller proxy. */
-
+/** Add-node form state: a node = a source IP + its own number pool (origin +
+ *  drop sale zone). "Each IP one loop", so the node IS the loop unit. */
 interface NodeForm {
   name: string;
-  address: string;
-  group_id: number | null;
-  api_key: string;
-  enabled: boolean;
+  ip: string;
+  description: string;
+  originCountry: string;
+  originZone: string;
+  destCountry: string;
+  destZone: string;
+  count: number;
 }
 
 const BLANK: NodeForm = {
   name: "",
-  address: "",
-  group_id: null,
-  api_key: "",
-  enabled: true,
+  ip: "",
+  description: "",
+  originCountry: "",
+  originZone: "",
+  destCountry: "",
+  destZone: "",
+  count: 500000,
 };
 
+/**
+ * Nodes = the source IPs this box originates loops from, each carrying its own
+ * number pool (one loop per IP). Add a node, pick its origin + drop sale zones,
+ * and its A/B numbers are generated here — then the New Loop form just picks a
+ * node. (On a single box these are NIC addresses; the same record extends to
+ * fleet nodes later.)
+ */
 export function Nodes() {
-  const navigate = useNavigate();
-  const { selectNode } = useFleetScope();
+  const nodes = useAsync(() => api.listServers(), [], 4000);
+  const detected = useAsync(() => api.sourceIps(), []);
+  const zoneTree = useAsync(() => api.saleZones(), []);
   const toast = useToast();
 
-  const nodes = useAsync(() => fleetApi.listNodes(), [], 4000);
-  const groups = useAsync(() => fleetApi.listGroups(), []);
-
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState<NodeView | null>(null);
+  const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState<NodeForm>(BLANK);
-  const [confirmDelete, setConfirmDelete] = useState<NodeView | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [regenId, setRegenId] = useState<number | null>(null);
 
   const set = <K extends keyof NodeForm>(k: K, v: NodeForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const groupList = groups.data?.groups ?? [];
-  const rows = nodes.data?.nodes ?? [];
+  const countries = useMemo(() => zoneTree.data?.countries ?? [], [zoneTree.data]);
+  const zonesFor = (c: string): string[] =>
+    countries.find((x) => x.name === c)?.zones ?? [];
 
-  const openNew = () => {
-    setEditing(null);
-    setForm(BLANK);
-    setShowForm(true);
-  };
-
-  const openEdit = (n: NodeView) => {
-    setEditing(n);
-    setForm({
-      name: n.name,
-      address: n.address,
-      group_id: n.group_id,
-      api_key: "", // never echo the stored key; blank = keep existing
-      enabled: n.enabled,
-    });
-    setShowForm(true);
-  };
-
-  const save = async () => {
-    if (!form.name.trim()) {
-      toast.error("Node name is required.");
+  const create = async () => {
+    if (!form.name.trim() || !form.ip.trim()) {
+      toast.error("Name and IP are required.");
       return;
     }
-    if (!form.address.trim()) {
-      toast.error("Node address is required.");
+    if (!form.originZone || !form.destZone) {
+      toast.error("Pick an origin zone and a drop zone.");
       return;
     }
+    setBusy(true);
     try {
-      if (editing) {
-        const patch: UpdateNodeRequest = {
-          name: form.name,
-          address: form.address,
-          group_id: form.group_id,
-          enabled: form.enabled,
-        };
-        if (form.api_key.trim()) patch.api_key = form.api_key.trim();
-        await fleetApi.updateNode(editing.id, patch);
-        toast.ok(`Node updated · ${form.name}`);
-      } else {
-        if (!form.api_key.trim()) {
-          toast.error("API key is required for a new node.");
-          return;
-        }
-        const req: CreateNodeRequest = {
-          name: form.name,
-          address: form.address,
-          group_id: form.group_id,
-          api_key: form.api_key.trim(),
-          enabled: form.enabled,
-        };
-        await fleetApi.createNode(req);
-        toast.ok(`Node added · ${form.name}`);
-      }
-      setShowForm(false);
-      setEditing(null);
+      const res = await api.createServer({
+        name: form.name,
+        ip: form.ip,
+        description: form.description,
+        origin_zone: form.originZone,
+        dest_zone: form.destZone,
+        count: form.count,
+      } as ServerRequest);
+      toast.ok(
+        `Node added · ${res.server.name} · ${int(res.server.pool_count)} numbers`,
+      );
+      setShowNew(false);
       setForm(BLANK);
       nodes.refetch();
     } catch (e) {
-      toast.error(`Save failed: ${e instanceof Error ? e.message : e}`);
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const remove = async () => {
-    if (!confirmDelete) return;
+  const regen = async (id: number, name: string) => {
+    setRegenId(id);
     try {
-      await fleetApi.deleteNode(confirmDelete.id);
-      toast.warn(`Removed ${confirmDelete.name}`);
-      setConfirmDelete(null);
+      const res = await api.generateServerPool(id, {});
+      toast.ok(`Regenerated ${name} · ${int(res.server.pool_count)} numbers`);
+      nodes.refetch();
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    } finally {
+      setRegenId(null);
+    }
+  };
+
+  const del = async (id: number, name: string) => {
+    try {
+      await api.deleteServer(id);
+      toast.warn(`Deleted ${name}`);
       nodes.refetch();
     } catch (e) {
       toast.error(`${e instanceof Error ? e.message : e}`);
     }
   };
 
-  const check = async (n: NodeView) => {
-    setBusyId(n.id);
-    try {
-      const updated = await fleetApi.checkNode(n.id);
-      toast[updated.online ? "ok" : "warn"](
-        updated.online ? `${n.name} online · v${updated.version ?? "?"}` : `${n.name} unreachable`,
-      );
-      nodes.refetch();
-    } catch (e) {
-      toast.error(`Probe failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const drillIn = (n: NodeView) => {
-    selectNode(n.id);
-    toast.info(`Scope → ${n.name}. Console pages now target this node.`);
-    navigate("/");
-  };
+  const rows = nodes.data?.servers ?? [];
+  const suggestions = detected.data?.source_ips ?? [];
 
   return (
     <>
       <div className={s.toolbar}>
-        <span className="hud-label">
-          {rows.length} node{rows.length === 1 ? "" : "s"} ·{" "}
-          {rows.filter((n) => n.online).length} online
-        </span>
+        <span className="hud-label">{rows.length} nodes</span>
         <div className={s.spacer} />
         <Button size="sm" variant="ghost" onClick={() => nodes.refetch()}>
           <IconRefresh /> Refresh
         </Button>
-        <Button variant="primary" onClick={openNew}>
+        <Button variant="primary" onClick={() => setShowNew(true)}>
           <IconPlus /> Add Node
         </Button>
       </div>
 
-      <Panel title="Node Inventory" flush live>
+      <Panel title="Origination Nodes (source IP + number pool)" flush>
         {nodes.loading && !nodes.data ? (
           <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
             <Spinner />
           </div>
         ) : rows.length === 0 ? (
           <EmptyState
-            mark="○"
-            title="No nodes registered"
-            hint="Register a GenCall worker so the controller can drive and aggregate it."
+            title="No nodes yet"
+            hint="Add a source IP and pick its origin + drop sale zones. Its numbers are generated here, then pick the node on the New Loop form. One loop runs per IP."
             action={
-              <Button variant="primary" size="sm" onClick={openNew}>
+              <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>
                 Add node
               </Button>
             }
@@ -188,188 +153,139 @@ export function Nodes() {
             <table className={ui.table}>
               <thead>
                 <tr>
-                  <th>Node</th>
-                  <th>Address</th>
-                  <th>Group</th>
-                  <th>Version</th>
-                  <th className={ui.numCell}>Tests</th>
-                  <th>Last seen</th>
-                  <th>Status</th>
-                  <th style={{ textAlign: "right" }}>Control</th>
+                  <th>Name</th>
+                  <th>Source IP</th>
+                  <th>Origin → Drop zone</th>
+                  <th className={ui.numCell}>Pool</th>
+                  <th>Added</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((n) => {
-                  const tone = !n.enabled ? "muted" : n.online ? "signal" : "crit";
-                  const label = !n.enabled ? "disabled" : n.online ? "online" : "offline";
-                  return (
-                    <tr key={n.id}>
-                      <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>{n.name}</td>
-                      <td style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                        {n.address}
-                      </td>
-                      <td style={{ color: "var(--text-muted)" }}>{n.group_name ?? "—"}</td>
-                      <td style={{ color: "var(--text-muted)" }}>{n.version ?? "—"}</td>
-                      <td className={ui.numCell}>{n.active_tests}</td>
-                      <td style={{ color: "var(--text-muted)" }} title={n.error || undefined}>
-                        {ago(n.last_seen)}
-                      </td>
-                      <td>
-                        <Badge tone={tone} pulse={n.online && n.active_tests > 0}>
-                          {label}
-                        </Badge>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon
-                            title="Drill in (set node scope)"
-                            onClick={() => drillIn(n)}
-                          >
-                            <IconBolt />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon
-                            title="Health probe"
-                            disabled={busyId === n.id}
-                            onClick={() => check(n)}
-                          >
-                            <IconRefresh />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon
-                            title="Edit"
-                            onClick={() => openEdit(n)}
-                          >
-                            <IconSliders />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            icon
-                            title="Remove"
-                            onClick={() => setConfirmDelete(n)}
-                          >
-                            <IconTrash />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {rows.map((n) => (
+                  <tr key={n.id}>
+                    <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>{n.name}</td>
+                    <td style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
+                      {n.ip}
+                    </td>
+                    <td style={{ color: "var(--text-muted)" }}>
+                      {n.has_pool ? (
+                        <>{n.origin_zone} <span style={{ color: "var(--text-faint)" }}>→</span> {n.dest_zone}</>
+                      ) : (
+                        <span style={{ color: "var(--text-faint)" }}>— no pool —</span>
+                      )}
+                    </td>
+                    <td className={ui.numCell}>
+                      {n.has_pool ? (
+                        <Badge tone="signal">{int(n.pool_count)}</Badge>
+                      ) : (
+                        <Badge tone="muted">none</Badge>
+                      )}
+                    </td>
+                    <td style={{ color: "var(--text-muted)" }}>{ago(n.created_at)}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Regenerate numbers"
+                        disabled={!n.has_pool || regenId === n.id}
+                        onClick={() => regen(n.id, n.name)}
+                      >
+                        <IconRefresh /> {regenId === n.id ? "…" : "Regen"}
+                      </Button>
+                      <Button size="sm" variant="ghost" icon title="Delete" onClick={() => del(n.id, n.name)}>
+                        <IconTrash />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </Panel>
 
-      {/* ---- Add / edit node modal ---- */}
       <Modal
-        open={showForm}
-        title={editing ? <>Edit Node · {editing.name}</> : <><IconPlus /> Add Node</>}
-        onClose={() => setShowForm(false)}
+        open={showNew}
+        title={<><IconPlug /> Add Node</>}
+        onClose={() => { setShowNew(false); setForm(BLANK); }}
         footer={
           <ModalActions
-            onCancel={() => setShowForm(false)}
-            onConfirm={save}
-            confirmLabel={editing ? "Save" : "Add node"}
+            onCancel={() => { setShowNew(false); setForm(BLANK); }}
+            onConfirm={create}
+            confirmLabel={busy ? "Generating…" : "Add & generate"}
+            disabled={busy}
           />
         }
       >
         <FieldRow>
           <Field label="Name">
-            <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="ny-gen-05" />
+            <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="vandorial-1" />
           </Field>
-          <Field label="Group">
-            <GroupSelect
-              groups={groupList}
-              value={form.group_id}
-              onChange={(v) => set("group_id", v)}
+          <Field label="Source IP" hint={suggestions.length ? "Or pick below." : "NIC address to bind."}>
+            <input value={form.ip} onChange={(e) => set("ip", e.target.value)} placeholder="10.20.8.11" />
+          </Field>
+        </FieldRow>
+        {suggestions.length > 0 && (
+          <Field label="Detected on this box" hint="Click to use.">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+              {suggestions.map((ip) => (
+                <Button key={ip} size="sm" variant="ghost" onClick={() => set("ip", ip)}>
+                  {ip}
+                </Button>
+              ))}
+            </div>
+          </Field>
+        )}
+
+        <div className={s.formSection}>Numbers (drop zones)</div>
+        <FieldRow>
+          <Field label="Origin country">
+            <select
+              value={form.originCountry}
+              onChange={(e) => setForm((f) => ({ ...f, originCountry: e.target.value, originZone: "" }))}
+            >
+              <option value="">{zoneTree.loading ? "Loading…" : "Select country"}</option>
+              {countries.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Origin sale zone (A)">
+            <select value={form.originZone} disabled={!form.originCountry} onChange={(e) => set("originZone", e.target.value)}>
+              <option value="">Select zone</option>
+              {zonesFor(form.originCountry).map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </Field>
+        </FieldRow>
+        <FieldRow>
+          <Field label="Drop country">
+            <select
+              value={form.destCountry}
+              onChange={(e) => setForm((f) => ({ ...f, destCountry: e.target.value, destZone: "" }))}
+            >
+              <option value="">{zoneTree.loading ? "Loading…" : "Select country"}</option>
+              {countries.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Drop sale zone (B)">
+            <select value={form.destZone} disabled={!form.destCountry} onChange={(e) => set("destZone", e.target.value)}>
+              <option value="">Select zone</option>
+              {zonesFor(form.destCountry).map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </Field>
+          <Field label="How many" hint="Random draw pool (max 2,000,000).">
+            <input
+              type="number"
+              min={1}
+              max={2000000}
+              value={form.count}
+              onChange={(e) => set("count", Number(e.target.value) || 0)}
             />
           </Field>
         </FieldRow>
-        <Field label="Address" hint="Worker base URL, e.g. https://10.20.1.15:8080">
-          <input
-            value={form.address}
-            onChange={(e) => set("address", e.target.value)}
-            placeholder="https://10.20.1.15:8080"
-          />
+        <Field label="Description" hint="Optional.">
+          <input value={form.description} onChange={(e) => set("description", e.target.value)} />
         </Field>
-        <Field
-          label="API key"
-          hint={editing ? "Leave blank to keep the current key." : "The worker's X-API-Key."}
-        >
-          <input
-            type="password"
-            value={form.api_key}
-            onChange={(e) => set("api_key", e.target.value)}
-            placeholder={editing ? "•••••••• (unchanged)" : "nodekey-…"}
-            autoComplete="off"
-          />
-        </Field>
-        <Field label="Enabled" hint="Disabled nodes are not polled or dispatched to.">
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text)" }}>
-            <input
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(e) => set("enabled", e.target.checked)}
-              style={{ accentColor: "var(--signal)" }}
-            />
-            Poll & dispatch to this node
-          </label>
-        </Field>
-      </Modal>
-
-      {/* ---- Delete confirm ---- */}
-      <Modal
-        open={confirmDelete !== null}
-        title="Remove Node"
-        onClose={() => setConfirmDelete(null)}
-        footer={
-          <ModalActions
-            onCancel={() => setConfirmDelete(null)}
-            onConfirm={remove}
-            confirmLabel="Remove"
-            danger
-          />
-        }
-      >
-        <p style={{ color: "var(--text)" }}>
-          Remove <strong style={{ color: "var(--text-bright)" }}>{confirmDelete?.name}</strong> from
-          the inventory? Running tests on the node are not stopped — only the controller's record is
-          deleted.
-        </p>
       </Modal>
     </>
-  );
-}
-
-function GroupSelect({
-  groups,
-  value,
-  onChange,
-}: {
-  groups: GroupView[];
-  value: number | null;
-  onChange: (v: number | null) => void;
-}) {
-  return (
-    <select
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
-    >
-      <option value="">— ungrouped —</option>
-      {groups.map((g) => (
-        <option key={g.id} value={g.id}>
-          {g.name}
-        </option>
-      ))}
-    </select>
   );
 }
