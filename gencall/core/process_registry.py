@@ -50,7 +50,7 @@ def cmdline_hash(cmd):
 
 
 def _now_iso():
-    return datetime.datetime.now(datetime.UTC).isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _default_fallback_path():

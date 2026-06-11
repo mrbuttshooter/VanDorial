@@ -80,7 +80,7 @@ _TRANSPORT_MAP = {
 
 
 def _now_iso():
-    return datetime.datetime.now(datetime.UTC).isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _new_campaign_id():

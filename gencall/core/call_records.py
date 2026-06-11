@@ -41,7 +41,7 @@ MIN_POLL_INTERVAL_S = 1.0
 
 
 def _now_iso():
-    return datetime.datetime.now(datetime.UTC).isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def ip_in_whitelist(source_ip, whitelist):

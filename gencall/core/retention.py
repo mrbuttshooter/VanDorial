@@ -48,7 +48,7 @@ DEFAULT_INTERVAL_HOURS = 24
 
 
 def _now():
-    return datetime.datetime.now(datetime.UTC)
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _now_epoch():

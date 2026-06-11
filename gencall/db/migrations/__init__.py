@@ -152,4 +152,4 @@ def apply_migrations(engine):
 def _now_iso():
     import datetime
 
-    return datetime.datetime.now(datetime.UTC).isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()

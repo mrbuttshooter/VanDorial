@@ -52,7 +52,7 @@ _HIST_EDGES_MS = [0, 100, 250, 500, 750, 1000, 1500, 2000]
 
 
 def _now_iso():
-    return datetime.datetime.now(datetime.UTC).isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _suffix_len(match_key):
