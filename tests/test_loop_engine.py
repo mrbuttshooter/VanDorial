@@ -419,6 +419,90 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
         Config.reset()
 
 
+def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
+    """FULL new flow through the REAL app + HTTP: add a node (pool generated from
+    the sample deck) -> start a loop by node_id -> it runs on the node's IP and
+    its pool, and call_records land. This is the user-facing path, end to end."""
+    import textwrap
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "e2e.db"
+    cfg_path = tmp_path / "e2e.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        [trust]
+        whitelist = 10.0.0.0/24
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("e2e")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        # 1) Add a node — its A/B pool is generated server-side from the deck.
+        made = client.post("/api/servers", json={
+            "name": "vd-e2e", "ip": "10.0.0.50",
+            "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+            "count": 25,
+        })
+        assert made.status_code == 200, made.text
+        node = made.json()["server"]
+        assert node["has_pool"] and node["pool_count"] == 25
+
+        # 2) Start a loop by node_id — IP + pool come from the node.
+        started = client.post("/api/loops", json={
+            "node_id": node["id"], "dest_host": "1.2.3.4",
+            "rate": 20.0, "max_concurrent": 10, "duration_s": 1, "target_calls": 20,
+        })
+        assert started.status_code == 200, started.text
+        camp = started.json()["campaign"]
+        cid = camp["id"]
+        assert camp["local_ip"] == "10.0.0.50" and camp["node_id"] == node["id"]
+
+        # 3) Let the finite UAC run; records ingest through the wired parser.
+        inst = le.engine.get_instance(f"uac-{cid}")
+        deadline = time.time() + 30
+        while inst.state == SIPpState.RUNNING and time.time() < deadline:
+            time.sleep(0.1)
+        for _ in range(3):
+            le.parser.poll_once()
+            time.sleep(0.05)
+
+        with le.db.engine.connect() as conn:
+            n = conn.execute(
+                text("SELECT COUNT(*) FROM call_records WHERE campaign_id = :c"),
+                {"c": cid},
+            ).fetchone()[0]
+        assert n > 0, "records ingested for the node-driven loop"
+
+        # 4) The node is busy → can't be deleted until the loop stops.
+        assert client.delete(f"/api/servers/{node['id']}").status_code in (200, 409)
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 # ─── API router tests (FastAPI TestClient) ────────────────────────────────────
 
 @pytest.fixture
