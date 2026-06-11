@@ -83,8 +83,8 @@ src/
 All color, type, spacing, and effect values live as CSS custom properties in
 `src/styles/tokens.css`. Color is strictly semantic: ember `--signal` for
 live/hot traffic, `--ok` green for healthy, `--amber` caution, `--crit` alarm,
-`--cyan` info. Fonts: **Big Shoulders Display** (stamped headings, readouts) +
-**Spline Sans Mono** (data). Charts are hand-rolled on `<canvas>` (DPR-correct,
+`--cyan` info. Fonts: **Archivo** (headings, readouts) + **IBM Plex Mono**
+(data). Charts are hand-rolled on `<canvas>` (DPR-correct,
 no chart lib) for full control of the lamp glow and real-time performance.
 
 ## Known gaps / next steps

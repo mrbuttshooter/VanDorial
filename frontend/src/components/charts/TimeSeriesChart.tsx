@@ -76,7 +76,7 @@ export function TimeSeriesChart({ series, height = 240, format = String, formatR
     ctx.lineWidth = 1;
     ctx.strokeStyle = grid;
     ctx.fillStyle = textCol;
-    ctx.font = '10px "Spline Sans Mono", monospace';
+    ctx.font = '10px "IBM Plex Mono", monospace';
     const rows = 4;
     for (let r = 0; r <= rows; r++) {
       const y = padT + (r / rows) * plotH;

@@ -59,14 +59,14 @@ export function RadialGauge({ value, size = 132, label, good = 95, warn = 85 }: 
     // readout
     ctx.fillStyle = css("--text-bright");
     ctx.textAlign = "center";
-    ctx.font = '800 30px "Big Shoulders Display", sans-serif';
+    ctx.font = '700 24px "Archivo", sans-serif';
     ctx.fillText(v.toFixed(1), cx, cy + 8);
     ctx.fillStyle = css("--text-muted");
-    ctx.font = '10px "Spline Sans Mono", monospace';
+    ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.fillText("%", cx, cy + 24);
     if (label) {
       ctx.fillStyle = css("--text-faint");
-      ctx.font = '9px "Spline Sans Mono", monospace';
+      ctx.font = '9px "IBM Plex Mono", monospace';
       ctx.fillText(label.toUpperCase(), cx, cy - 26);
     }
   }, [value, size, label, good, warn]);

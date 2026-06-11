@@ -149,6 +149,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  min-width: 0;
 }
 .crumbTitle {
   font-family: var(--font-display);
@@ -161,6 +162,9 @@
 .crumbSub {
   font-size: var(--fs-xs);
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topMeters {
   display: flex;
@@ -191,6 +195,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   font-size: var(--fs-2xs);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;

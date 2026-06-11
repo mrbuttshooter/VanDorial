@@ -42,8 +42,8 @@
   --text-faint: #514f46;       /* disabled, decorative                        */
 
   /* ---- Type -------------------------------------------------------------- */
-  --font-display: "Big Shoulders Display", "Arial Narrow", sans-serif; /* stencil readouts */
-  --font-mono: "Spline Sans Mono", "Cascadia Code", monospace;         /* data / body      */
+  --font-display: "Archivo", "Segoe UI", sans-serif;        /* headings, readouts */
+  --font-mono: "IBM Plex Mono", "Cascadia Code", monospace; /* data / body        */
 
   --fs-2xs: 10px;
   --fs-xs: 11px;
@@ -52,7 +52,7 @@
   --fs-lg: 15px;
   --fs-xl: 18px;
   --fs-2xl: 26px;
-  --fs-readout: 46px;          /* big instrument numbers                      */
+  --fs-readout: 38px;          /* big instrument numbers                      */
 
   --tracking-wide: 0.12em;
   --tracking-hud: 0.24em;      /* uppercase stamped labels                    */
