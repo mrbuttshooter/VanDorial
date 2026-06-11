@@ -122,6 +122,53 @@ class Config:
         return self.getbool("web", "ssl", False)
 
     @property
+    def serve_console(self):
+        """Whether this process serves the web console + live-stats WebSocket.
+
+        Default True. Set [web] serve_console = false on FLEET WORKER boxes so
+        they run headless (REST API + loop engine only) — the single controller
+        GUI is the one pane of glass, and a worker skipping the console/WS
+        broadcaster shaves idle CPU/RAM on the box.
+        """
+        import os
+        if os.environ.get("GENCALL_HEADLESS"):
+            return False
+        return self.getbool("web", "serve_console", True)
+
+    # --- Fleet (multi-box control plane over the VLAN) ---
+    @property
+    def fleet_announce(self):
+        """Worker: broadcast a UDP discovery beacon on the VLAN so a controller
+        can auto-register this box. Off by default (opt-in)."""
+        return self.getbool("fleet", "announce", False)
+
+    @property
+    def fleet_discovery(self):
+        """Controller: listen for worker beacons and auto-register them."""
+        return self.getbool("fleet", "discovery", False)
+
+    @property
+    def fleet_token(self):
+        """Shared secret carried in beacons AND used as the api_key the controller
+        presents to auto-discovered workers. Same value on every box in the VLAN.
+        A beacon whose token does not match is ignored (private-VLAN trust)."""
+        return self.get("fleet", "token", "")
+
+    @property
+    def fleet_beacon_port(self):
+        return self.getint("fleet", "beacon_port", 45790)
+
+    @property
+    def fleet_beacon_interval(self):
+        return self.getint("fleet", "beacon_interval", 10)
+
+    @property
+    def fleet_node_address(self):
+        """The base URL a worker advertises to controllers (e.g.
+        http://10.20.8.11:8080). Empty => derived from web_host/web_port."""
+        return self.get("fleet", "node_address", "")
+
+    @property
     def ssl_cert(self):
         return self.get("web", "ssl_cert", "")
 

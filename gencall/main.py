@@ -6,6 +6,7 @@ Wires everything together and starts the web server.
 import argparse
 import asyncio
 import logging
+import socket
 import sys
 import os
 import tempfile
@@ -44,6 +45,25 @@ CONSOLE_MISSING_HTML = (
     "&middot; docs at <a style='color:#00e6a7' href='/docs'>/docs</a>.</p>"
     "</body>"
 )
+
+
+def _derive_node_address(config) -> str:
+    """Best-effort base URL a worker advertises in its discovery beacon.
+
+    Uses [web] host when it is a concrete IP; when it is 0.0.0.0/empty, probes
+    the primary outbound IP (no traffic actually sent) so the controller gets a
+    routable address rather than 0.0.0.0."""
+    host = config.web_host
+    if not host or host in ("0.0.0.0", "::"):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))  # no packets sent; just picks the route
+            host = s.getsockname()[0]
+            s.close()
+        except OSError:
+            host = socket.gethostbyname(socket.gethostname())
+    scheme = "https" if config.web_ssl else "http"
+    return f"{scheme}://{host}:{config.web_port}"
 
 
 def create_app(config_path: str = None):
@@ -206,8 +226,11 @@ def create_app(config_path: str = None):
 
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.
-    app.include_router(websocket.router)
-    stats_engine.add_listener(websocket.on_stats_update)
+    # Headless fleet workers skip this — the controller pulls /api/stats over the
+    # VLAN on a timer (aggregator), so no per-worker broadcast loop is needed.
+    if config.serve_console:
+        app.include_router(websocket.router)
+        stats_engine.add_listener(websocket.on_stats_update)
 
     @asynccontextmanager
     async def _lifespan(_app):
@@ -244,12 +267,50 @@ def create_app(config_path: str = None):
                 sipp_engine.stop_all()
             except Exception as e:
                 logger.warning("Error during shutdown stop_all: %s", e)
+            b = getattr(_app.state, "fleet_broadcaster", None)
+            if b is not None:
+                try:
+                    b.stop()
+                except Exception as e:
+                    logger.warning("Error stopping fleet beacon: %s", e)
 
     app.router.lifespan_context = _lifespan
 
+    # ── Fleet discovery beacon (opt-in: [fleet] announce = true) ─────────────
+    # A worker broadcasts its address on the VLAN so a controller running with
+    # [fleet] discovery = true auto-registers it. Trust = the shared fleet token.
+    if config.fleet_announce:
+        from gencall.core.discovery import BeaconBroadcaster
+
+        node_addr = config.fleet_node_address or _derive_node_address(config)
+        broadcaster = BeaconBroadcaster(
+            config.fleet_token, node_addr,
+            port=config.fleet_beacon_port,
+            interval=config.fleet_beacon_interval,
+            hostname=socket.gethostname(),
+            version="2.0",
+        )
+        broadcaster.start()
+        app.state.fleet_broadcaster = broadcaster
+
     # ── Web UI ──────────────────────────────────────────────────────────────
-    # The NOC console SPA (frontend/, built into web/console/) is the only UI.
-    if os.path.isdir(CONSOLE_DIR):
+    # The NOC console SPA (frontend/, built into web/console/). On a FLEET WORKER
+    # ([web] serve_console = false) we skip the console + live-stats WebSocket
+    # entirely so the box runs headless (REST API + loop engine only) — the
+    # single controller GUI is the one pane of glass. See config.serve_console.
+    if not config.serve_console:
+        logger.info("Headless mode: console + WS disabled (fleet worker)")
+
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def _headless_root():
+            return (
+                "<!doctype html><meta charset='utf-8'><title>GenCall worker</title>"
+                "<body style='font:14px system-ui;padding:2rem'>"
+                "<h3>GenCall fleet worker (headless)</h3>"
+                "<p>This box runs the REST API + loop engine only. Manage it from "
+                "the controller console.</p></body>"
+            )
+    elif os.path.isdir(CONSOLE_DIR):
         app.mount("/console", StaticFiles(directory=CONSOLE_DIR, html=True), name="console")
 
         @app.get("/", include_in_schema=False)
@@ -292,8 +353,15 @@ def main():
         help="Run-mode: 'worker' (default, single-node GenCall server) or "
              "'controller' (VanDorial fleet control-plane).",
     )
+    parser.add_argument(
+        "--headless", action="store_true",
+        help="Fleet worker: run REST API + loop engine only (no web console / "
+             "live-stats WebSocket) to save CPU. Same as [web] serve_console=false.",
+    )
 
     args = parser.parse_args()
+    if args.headless:
+        os.environ["GENCALL_HEADLESS"] = "1"
 
     # Single-process guard (design §4.5): GenCall keeps all running-test and
     # managed-PID state in module-global / in-process structures, which are NOT

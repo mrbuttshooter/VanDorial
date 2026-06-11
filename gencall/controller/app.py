@@ -141,14 +141,36 @@ def create_controller_app(config: Config = None):
     app.include_router(controller_routes.router)
     app.include_router(controller_ws.router)
 
+    # ── Fleet discovery listener (opt-in: [fleet] discovery = true) ──────────
+    # Auto-register workers that broadcast a beacon on the VLAN. The shared fleet
+    # token both filters foreign beacons and becomes the api_key the controller
+    # uses to command the discovered worker.
+    discovery_listener = None
+    if config.fleet_discovery:
+        from gencall.core.discovery import BeaconListener, upsert_discovered_node
+
+        def _on_beacon(info):
+            try:
+                upsert_discovered_node(db, info, config.fleet_token)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Could not register discovered node %s: %s",
+                               info.get("address"), e)
+
+        discovery_listener = BeaconListener(
+            _on_beacon, port=config.fleet_beacon_port, token=config.fleet_token)
+
     @app.on_event("startup")
     async def _on_startup() -> None:
         controller_ws.set_event_loop(asyncio.get_running_loop())
         aggregator.start()
+        if discovery_listener is not None:
+            discovery_listener.start()
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:
         aggregator.stop()
+        if discovery_listener is not None:
+            discovery_listener.stop()
 
     # ── Console static mount + root redirect (mirror worker main.py) ────────
     if os.path.isdir(CONSOLE_DIR):
