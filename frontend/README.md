@@ -1,8 +1,9 @@
 # GenCall NOC Console
 
 The web control surface for GenCall v2.0 — a SIP/VoIP traffic generator. This
-is a Vite + React + TypeScript single-page app with a "phosphor control-room"
-aesthetic, replacing the previous monolithic `gencall/web/dashboard.py`
+is a Vite + React + TypeScript single-page app with a "tungsten exchange"
+aesthetic — ink-graphite plates, warm ivory type, one ember-orange lamp for
+everything live — replacing the previous monolithic `gencall/web/dashboard.py`
 (1,465 lines of inline HTML/CSS/JS).
 
 ## Why this exists
@@ -80,9 +81,11 @@ src/
 ### Design system
 
 All color, type, spacing, and effect values live as CSS custom properties in
-`src/styles/tokens.css`. Fonts: **Chakra Petch** (HUD headings) + **IBM Plex
-Mono** (data). Charts are hand-rolled on `<canvas>` (DPR-correct, no chart lib)
-for full control of the phosphor look and real-time performance.
+`src/styles/tokens.css`. Color is strictly semantic: ember `--signal` for
+live/hot traffic, `--ok` green for healthy, `--amber` caution, `--crit` alarm,
+`--cyan` info. Fonts: **Big Shoulders Display** (stamped headings, readouts) +
+**Spline Sans Mono** (data). Charts are hand-rolled on `<canvas>` (DPR-correct,
+no chart lib) for full control of the lamp glow and real-time performance.
 
 ## Known gaps / next steps
 

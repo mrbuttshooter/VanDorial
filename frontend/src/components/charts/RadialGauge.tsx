@@ -35,7 +35,7 @@ export function RadialGauge({ value, size = 132, label, good = 95, warn = 85 }: 
 
     const css = (name: string) =>
       getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    const color = v >= good ? css("--signal") : v >= warn ? css("--amber") : css("--crit");
+    const color = v >= good ? css("--ok") : v >= warn ? css("--amber") : css("--crit");
 
     // track
     ctx.beginPath();
@@ -59,15 +59,15 @@ export function RadialGauge({ value, size = 132, label, good = 95, warn = 85 }: 
     // readout
     ctx.fillStyle = css("--text-bright");
     ctx.textAlign = "center";
-    ctx.font = '700 26px "Chakra Petch", sans-serif';
-    ctx.fillText(v.toFixed(1), cx, cy + 4);
+    ctx.font = '800 30px "Big Shoulders Display", sans-serif';
+    ctx.fillText(v.toFixed(1), cx, cy + 8);
     ctx.fillStyle = css("--text-muted");
-    ctx.font = '10px "IBM Plex Mono", monospace';
-    ctx.fillText("%", cx, cy + 20);
+    ctx.font = '10px "Spline Sans Mono", monospace';
+    ctx.fillText("%", cx, cy + 24);
     if (label) {
       ctx.fillStyle = css("--text-faint");
-      ctx.font = '9px "IBM Plex Mono", monospace';
-      ctx.fillText(label.toUpperCase(), cx, cy - 18);
+      ctx.font = '9px "Spline Sans Mono", monospace';
+      ctx.fillText(label.toUpperCase(), cx, cy - 26);
     }
   }, [value, size, label, good, warn]);
 

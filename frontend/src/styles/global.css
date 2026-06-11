@@ -31,9 +31,10 @@ body {
   overflow: hidden; /* app owns its own scroll regions */
 }
 
-/* ---- Atmosphere: layered phosphor-CRT backdrop --------------------------
-   1. graph-paper grid    2. vignette    3. faint scanlines    4. grain
-   All fixed + pointer-events:none so they never interfere.                  */
+/* ---- Atmosphere: switchboard plate ---------------------------------------
+   1. perforated dot-matrix (the plate)   2. tungsten lamp glow, top center
+   3. cool vignette pooling at the bottom edges
+   Fixed + pointer-events:none so they never interfere.                       */
 body::before {
   content: "";
   position: fixed;
@@ -41,27 +42,31 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(var(--grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
-    radial-gradient(120% 90% at 50% -10%, rgba(54, 249, 168, 0.05), transparent 55%),
-    radial-gradient(140% 120% at 50% 110%, rgba(0, 0, 0, 0.55), transparent 60%);
-  background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
+    radial-gradient(var(--grid-line) 1px, transparent 1.4px),
+    radial-gradient(90% 55% at 50% -12%, rgba(255, 122, 41, 0.055), transparent 60%),
+    radial-gradient(130% 110% at 50% 115%, rgba(0, 0, 0, 0.6), transparent 58%);
+  background-size: 22px 22px, 100% 100%, 100% 100%;
 }
 
+/* Hairline "engraving" sweep across the very top of the viewport. */
 body::after {
   content: "";
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
   z-index: 9999;
   pointer-events: none;
-  opacity: 0.5;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0) 0px,
-    rgba(0, 0, 0, 0) 2px,
-    rgba(0, 0, 0, 0.16) 3px
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--signal-dim) 18%,
+    var(--signal) 50%,
+    var(--signal-dim) 82%,
+    transparent 100%
   );
-  mix-blend-mode: multiply;
+  opacity: 0.55;
 }
 
 /* ---- Typographic primitives --------------------------------------------- */
@@ -69,7 +74,7 @@ h1, h2, h3, h4 {
   font-family: var(--font-display);
   font-weight: 600;
   color: var(--text-bright);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
 }
 
 a {
@@ -128,7 +133,7 @@ kbd {
 }
 
 ::selection {
-  background: var(--signal-dim);
+  background: var(--signal);
   color: var(--bg-void);
 }
 
@@ -163,7 +168,7 @@ kbd {
 
 .mono-num {
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.01em;
 }
 
 .glow {
@@ -199,5 +204,4 @@ kbd {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
-  body::after { display: none; }
 }

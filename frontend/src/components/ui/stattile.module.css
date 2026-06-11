@@ -1,3 +1,4 @@
+/* Primary readout tile: stamped label, towering condensed numeral, lamp rail. */
 .tile {
   position: relative;
   background: var(--bg-panel);
@@ -12,10 +13,10 @@
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
-  width: 2px;
+  width: 3px;
   background: var(--tile-accent);
   box-shadow: 0 0 12px var(--tile-accent);
-  opacity: 0.8;
+  opacity: 0.85;
 }
 .tile:hover {
   border-color: color-mix(in srgb, var(--tile-accent) 40%, var(--line));
@@ -51,10 +52,10 @@
 .value {
   font-family: var(--font-display);
   font-size: var(--fs-readout);
-  font-weight: 700;
-  line-height: 1;
+  font-weight: 800;
+  line-height: 0.95;
   color: var(--text-bright);
-  text-shadow: 0 0 22px color-mix(in srgb, var(--tile-accent) 55%, transparent);
+  text-shadow: 0 0 24px color-mix(in srgb, var(--tile-accent) 45%, transparent);
 }
 .unit {
   font-size: var(--fs-sm);

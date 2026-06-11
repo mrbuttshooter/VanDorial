@@ -1,8 +1,9 @@
 /* ============================================================================
    Shared UI primitives — buttons, panels, badges, tables, modals, toasts.
+   "Tungsten Exchange": engraved plates, stamped labels, one ember lamp.
    ============================================================================ */
 
-/* ---- Panel -------------------------------------------------------------- */
+/* ---- Panel (engraved plate) ---------------------------------------------- */
 .panel {
   position: relative;
   background: var(--bg-panel);
@@ -26,20 +27,18 @@
   align-items: center;
   gap: var(--space-2);
   font-family: var(--font-display);
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: 700;
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--text-bright);
 }
 .panelTitle::before {
   content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 1px;
+  width: 3px;
+  height: 14px;
   background: var(--signal);
   box-shadow: 0 0 8px var(--signal-glow);
-  transform: rotate(45deg);
 }
 .panelBody {
   padding: var(--space-4);
@@ -48,15 +47,15 @@
   padding: 0;
 }
 
-/* ---- Button ------------------------------------------------------------- */
+/* ---- Button (stencil controls) ------------------------------------------- */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
   font-family: var(--font-display);
-  font-size: var(--fs-xs);
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: 700;
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   padding: var(--space-2) var(--space-4);
@@ -84,23 +83,27 @@
   outline: 2px solid var(--signal-dim);
   outline-offset: 2px;
 }
+/* Primary = the lamp itself: solid ember, ink text. */
 .btn_primary {
-  background: linear-gradient(180deg, rgba(54, 249, 168, 0.18), rgba(54, 249, 168, 0.06));
-  border-color: var(--signal-dim);
-  color: var(--signal);
-  text-shadow: 0 0 12px var(--signal-glow);
+  background: linear-gradient(180deg, #ff8a42, var(--signal) 55%, #e85f12);
+  border-color: #ff9043;
+  color: #1a0d04;
+  text-shadow: none;
+  box-shadow: 0 0 18px -6px var(--signal-glow), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 .btn_primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, rgba(54, 249, 168, 0.28), rgba(54, 249, 168, 0.1));
-  border-color: var(--signal);
+  background: linear-gradient(180deg, #ffa05f, #ff882f 55%, #f06a18);
+  border-color: #ffa45c;
+  color: #1a0d04;
+  box-shadow: 0 0 26px -6px var(--signal-glow), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 .btn_danger {
   color: var(--crit);
-  border-color: rgba(255, 84, 112, 0.4);
-  background: rgba(255, 84, 112, 0.06);
+  border-color: color-mix(in srgb, var(--crit) 40%, transparent);
+  background: color-mix(in srgb, var(--crit) 7%, transparent);
 }
 .btn_danger:hover:not(:disabled) {
-  background: rgba(255, 84, 112, 0.14);
+  background: color-mix(in srgb, var(--crit) 16%, transparent);
   border-color: var(--crit);
   color: #fff;
 }
@@ -114,13 +117,13 @@
 }
 .btn_sm {
   padding: 3px var(--space-2);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-xs);
 }
 .btn_icon {
   padding: var(--space-2);
 }
 
-/* ---- Badge / status dot ------------------------------------------------- */
+/* ---- Badge / status dot --------------------------------------------------- */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -130,9 +133,9 @@
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   padding: 2px 8px;
-  border-radius: 99px;
-  border: 1px solid currentColor;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .dot {
   width: 7px;
@@ -146,7 +149,7 @@
   animation: pulse-dot 1.6s var(--ease-snap) infinite;
 }
 
-/* ---- Field -------------------------------------------------------------- */
+/* ---- Field ----------------------------------------------------------------- */
 .field {
   display: flex;
   flex-direction: column;
@@ -162,7 +165,7 @@
   margin-top: var(--space-1);
 }
 
-/* ---- Table -------------------------------------------------------------- */
+/* ---- Table ------------------------------------------------------------------ */
 .tableWrap {
   overflow: auto;
 }
@@ -177,8 +180,8 @@
   z-index: 1;
   text-align: left;
   font-family: var(--font-display);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-size: var(--fs-xs);
+  font-weight: 700;
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--text-muted);
@@ -197,7 +200,7 @@
   transition: background 0.12s var(--ease);
 }
 .table tbody tr:hover {
-  background: rgba(54, 249, 168, 0.04);
+  background: color-mix(in srgb, var(--signal) 4%, transparent);
 }
 .table tbody tr:last-child td {
   border-bottom: none;
@@ -236,12 +239,12 @@
   to { transform: rotate(360deg); }
 }
 
-/* ---- Modal -------------------------------------------------------------- */
+/* ---- Modal (pulled plate) -------------------------------------------------- */
 .scrim {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(2, 5, 7, 0.72);
+  background: rgba(4, 5, 8, 0.74);
   backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-start;
@@ -253,9 +256,10 @@
   width: 100%;
   max-width: 560px;
   background: var(--bg-panel-2);
-  border: 1px solid var(--line-phosphor);
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--signal);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-pop), 0 -8px 32px -16px var(--signal-glow);
   animation: rise 0.22s var(--ease);
   max-height: 84vh;
   display: flex;
@@ -293,7 +297,7 @@
   background: var(--bg-hover);
 }
 
-/* ---- Toast -------------------------------------------------------------- */
+/* ---- Toast ------------------------------------------------------------------ */
 .toastWrap {
   position: fixed;
   bottom: var(--space-5);
@@ -327,11 +331,11 @@
   color: var(--text);
   padding: 2px 0;
 }
-.toast_ok .toastBar { background: var(--signal); }
-.toast_ok { border-color: var(--signal-dim); }
+.toast_ok .toastBar { background: var(--ok); }
+.toast_ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .toast_warn .toastBar { background: var(--amber); }
-.toast_warn { border-color: rgba(255, 180, 84, 0.4); }
+.toast_warn { border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
 .toast_error .toastBar { background: var(--crit); }
-.toast_error { border-color: rgba(255, 84, 112, 0.4); }
+.toast_error { border-color: color-mix(in srgb, var(--crit) 40%, transparent); }
 .toast_info .toastBar { background: var(--cyan); }
-.toast_info { border-color: rgba(56, 214, 255, 0.4); }
+.toast_info { border-color: color-mix(in srgb, var(--cyan) 40%, transparent); }

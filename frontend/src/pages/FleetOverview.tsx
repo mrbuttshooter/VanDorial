@@ -135,7 +135,7 @@ export function FleetOverview() {
             <dt>Concurrent calls</dt>
             <dd>{int(agg.current_calls)}</dd>
             <dt>Successful</dt>
-            <dd style={{ color: "var(--signal)" }}>{int(agg.successful_calls)}</dd>
+            <dd style={{ color: "var(--ok)" }}>{int(agg.successful_calls)}</dd>
             <dt>Failed</dt>
             <dd style={{ color: (agg.failed_calls ?? 0) > 0 ? "var(--crit)" : undefined }}>
               {int(agg.failed_calls)}

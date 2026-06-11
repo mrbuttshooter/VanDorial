@@ -19,7 +19,7 @@
   animation: flicker-in 0.18s var(--ease);
 }
 .line:hover {
-  background: rgba(54, 249, 168, 0.03);
+  background: color-mix(in srgb, var(--signal) 3%, transparent);
 }
 .ts {
   color: var(--text-faint);
@@ -37,7 +37,7 @@
   color: var(--text);
   word-break: break-word;
 }
-.l_INFO { color: var(--signal); }
+.l_INFO { color: var(--ok); }
 .l_DEBUG { color: var(--text-muted); }
 .l_WARN { color: var(--amber); }
 .l_ERROR { color: var(--crit); }

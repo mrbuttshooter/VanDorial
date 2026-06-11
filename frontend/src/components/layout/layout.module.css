@@ -1,5 +1,7 @@
 /* ============================================================================
    App shell: fixed sidebar + sticky topbar + scrolling content well.
+   Sidebar reads as the exchange's patch rail: flat ink, stamped group labels,
+   one lit lamp per active route.
    ============================================================================ */
 .shell {
   display: grid;
@@ -13,7 +15,7 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-base) 100%);
+  background: var(--bg-base);
   border-right: 1px solid var(--line);
   overflow-y: auto;
 }
@@ -35,7 +37,7 @@
   border-radius: var(--r-sm);
   color: var(--signal);
   box-shadow: 0 0 16px -4px var(--signal-glow), inset 0 0 12px -6px var(--signal-glow);
-  background: rgba(54, 249, 168, 0.05);
+  background: color-mix(in srgb, var(--signal) 6%, transparent);
 }
 .brandText {
   display: flex;
@@ -44,9 +46,9 @@
 }
 .brandName {
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: var(--fs-lg);
-  letter-spacing: 0.12em;
+  font-weight: 800;
+  font-size: var(--fs-xl);
+  letter-spacing: 0.14em;
   color: var(--text-bright);
 }
 .brandSub {
@@ -89,8 +91,12 @@
   background: var(--bg-hover);
 }
 .navLinkActive {
+  color: var(--text-bright);
+  background: color-mix(in srgb, var(--signal) 9%, transparent);
+}
+.navLinkActive svg {
   color: var(--signal);
-  background: rgba(54, 249, 168, 0.08);
+  opacity: 1;
 }
 .navLinkActive::before {
   content: "";
@@ -100,7 +106,6 @@
   transform: translateY(-50%);
   width: 3px;
   height: 16px;
-  border-radius: 2px;
   background: var(--signal);
   box-shadow: 0 0 8px var(--signal-glow);
 }
@@ -109,9 +114,9 @@
   font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--signal);
-  background: rgba(54, 249, 168, 0.1);
+  background: color-mix(in srgb, var(--signal) 12%, transparent);
   padding: 0 6px;
-  border-radius: 99px;
+  border-radius: var(--r-sm);
 }
 .sidebarFoot {
   margin-top: auto;
@@ -147,9 +152,9 @@
 }
 .crumbTitle {
   font-family: var(--font-display);
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.08em;
   color: var(--text-bright);
   text-transform: uppercase;
 }
@@ -171,8 +176,8 @@
 }
 .meterVal {
   font-family: var(--font-display);
-  font-weight: 600;
-  font-size: var(--fs-md);
+  font-weight: 700;
+  font-size: var(--fs-lg);
   color: var(--text-bright);
   font-variant-numeric: tabular-nums;
 }
@@ -192,7 +197,7 @@
   color: var(--text-muted);
   padding: 4px 10px;
   border: 1px solid var(--line);
-  border-radius: 99px;
+  border-radius: var(--r-sm);
 }
 
 .content {

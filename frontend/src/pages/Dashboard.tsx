@@ -122,7 +122,7 @@ export function Dashboard() {
               <dt>Total calls</dt>
               <dd>{int(latest?.total_calls)}</dd>
               <dt>Successful</dt>
-              <dd style={{ color: "var(--signal)" }}>{int(latest?.successful_calls)}</dd>
+              <dd style={{ color: "var(--ok)" }}>{int(latest?.successful_calls)}</dd>
               <dt>Failed</dt>
               <dd style={{ color: (latest?.failed_calls ?? 0) > 0 ? "var(--crit)" : undefined }}>
                 {int(latest?.failed_calls)}
@@ -191,7 +191,7 @@ export function Dashboard() {
                       className={uiStyles.numCell}
                       style={{
                         color:
-                          t.stats.success_rate >= 95 ? "var(--signal)" : "var(--amber)",
+                          t.stats.success_rate >= 95 ? "var(--ok)" : "var(--amber)",
                       }}
                     >
                       {pct(t.stats.success_rate)}

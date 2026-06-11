@@ -1,45 +1,49 @@
 /* ============================================================================
-   GENCALL NOC CONSOLE — DESIGN TOKENS
-   Aesthetic: phosphor control-room. Near-black substrate, signal-green traces,
-   amber/red alarm states, hairline grids. Everything reads like an instrument.
+   GENCALL CONSOLE — DESIGN TOKENS
+   Aesthetic: "Tungsten Exchange". A telecom switchboard rebuilt as software:
+   cool ink-graphite plates, warm ivory type, and a single ember-orange lamp
+   for everything live. Color is strictly semantic — orange burns for hot
+   traffic, yellow cautions, red alarms, blue archives. Condensed industrial
+   display type for readouts; characterful mono for data.
    ============================================================================ */
 
 :root {
-  /* ---- Substrate -------------------------------------------------------- */
-  --bg-void: #04070a;          /* deepest background, behind everything       */
-  --bg-base: #070b0f;          /* app background                              */
-  --bg-panel: #0b1217;         /* card / panel surface                        */
-  --bg-panel-2: #0f1820;       /* elevated surface (modals, headers)          */
-  --bg-inset: #060a0d;         /* sunken wells (tables, code)                 */
-  --bg-hover: #12202a;
+  /* ---- Substrate (cool ink plates) -------------------------------------- */
+  --bg-void: #08090c;          /* deepest background, behind everything       */
+  --bg-base: #0c0e13;          /* app background                              */
+  --bg-panel: #11141b;         /* card / panel surface                        */
+  --bg-panel-2: #161a23;       /* elevated surface (modals, headers)          */
+  --bg-inset: #090a0e;         /* sunken wells (tables, code)                 */
+  --bg-hover: #1a1f29;
 
   /* ---- Hairlines & structure ------------------------------------------- */
-  --line: #18262e;             /* default border                              */
-  --line-strong: #243640;
-  --line-phosphor: rgba(54, 249, 168, 0.16); /* glowing edge on live panels   */
-  --grid-line: rgba(54, 249, 168, 0.035);    /* background graph paper         */
+  --line: #20242e;             /* default border                              */
+  --line-strong: #303744;
+  --line-phosphor: rgba(255, 122, 41, 0.22); /* ember edge on live panels    */
+  --grid-line: rgba(146, 160, 186, 0.05);    /* perforated-plate dots        */
 
-  /* ---- Phosphor signal palette ----------------------------------------- */
-  --signal: #36f9a8;           /* primary — "on", healthy, live               */
-  --signal-dim: #1f9e6b;
-  --signal-glow: rgba(54, 249, 168, 0.55);
-  --cyan: #38d6ff;             /* secondary data series / info                */
-  --cyan-glow: rgba(56, 214, 255, 0.45);
-  --amber: #ffb454;            /* warning, ramp, caution                      */
-  --amber-glow: rgba(255, 180, 84, 0.45);
-  --crit: #ff5470;             /* critical, failed, alarm                     */
-  --crit-glow: rgba(255, 84, 112, 0.45);
-  --violet: #b58cff;           /* tertiary series                             */
+  /* ---- Lamp signal palette (semantic only) ------------------------------ */
+  --signal: #ff7a29;           /* ember — live, hot traffic, primary action   */
+  --signal-dim: #b35420;
+  --signal-glow: rgba(255, 122, 41, 0.5);
+  --cyan: #5aa7ff;             /* info, completed, secondary data series      */
+  --cyan-glow: rgba(90, 167, 255, 0.45);
+  --amber: #ffd23e;            /* warning, ramp, caution                      */
+  --amber-glow: rgba(255, 210, 62, 0.4);
+  --crit: #ff3d5e;             /* critical, failed, alarm                     */
+  --crit-glow: rgba(255, 61, 94, 0.45);
+  --violet: #a98aff;           /* tertiary series                             */
+  --ok: #3ddc8f;               /* healthy/online checks (kept for semantics)  */
 
-  /* ---- Text ------------------------------------------------------------ */
-  --text: #d6e4dd;             /* primary readable text                       */
-  --text-bright: #f2fbf7;      /* headings, key readouts                      */
-  --text-muted: #6f857d;       /* labels, secondary                           */
-  --text-faint: #46564f;       /* disabled, decorative                        */
+  /* ---- Text (warm ivory on cool ink) ------------------------------------ */
+  --text: #ddd8cb;             /* primary readable text                       */
+  --text-bright: #f7f3e8;      /* headings, key readouts                      */
+  --text-muted: #837f72;       /* labels, secondary                           */
+  --text-faint: #514f46;       /* disabled, decorative                        */
 
-  /* ---- Type ------------------------------------------------------------ */
-  --font-display: "Chakra Petch", "Segoe UI", sans-serif; /* HUD headings     */
-  --font-mono: "IBM Plex Mono", "Cascadia Code", monospace; /* data / body    */
+  /* ---- Type -------------------------------------------------------------- */
+  --font-display: "Big Shoulders Display", "Arial Narrow", sans-serif; /* stencil readouts */
+  --font-mono: "Spline Sans Mono", "Cascadia Code", monospace;         /* data / body      */
 
   --fs-2xs: 10px;
   --fs-xs: 11px;
@@ -47,16 +51,16 @@
   --fs-md: 13px;
   --fs-lg: 15px;
   --fs-xl: 18px;
-  --fs-2xl: 24px;
-  --fs-readout: 40px;          /* big instrument numbers                      */
+  --fs-2xl: 26px;
+  --fs-readout: 46px;          /* big instrument numbers                      */
 
-  --tracking-wide: 0.14em;
-  --tracking-hud: 0.22em;      /* uppercase HUD labels                        */
+  --tracking-wide: 0.12em;
+  --tracking-hud: 0.24em;      /* uppercase stamped labels                    */
 
-  /* ---- Geometry -------------------------------------------------------- */
-  --r-sm: 3px;
-  --r-md: 5px;
-  --r-lg: 8px;
+  /* ---- Geometry (plate-sharp) ------------------------------------------- */
+  --r-sm: 2px;
+  --r-md: 3px;
+  --r-lg: 4px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -68,10 +72,10 @@
   --sidebar-w: 232px;
   --topbar-h: 56px;
 
-  /* ---- Effects --------------------------------------------------------- */
-  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
-                  0 18px 40px -28px rgba(0, 0, 0, 0.9);
-  --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.85);
+  /* ---- Effects ------------------------------------------------------------ */
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.025) inset,
+                  0 16px 36px -28px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.9);
   --glow-text: 0 0 18px var(--signal-glow);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-snap: cubic-bezier(0.4, 0, 0.2, 1);
