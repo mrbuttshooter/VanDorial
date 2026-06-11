@@ -38,3 +38,8 @@ frontend/.vite/
 .playwright-mcp/
 .DS_Store
 *.local
+
+# Proprietary sale-codes deck (full international rate-deck zone/code map).
+# Kept OUT of the public repo; delivered to the box as a data file. The committed
+# sample (sale_codes.sample.csv) is enough for tests + a demo run.
+gencall/scripts/data/sale_codes.csv
