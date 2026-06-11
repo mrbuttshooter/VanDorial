@@ -470,11 +470,14 @@ class CallRecordParser:
                     text(
                         "SELECT id FROM call_records "
                         "WHERE call_uuid = :call_uuid AND direction = :direction "
-                        # NULL-safe equality: 'IS :param' is SQLite-only and is a
-                        # syntax error on PostgreSQL. 'IS NOT DISTINCT FROM' is
-                        # the standard NULL-safe comparison and works on both
-                        # (matches NULL=NULL for one-shot tests with no campaign).
-                        "AND campaign_id IS NOT DISTINCT FROM :campaign_id"
+                        # NULL-safe equality, portable across SQLite 3.37 (Ubuntu
+                        # 22.04), SQLite 3.39+ and PostgreSQL. 'IS :param' is
+                        # SQLite-only; 'IS NOT DISTINCT FROM' needs SQLite >= 3.39
+                        # (it raises a syntax error on 3.37, silently dropping
+                        # every record). This explicit OR works everywhere and
+                        # still matches NULL=NULL for one-shot tests (no campaign).
+                        "AND ((:campaign_id IS NULL AND campaign_id IS NULL) "
+                        "     OR campaign_id = :campaign_id)"
                     ),
                     {
                         "call_uuid": params["call_uuid"],
