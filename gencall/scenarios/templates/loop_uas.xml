@@ -1,49 +1,39 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
 <!--
   GenCall v2 - Loop Answer UAS (permanent answering leg) - design §4.1/§4.2.
 
-  One long-lived SIPp UAS bound to the SIP port. It answers calls returning from
-  MADA, echoes media two-way (-rtp_echo passed at launch by the LoopEngine), and
-  waits for the BYE. A scenario-level max-duration guard BYEs any call that runs
-  past the answered-call ceiling so a wedged dialog can never pin a channel.
+  Built on SIPp's proven built-in 'uas' skeleton (validated on sipp 3.6.1). One
+  long-lived UAS bound to the SIP port; answers calls returning from MADA, echoes
+  media two-way (-rtp_echo at launch), waits for the BYE.
 
-  Per-call <log> lines feed the CallRecord tail-parser. We capture ms-precision
-  timestamps at the RFC 3261 reference events the loop accounting needs (§1):
+  Per-call <log> lines (-trace_logs) feed the CallRecord tail-parser. B-side
+  duration = t_bye_received - t_200ok_sent. source_ip is captured from the top Via
+  host of the INVITE (SIPp has no [senderip] keyword) so the parser can flag any
+  call from outside the MADA whitelist (firewall is the real boundary; the app
+  layer is verification-only — design §4.1).
 
-      B-side duration = t_bye_received - t_200ok_sent
-
-  [clock_tick] is SIPp's wall-clock in milliseconds. source_ip is captured from
-  the top Via host of the received INVITE into $source_ip (SIPp has no real
-  [senderip] keyword — using it aborts the scenario on load) so the parser can
-  tag each inbound record and flag any call from outside the MADA whitelist
-  (firewall is the real boundary; the app layer is verification-only - design
-  §4.1 trust filter).
-
-  The answered-call max-duration is a LITERAL in the recv timeout below
-  (7200000 ms = 2 h). SIPp does NOT substitute -key keywords inside a timeout
-  attribute (it parses it as a static integer at load), so the guard cannot be
-  config-driven without rendering the XML — change the literal here to adjust.
+  IMPORTANT — all <log> actions live INSIDE <recv> elements (a standalone <nop>
+  between a <send> and the next message makes sipp 3.6 mis-handle the incoming
+  message and abort). So t_200ok_sent is logged on the ACK recv (one RTT after
+  the 200 leaves — sipp <send> cannot carry an action) and t_bye_received on the
+  BYE recv. The answered-call max-duration guard is the literal recv-BYE timeout
+  (7200000 ms = 2 h); if no BYE arrives the recv times out and SIPp frees the
+  channel.
 -->
 <scenario name="GenCall - Loop UAS">
 
-  <!-- ── Wait for INVITE (t_invite_received) ────────────────────────────
-       from_number / to_number parsed from the dialog; source_ip is the
-       sender's network address. -->
+  <!-- Wait for INVITE (t_invite_received); parse from/to numbers + source IP. -->
   <recv request="INVITE" crlf="true">
     <action>
       <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="From:" assign_to="trash,from_number" />
       <ereg regexp="sip:([^@>;]+)@" search_in="hdr" header="To:" assign_to="trash,to_number" />
-      <!-- Peer source IP: extracted from the top Via host
-           ("Via: SIP/2.0/<transport> <host>[:port];..."). [senderip] is NOT a
-           real SIPp keyword (SIPp aborts on load if it sees it), so we capture
-           the host from the received INVITE instead. An unmatched capture leaves
-           $source_ip empty (expands to nothing) rather than aborting. -->
       <ereg regexp="SIP/2.0/[A-Za-z0-9]+[ \t]+([^:; \t\r\n]+)" search_in="hdr" header="Via:" assign_to="trash,source_ip" />
       <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=invite t_invite_received=[clock_tick]" />
     </action>
   </recv>
 
-  <!-- ── 180 Ringing ────────────────────────────────────────────────── -->
+  <!-- 180 Ringing. -->
   <send>
     <![CDATA[
       SIP/2.0 180 Ringing
@@ -57,8 +47,7 @@
     ]]>
   </send>
 
-  <!-- ── 200 OK with SDP → B-side clock STARTS here (t_200ok_sent) ────────
-       G.711 (PCMA/PCMU) only; two-way media via -rtp_echo at launch. -->
+  <!-- 200 OK with SDP → B-side clock STARTS (logged on ACK below). -->
   <send retrans="500">
     <![CDATA[
       SIP/2.0 200 OK
@@ -86,34 +75,22 @@
     ]]>
   </send>
 
-  <nop>
+  <!-- ACK (optional). Log t_200ok_sent here (≈ 200-sent + 1 RTT). -->
+  <recv request="ACK" optional="true" rtd="true" crlf="true">
     <action>
       <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=answer t_200ok_sent=[clock_tick]" />
     </action>
-  </nop>
+  </recv>
 
-  <!-- ── ACK ──────────────────────────────────────────────────────────── -->
-  <recv request="ACK" optional="true" rtd="true" crlf="true" />
-
-  <!-- ── Wait for BYE, bounded by the answered-call max-duration guard ───
-       ontimeout jumps to the guard label, which BYEs the stuck call from our
-       side so it can never hold a channel forever (design §4.1). -->
-  <recv request="BYE" timeout="7200000" ontimeout="max_duration_guard" crlf="true" />
-
-  <!-- ── BYE received → B-side clock STOPS here (t_bye_received) ─────────── -->
-  <nop>
+  <!-- Wait for BYE → B-side clock STOPS (t_bye_received). Literal 2 h guard. -->
+  <recv request="BYE" timeout="7200000">
     <action>
       <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=bye t_bye_received=[clock_tick]" />
     </action>
-  </nop>
+  </recv>
 
-  <!-- 200 OK to the BYE. The normal path ends here: jump straight to the
-       call_done label at the very end of the scenario so we DON'T fall through
-       into the max_duration_guard block (a SIPp <label> is only a jump target,
-       it does not stop the scenario). Without this next=, every normally
-       completed call would also fire the guard BYE + a duplicate t_bye_received
-       log line, corrupting B-side duration and channel-free accounting. -->
-  <send next="call_done">
+  <!-- 200 to the BYE. -->
+  <send>
     <![CDATA[
       SIP/2.0 200 OK
       [last_Via:]
@@ -121,43 +98,13 @@
       [last_To:]
       [last_Call-ID:]
       [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
       Content-Length: 0
     ]]>
   </send>
 
-  <!-- ── Max-duration guard: BYE a stuck call from our side ─────────────
-       Entered ONLY via the recv ontimeout="max_duration_guard" jump above,
-       i.e. when no BYE arrived within [duration_max_s]. We send our own BYE,
-       log t_bye_received as this guard fire (the parser still gets a terminal
-       event so the channel is accounted and freed), then fall through to
-       call_done at the end. -->
-  <label id="max_duration_guard" />
-  <send retrans="500">
-    <![CDATA[
-      BYE sip:[$from_number]@[remote_ip]:[remote_port] SIP/2.0
-      [last_Via:]
-      [last_From:]
-      [last_To:];tag=[pid]SIPpTag01[call_number]
-      [last_Call-ID:]
-      CSeq: 2 BYE
-      Max-Forwards: 70
-      Content-Length: 0
-    ]]>
-  </send>
-  <nop>
-    <action>
-      <log message="loop_uas direction=in call_id=[call_id] from_number=[$from_number] to_number=[$to_number] source_ip=[$source_ip] event=bye t_bye_received=[clock_tick] guard=max_duration" />
-    </action>
-  </nop>
-  <recv response="200" optional="true" crlf="true" next="call_done" />
-
-  <!-- ── End of dialog ──────────────────────────────────────────────────
-       Both the normal BYE path (via next="call_done" on its 200-OK send) and
-       the guard path (via the recv next="call_done" above) converge here.
-       Reaching this label ends the dialog; SIPp recycles the slot for the
-       next call. It MUST be the last executable element so neither path can
-       fall through into another send. -->
-  <label id="call_done" />
+  <!-- Keep the slot briefly so a re-sent BYE can be answered (built-in idiom). -->
+  <timewait milliseconds="4000" />
 
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
   <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000, 30000" />

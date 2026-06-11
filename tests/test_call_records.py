@@ -460,63 +460,52 @@ def _loop_uas_xml_path():
     return _os.path.join(_os.path.dirname(_m.__file__), "templates", "loop_uas.xml")
 
 
-def test_loop_uas_template_parses_and_has_guard_labels():
-    """The template is well-formed XML and declares both control labels once."""
-    import xml.etree.ElementTree as ET
+def _loop_uac_xml_path():
+    import os as _os
+    from gencall.scenarios import manager as _m
 
-    root = ET.parse(_loop_uas_xml_path()).getroot()
-    label_ids = [el.get("id") for el in root.iter("label")]
-    assert label_ids.count("call_done") == 1
-    assert label_ids.count("max_duration_guard") == 1
+    return _os.path.join(_os.path.dirname(_m.__file__), "templates", "loop_uac.xml")
 
 
-def test_loop_uas_call_done_is_after_max_duration_guard():
-    """call_done must be the LAST executable label, after the guard block.
+def test_loop_scenarios_are_wellformed_and_nop_free():
+    """Both loop scenarios are well-formed XML with NO standalone <nop>.
 
-    A label before the guard cannot serve as a skip target (SIPp labels don't
-    stop execution), so call_done has to sit at the very end. This pins the
-    ordering that prevents the normal path from falling through into the guard.
+    A <nop> sitting between a <send> and the next message makes sipp 3.6 treat the
+    incoming message as 'unexpected' and abort the call (the index-1 nop after the
+    INVITE was exactly this bug). All logging now lives inside <recv> actions.
     """
     import xml.etree.ElementTree as ET
 
-    root = ET.parse(_loop_uas_xml_path()).getroot()
-    order = [el.get("id") for el in root.iter("label")]
-    assert order.index("max_duration_guard") < order.index("call_done"), (
-        "call_done must come AFTER max_duration_guard so the normal BYE path "
-        "(which jumps to call_done) skips the guard's unsolicited BYE."
-    )
-    # call_done is the last <label> and no <send> may follow it (which would
-    # re-introduce a fall-through into an unsolicited message).
-    children = list(root)
-    last_label_idx = max(
-        i for i, el in enumerate(children)
-        if el.tag == "label" and el.get("id") == "call_done"
-    )
-    assert not any(
-        el.tag == "send" for el in children[last_label_idx + 1:]
-    ), "no <send> may follow the call_done label"
+    for path in (_loop_uas_xml_path(), _loop_uac_xml_path()):
+        root = ET.parse(path).getroot()
+        assert root.tag == "scenario"
+        assert list(root.iter("nop")) == [], f"{path} must have no <nop> (sipp 3.6 flow safety)"
 
 
-def test_loop_uas_normal_bye_path_skips_the_guard():
-    """The normal-path BYE 200-OK <send> jumps to call_done, not the guard.
-
-    Without next="call_done" on this send, a normally completed call falls
-    through into max_duration_guard and emits a duplicate guard=max_duration
-    log line + a second BYE. We pin that exactly one <send> targets call_done
-    and that it is the BYE-200-OK send (Content-Length 0, no SDP, no BYE
-    request line of its own).
-    """
+def test_loop_uas_bye_guard_is_a_literal_timeout():
+    """The answered-call max-duration guard is a positive integer literal on the
+    recv-BYE timeout (sipp does not substitute keywords in a timeout attribute)."""
     import xml.etree.ElementTree as ET
 
     root = ET.parse(_loop_uas_xml_path()).getroot()
-    sends_to_call_done = [
-        el for el in root.iter("send") if el.get("next") == "call_done"
-    ]
-    assert len(sends_to_call_done) == 1, (
-        "exactly one <send> (the normal BYE 200-OK) must jump to call_done"
-    )
-    body = (sends_to_call_done[0].text or "")
-    assert "200 OK" in body
-    assert "Content-Length: 0" in body
-    # It must be a response, not the guard's own BYE request.
-    assert "BYE sip:" not in body
+    byes = [el for el in root.iter("recv") if el.get("request") == "BYE"]
+    assert byes, "loop_uas.xml must have a <recv request='BYE'>"
+    t = byes[0].get("timeout")
+    assert t and t.isdigit() and int(t) > 0, "recv BYE timeout must be a positive integer literal"
+
+
+def test_loop_scenarios_log_rfc_events_inside_recv_actions():
+    """The RFC reference-event timestamps are logged from <recv> actions:
+    UAS — t_invite_received / t_200ok_sent / t_bye_received;
+    UAC — t_200ok_received / t_bye_sent (the values the parser needs for A/B duration)."""
+    import xml.etree.ElementTree as ET
+
+    uas_logs = " ".join(
+        el.get("message", "") for el in ET.parse(_loop_uas_xml_path()).getroot().iter("log"))
+    for key in ("t_invite_received", "t_200ok_sent", "t_bye_received"):
+        assert key in uas_logs, f"loop_uas.xml must log {key}"
+
+    uac_logs = " ".join(
+        el.get("message", "") for el in ET.parse(_loop_uac_xml_path()).getroot().iter("log"))
+    for key in ("t_200ok_received", "t_bye_sent"):
+        assert key in uac_logs, f"loop_uac.xml must log {key}"

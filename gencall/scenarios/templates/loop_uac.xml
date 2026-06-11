@@ -1,36 +1,29 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
 <!--
   GenCall v2 - Loop Campaign UAC (outbound originate leg) - design §4.1/§4.2.
 
-  Originates one INVITE per CSV row, holds the call for the configured duration,
-  then BYEs. The A/B number pair AND the per-call hold are injected from the
-  campaign's -inf CSV:
+  Built on SIPp's proven built-in 'uac' skeleton (validated on sipp 3.6.1) so the
+  INVITE/200/ACK/BYE transaction matching is exactly what SIPp expects. The A/B
+  number pair is injected from the campaign -inf CSV:
 
-      [field0] = a_number       (calling)
-      [field1] = b_number       (called)
-      [field2] = hold_ms        (per-call hold, milliseconds)
+      [field0] = a_number (calling)   [field1] = b_number (called)
 
-  Per-call <log> lines are written to SIPp's -trace_logs file. The CallRecord
-  tail-parser (gencall/core/call_records.py) ingests them. We emit ms-precision
-  timestamps at exactly the RFC 3261 reference events the loop accounting needs
-  (design §1):
+  Per-call <log> lines (-trace_logs) feed the CallRecord tail-parser
+  (gencall/core/call_records.py). A-side duration = t_bye_sent - t_200ok_received.
 
-      A-side duration = t_bye_sent - t_200ok_received
+  IMPORTANT — all <log> actions live INSIDE <recv> elements. A standalone <nop>
+  between the INVITE <send> and its response <recv>s makes sipp 3.6 treat the
+  incoming 180 as "unexpected" (it races the nop) and abort the call, so there
+  are no nops here. t_bye_sent is logged when the 200-to-BYE arrives (one RTT
+  after the BYE leaves — sipp <send> cannot carry an action).
 
-  [clock_tick] is SIPp's wall-clock in milliseconds; we capture it the instant
-  each reference event fires, so the parser never has to guess timing.
-
-  Media: the UAC originates SIP only and sources no RTP — the SIP dialog stays
-  up for the hold without it, and two-way media is the UAS's job (-rtp_echo).
-  Optional one-way originator audio could be added via <exec play_pcap_audio>
-  with an absolute path (SIPp built with pcap support; libpcap is in the
-  Dockerfile), but is omitted to avoid a missing-file load abort.
+  Hold duration: a bare <pause/> uses SIPp -d (set by the LoopEngine from the
+  campaign duration_s); SIPp does not substitute -inf fields inside a pause
+  attribute, so [field2] cannot be used there.
 -->
 <scenario name="GenCall - Loop UAC">
 
-  <!-- ── Originate: INVITE with A/B from the CSV (-inf) ──────────────────
-       a_number = [field0], b_number = [field1]. t_invite is logged the
-       moment the INVITE goes out. -->
   <send retrans="500">
     <![CDATA[
       INVITE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
@@ -59,33 +52,25 @@
     ]]>
   </send>
 
-  <!-- Log the INVITE (t_invite). One field per token; the parser is
-       key=value and tolerant of column order. -->
-  <nop>
-    <action>
-      <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=invite t_invite=[clock_tick]" />
-    </action>
-  </nop>
-
-  <!-- Provisional responses are all optional. -->
+  <!-- Provisional responses are optional. -->
   <recv response="100" optional="true" />
   <recv response="180" optional="true" />
   <recv response="183" optional="true" />
 
-  <!-- ── 200 OK received → A-side clock STARTS here (t_200ok_received) ──── -->
+  <!-- 200 OK received → A-side clock STARTS (t_200ok_received). -->
   <recv response="200" rtd="true" crlf="true">
     <action>
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=answer t_200ok_received=[clock_tick] final_code=200" />
     </action>
   </recv>
 
-  <!-- ── ACK ──────────────────────────────────────────────────────────── -->
+  <!-- ACK the 2xx. To-tag echoed via [peer_tag_param] (the proven built-in form). -->
   <send>
     <![CDATA[
       ACK sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
       From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      [last_To:]
+      To: <sip:[field1]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
       CSeq: 1 ACK
       Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
@@ -94,27 +79,16 @@
     ]]>
   </send>
 
-  <!-- ── Hold for the configured call duration ──────────────────────────
-       A bare <pause/> holds the call for SIPp's -d value (milliseconds), which
-       the LoopEngine sets from the campaign's duration_s. We do NOT put
-       milliseconds="[field2]" here: SIPp parses the milliseconds attribute as a
-       static integer at load time and does NOT substitute -inf injection fields
-       inside it (same limitation as the recv timeout attribute), so a per-row
-       [field2] hold makes the scenario fail to load. (Per-call RANDOM durations
-       are a follow-up — they need a SIPp call-variable pause, not -d.)
-
-       No originator-side media is played: keeping the SIP dialog up for the
-       hold does NOT require the UAC to source RTP; two-way media is the UAS's
-       job (-rtp_echo). -->
+  <!-- Hold the call for -d milliseconds (LoopEngine sets -d from duration_s). -->
   <pause />
 
-  <!-- ── BYE → A-side clock STOPS here (t_bye_sent) ─────────────────────── -->
+  <!-- BYE ends the call. -->
   <send retrans="500">
     <![CDATA[
       BYE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
       From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      [last_To:]
+      To: <sip:[field1]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
       CSeq: 2 BYE
       Max-Forwards: 70
@@ -122,14 +96,12 @@
     ]]>
   </send>
 
-  <nop>
+  <!-- 200 to the BYE → A-side clock STOPS (t_bye_sent, +1 RTT). -->
+  <recv response="200" crlf="true">
     <action>
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=bye t_bye_sent=[clock_tick]" />
     </action>
-  </nop>
-
-  <!-- 200 OK for the BYE. -->
-  <recv response="200" crlf="true" />
+  </recv>
 
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
   <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000" />
