@@ -237,6 +237,223 @@ def answer_status():
     return _engine().answer_status()
 
 
+# ─── Node groups (group nodes by route; start/stop a whole group's loops) ─────
+
+def _db():
+    db = getattr(_engine(), "db", None)
+    if db is None:
+        raise HTTPException(503, "Database not configured on this worker")
+    return db
+
+
+class NodeGroupRequest(BaseModel):
+    """A group of nodes sharing a destination route. Starting the group fans a
+    loop out to every member node (each on its own IP + pool)."""
+    name: str
+    description: str = ""
+    dest_host: str = ""
+    dest_port: int = Field(default=5060, ge=1, le=65535)
+    transport: str = "udp"
+    rate: float = Field(default=1.0, gt=0)
+    max_concurrent: int = Field(default=10, gt=0)
+    duration_mode: str = "fixed"
+    duration_s: int = Field(default=180, ge=0)
+    duration_max_s: int = Field(default=0, ge=0)
+    match_key: str = "exact"
+    target_calls: int = Field(default=0, ge=0)
+    target_minutes: int = Field(default=0, ge=0)
+
+
+_GROUP_FIELDS = (
+    "name", "description", "dest_host", "dest_port", "transport", "rate",
+    "max_concurrent", "duration_mode", "duration_s", "duration_max_s",
+    "match_key", "target_calls", "target_minutes",
+)
+
+
+def _group_view(group, members, running_ips):
+    d = group.to_dict()
+    d["nodes"] = [m.to_dict() for m in members]
+    d["node_count"] = len(members)
+    d["running_count"] = sum(1 for m in members if m.ip in running_ips)
+    return d
+
+
+def _running_ips() -> set:
+    return {
+        (c.get("local_ip") or "")
+        for c in _engine().list_campaigns()
+        if c.get("status") == "running" and c.get("local_ip")
+    }
+
+
+@router.get("/api/node-groups", dependencies=[Depends(require_api_key)])
+def list_node_groups():
+    """List node groups with their member nodes and running-loop counts."""
+    from gencall.db.models import NodeGroup, Server
+
+    session = _db().get_session()
+    try:
+        running = _running_ips()
+        groups = session.query(NodeGroup).all()
+        out = []
+        for g in groups:
+            members = session.query(Server).filter_by(group_id=g.id).all()
+            out.append(_group_view(g, members, running))
+        return {"groups": out}
+    finally:
+        session.close()
+
+
+@router.post("/api/node-groups", dependencies=[Depends(require_api_key)])
+def create_node_group(req: NodeGroupRequest):
+    """Create a node group (a customer/route with shared loop settings)."""
+    from gencall.db.models import NodeGroup
+
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(422, "name is required")
+    session = _db().get_session()
+    try:
+        g = NodeGroup(**{f: getattr(req, f) for f in _GROUP_FIELDS})
+        g.name = name
+        session.add(g)
+        session.commit()
+        return {"status": "created", "group": g.to_dict()}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, f"could not create group (duplicate name?): {e}")
+    finally:
+        session.close()
+
+
+@router.put("/api/node-groups/{group_id}", dependencies=[Depends(require_api_key)])
+def update_node_group(group_id: int, req: NodeGroupRequest):
+    """Replace a group's settings (name + shared route/loop fields)."""
+    from gencall.db.models import NodeGroup
+
+    session = _db().get_session()
+    try:
+        g = session.query(NodeGroup).filter_by(id=group_id).first()
+        if not g:
+            raise HTTPException(404, f"Group {group_id} not found")
+        for f in _GROUP_FIELDS:
+            setattr(g, f, getattr(req, f))
+        session.commit()
+        return {"status": "updated", "group": g.to_dict()}
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, str(e))
+    finally:
+        session.close()
+
+
+@router.delete("/api/node-groups/{group_id}", dependencies=[Depends(require_api_key)])
+def delete_node_group(group_id: int):
+    """Delete a group. Member nodes are kept (their group_id is cleared)."""
+    from gencall.db.models import NodeGroup, Server
+
+    session = _db().get_session()
+    try:
+        g = session.query(NodeGroup).filter_by(id=group_id).first()
+        if not g:
+            raise HTTPException(404, f"Group {group_id} not found")
+        for m in session.query(Server).filter_by(group_id=group_id).all():
+            m.group_id = None
+        session.delete(g)
+        session.commit()
+        return {"status": "deleted", "id": group_id}
+    finally:
+        session.close()
+
+
+@router.post("/api/node-groups/{group_id}/start", dependencies=[Depends(require_api_key)])
+def start_node_group(group_id: int):
+    """Start a loop on EVERY member node (each on its own IP + pool), using the
+    group's shared destination + loop settings. Returns a per-node result list;
+    nodes without a pool or whose IP is already looping are reported, not fatal."""
+    from gencall.db.models import NodeGroup, Server
+
+    config = _engine().config or Config()
+    session = _db().get_session()
+    try:
+        g = session.query(NodeGroup).filter_by(id=group_id).first()
+        if not g:
+            raise HTTPException(404, f"Group {group_id} not found")
+        if not (g.dest_host or "").strip():
+            raise HTTPException(422, "group has no destination host set")
+        # Validate the shared destination + caps ONCE before fanning out.
+        try:
+            validate_dest_host(g.dest_host, config.loops_dest_allowlist)
+            validate_caps(g.rate, g.max_concurrent, config)
+        except (DestHostError, ValueError) as e:
+            raise HTTPException(422, str(e))
+        # Snapshot everything needed as plain values BEFORE closing the session
+        # (no detached-ORM access while we spawn loops).
+        group_name = g.name
+        params = {f: getattr(g, f) for f in _GROUP_FIELDS if f not in ("name", "description")}
+        members = [
+            {"id": m.id, "name": m.name, "ip": m.ip,
+             "csv_path": m.csv_path, "enabled": m.enabled}
+            for m in session.query(Server).filter_by(group_id=group_id).all()
+        ]
+    finally:
+        session.close()
+
+    results = []
+    for m in members:
+        base = {"node": m["name"], "ip": m["ip"]}
+        if not m["enabled"]:
+            results.append({**base, "ok": False, "skipped": "disabled"})
+            continue
+        if not m["csv_path"]:
+            results.append({**base, "ok": False, "skipped": "no number pool"})
+            continue
+        try:
+            campaign = _engine().start_campaign(
+                name=f"{group_name}-{m['name']}",
+                local_ip=m["ip"], csv_path=m["csv_path"], node_id=m["id"], **params,
+            )
+            results.append({**base, "ok": True, "campaign_id": campaign["id"]})
+        except IPBusy as e:
+            results.append({**base, "ok": False, "skipped": str(e)})
+        except (CapExceeded, RuntimeError) as e:
+            results.append({**base, "ok": False, "error": str(e)})
+    started = sum(1 for r in results if r.get("ok"))
+    return {"status": "started", "group": group_name, "started": started,
+            "total": len(members), "results": results}
+
+
+@router.post("/api/node-groups/{group_id}/stop", dependencies=[Depends(require_api_key)])
+def stop_node_group(group_id: int):
+    """Stop every running loop on this group's member IPs."""
+    from gencall.db.models import NodeGroup, Server
+
+    session = _db().get_session()
+    try:
+        g = session.query(NodeGroup).filter_by(id=group_id).first()
+        if not g:
+            raise HTTPException(404, f"Group {group_id} not found")
+        group_name = g.name
+        member_ips = {m.ip for m in session.query(Server).filter_by(group_id=group_id).all()}
+    finally:
+        session.close()
+
+    stopped = []
+    for c in _engine().list_campaigns():
+        if c.get("status") == "running" and (c.get("local_ip") or "") in member_ips:
+            try:
+                _engine().stop_campaign(c["id"])
+                stopped.append(c["id"])
+            except KeyError:
+                pass
+    return {"status": "stopped", "group": group_name, "stopped": len(stopped),
+            "campaign_ids": stopped}
+
+
 # ─── Sale zones + number generation (web "drop zone" flow) ───────────────────
 
 # The deck is loaded once and cached (it is large and read-only).

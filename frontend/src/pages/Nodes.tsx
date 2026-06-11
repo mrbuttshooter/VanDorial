@@ -19,6 +19,7 @@ interface NodeForm {
   name: string;
   ip: string;
   description: string;
+  groupId: string;
   originCountry: string;
   originZone: string;
   destCountry: string;
@@ -30,6 +31,7 @@ const BLANK: NodeForm = {
   name: "",
   ip: "",
   description: "",
+  groupId: "",
   originCountry: "",
   originZone: "",
   destCountry: "",
@@ -48,6 +50,7 @@ export function Nodes() {
   const nodes = useAsync(() => api.listServers(), [], 4000);
   const detected = useAsync(() => api.sourceIps(), []);
   const zoneTree = useAsync(() => api.saleZones(), []);
+  const groups = useAsync(() => api.listNodeGroups(), []);
   const toast = useToast();
 
   const [showNew, setShowNew] = useState(false);
@@ -77,6 +80,7 @@ export function Nodes() {
         name: form.name,
         ip: form.ip,
         description: form.description,
+        group_id: form.groupId ? Number(form.groupId) : null,
         origin_zone: form.originZone,
         dest_zone: form.destZone,
         count: form.count,
@@ -224,6 +228,14 @@ export function Nodes() {
           </Field>
           <Field label="Source IP" hint={suggestions.length ? "Or pick below." : "NIC address to bind."}>
             <input value={form.ip} onChange={(e) => set("ip", e.target.value)} placeholder="10.20.8.11" />
+          </Field>
+          <Field label="Group" hint="Optional — group by route.">
+            <select value={form.groupId} onChange={(e) => set("groupId", e.target.value)}>
+              <option value="">No group</option>
+              {(groups.data?.groups ?? []).map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
           </Field>
         </FieldRow>
         {suggestions.length > 0 && (

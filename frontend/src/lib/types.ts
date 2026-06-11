@@ -216,6 +216,7 @@ export interface Server {
   ip: string;
   description: string;
   enabled: boolean;
+  group_id: number | null;
   origin_zone: string;
   dest_zone: string;
   pool_count: number;
@@ -229,10 +230,66 @@ export interface ServerRequest {
   name: string;
   ip: string;
   description?: string;
+  group_id?: number | null;
   origin_zone?: string;
   dest_zone?: string;
   count?: number;
   length?: number;
+}
+
+/* A node group = nodes sharing a destination route. Starting it fans a loop out
+   to every member node (each on its own IP + pool). */
+export interface NodeGroup {
+  id: number;
+  name: string;
+  description: string;
+  dest_host: string;
+  dest_port: number;
+  transport: string;
+  rate: number;
+  max_concurrent: number;
+  duration_mode: LoopDurationMode;
+  duration_s: number;
+  duration_max_s: number;
+  match_key: string;
+  target_calls: number;
+  target_minutes: number;
+  created_at: string | null;
+  /* Folded in by GET /api/node-groups. */
+  nodes?: Server[];
+  node_count?: number;
+  running_count?: number;
+}
+
+export interface NodeGroupRequest {
+  name: string;
+  description?: string;
+  dest_host?: string;
+  dest_port?: number;
+  transport?: Transport;
+  rate?: number;
+  max_concurrent?: number;
+  duration_mode?: LoopDurationMode;
+  duration_s?: number;
+  duration_max_s?: number;
+  match_key?: string;
+  target_calls?: number;
+  target_minutes?: number;
+}
+
+export interface GroupStartResult {
+  status: string;
+  group: string;
+  started: number;
+  total: number;
+  results: {
+    node: string;
+    ip: string;
+    ok: boolean;
+    campaign_id?: string;
+    skipped?: string;
+    error?: string;
+  }[];
 }
 
 export interface GeneratePoolRequest {

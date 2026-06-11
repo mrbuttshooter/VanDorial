@@ -419,6 +419,86 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
         Config.reset()
 
 
+def test_node_group_start_stop_fans_out_over_http(stub_sipp, tmp_path, monkeypatch):
+    """Create a group + two member nodes, start the group (a loop per node on its
+    own IP), then stop the group (all member loops stop)."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "grp.db"
+    cfg_path = tmp_path / "grp.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("grp")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        # Group with a shared (public, SSRF-allowed) destination route.
+        g = client.post("/api/node-groups", json={
+            "name": "guinea-route", "dest_host": "1.2.3.4", "dest_port": 5060,
+            "rate": 5.0, "duration_s": 1, "target_calls": 5,
+        })
+        assert g.status_code == 200, g.text
+        gid = g.json()["group"]["id"]
+
+        # Two member nodes, each with its own IP + pool.
+        for ip in ("10.0.0.61", "10.0.0.62"):
+            r = client.post("/api/servers", json={
+                "name": f"node-{ip}", "ip": ip, "group_id": gid,
+                "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+                "count": 10,
+            })
+            assert r.status_code == 200, r.text
+
+        # Group list reflects the two members.
+        groups = client.get("/api/node-groups").json()["groups"]
+        grp = next(x for x in groups if x["id"] == gid)
+        assert grp["node_count"] == 2
+
+        # Start the group → a loop fans out to BOTH nodes.
+        started = client.post(f"/api/node-groups/{gid}/start")
+        assert started.status_code == 200, started.text
+        body = started.json()
+        assert body["started"] == 2, body
+        ips_running = {r["ip"] for r in body["results"] if r["ok"]}
+        assert ips_running == {"10.0.0.61", "10.0.0.62"}
+
+        # Both campaigns are live on their own IPs.
+        for cid in [r["campaign_id"] for r in body["results"]]:
+            _wait_running(le.engine, f"uac-{cid}")
+
+        # Stop the group → both member loops stop.
+        stopped = client.post(f"/api/node-groups/{gid}/stop")
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["stopped"] >= 1
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and

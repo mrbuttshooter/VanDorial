@@ -115,6 +115,7 @@ class ServerRequest(BaseModel):
     name: str
     ip: str
     description: str = ""
+    group_id: Optional[int] = None  # optional NodeGroup membership
     # Optional per-node number pool. When origin_zone + dest_zone are given the
     # pool is generated on create; otherwise the node starts with no pool and you
     # generate it later via POST /api/servers/{id}/generate.
@@ -527,7 +528,7 @@ def create_server(req: ServerRequest):
     session = db.get_session()
     try:
         s = Server(name=name, ip=ip, description=req.description or "",
-                   pool_length=req.length)
+                   group_id=req.group_id, pool_length=req.length)
         if req.origin_zone and req.dest_zone:
             _generate_node_pool(s, req.origin_zone, req.dest_zone,
                                 req.count, req.length)
@@ -571,6 +572,44 @@ def generate_server_pool(server_id: int, req: GeneratePoolRequest):
     except HTTPException:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+class ServerUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    group_id: Optional[int] = None  # -1 clears membership; None leaves unchanged
+    enabled: Optional[bool] = None
+
+
+@app.put("/api/servers/{server_id}", dependencies=[Depends(require_api_key)])
+def update_server(server_id: int, req: ServerUpdate):
+    """Update a node's name/description/group/enabled (not its pool — use
+    /generate for that). ``group_id`` of -1 clears group membership."""
+    if not db:
+        raise HTTPException(500, "Database not configured")
+    session = db.get_session()
+    try:
+        s = session.query(Server).filter_by(id=server_id).first()
+        if not s:
+            raise HTTPException(404, f"Server {server_id} not found")
+        if req.name is not None:
+            s.name = req.name.strip() or s.name
+        if req.description is not None:
+            s.description = req.description
+        if req.enabled is not None:
+            s.enabled = req.enabled
+        if req.group_id is not None:
+            s.group_id = None if req.group_id < 0 else req.group_id
+        session.commit()
+        return {"status": "updated", "server": s.to_dict()}
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, str(e))
     finally:
         session.close()
 

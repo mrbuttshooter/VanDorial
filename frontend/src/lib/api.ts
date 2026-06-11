@@ -7,8 +7,11 @@ import type {
   Connector,
   ConnectorRequest,
   GeneratePoolRequest,
+  GroupStartResult,
   Health,
   LoopCampaign,
+  NodeGroup,
+  NodeGroupRequest,
   SaleZoneCountry,
   Scenario,
   Server,
@@ -240,10 +243,39 @@ export const api = {
       method: "POST",
       body: req,
     }),
+  updateServer: (id: number, req: Partial<{ name: string; description: string; group_id: number | null; enabled: boolean }>) =>
+    request<{ status: string; server: Server }>(`/api/servers/${id}`, {
+      method: "PUT",
+      body: req,
+    }),
   deleteServer: (id: number) =>
     request<{ status: string; id: number }>(`/api/servers/${id}`, {
       method: "DELETE",
     }),
+
+  // ---- Node groups (group nodes by route; start/stop a whole group at once) ----
+  listNodeGroups: () => request<{ groups: NodeGroup[] }>("/api/node-groups"),
+  createNodeGroup: (req: NodeGroupRequest) =>
+    request<{ status: string; group: NodeGroup }>("/api/node-groups", {
+      method: "POST",
+      body: req,
+    }),
+  updateNodeGroup: (id: number, req: NodeGroupRequest) =>
+    request<{ status: string; group: NodeGroup }>(`/api/node-groups/${id}`, {
+      method: "PUT",
+      body: req,
+    }),
+  deleteNodeGroup: (id: number) =>
+    request<{ status: string; id: number }>(`/api/node-groups/${id}`, {
+      method: "DELETE",
+    }),
+  startNodeGroup: (id: number) =>
+    request<GroupStartResult>(`/api/node-groups/${id}/start`, { method: "POST" }),
+  stopNodeGroup: (id: number) =>
+    request<{ status: string; group: string; stopped: number }>(
+      `/api/node-groups/${id}/stop`,
+      { method: "POST" },
+    ),
 };
 
 /** Authenticated file download: GET `path` with the X-API-Key header, read the

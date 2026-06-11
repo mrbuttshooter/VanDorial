@@ -48,6 +48,53 @@ class Connector(Base):
         }
 
 
+class NodeGroup(Base):
+    """A named set of origination nodes sharing a destination route.
+
+    Groups nodes "by customer / route": the group stores the shared loop settings
+    (MADA destination + rate/duration/targets), so starting the group fans a loop
+    out to EVERY member node — each on its own source IP + number pool, one loop
+    per IP — and stopping the group stops them all.
+    """
+    __tablename__ = "node_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+    description = Column(Text, default="")
+    # Shared loop settings applied to every member node on group start.
+    dest_host = Column(String(255), default="")
+    dest_port = Column(Integer, default=5060)
+    transport = Column(String(10), default="udp")
+    rate = Column(Float, default=1.0)
+    max_concurrent = Column(Integer, default=10)
+    duration_mode = Column(String(10), default="fixed")
+    duration_s = Column(Integer, default=180)
+    duration_max_s = Column(Integer, default=0)
+    match_key = Column(String(20), default="exact")
+    target_calls = Column(Integer, default=0)
+    target_minutes = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "dest_host": self.dest_host or "",
+            "dest_port": self.dest_port or 5060,
+            "transport": self.transport or "udp",
+            "rate": self.rate or 1.0,
+            "max_concurrent": self.max_concurrent or 10,
+            "duration_mode": self.duration_mode or "fixed",
+            "duration_s": self.duration_s or 0,
+            "duration_max_s": self.duration_max_s or 0,
+            "match_key": self.match_key or "exact",
+            "target_calls": self.target_calls or 0,
+            "target_minutes": self.target_minutes or 0,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Server(Base):
     """A named origination server = a source IP a loop can run from.
 
@@ -65,6 +112,7 @@ class Server(Base):
     description = Column(Text, default="")
     api_url = Column(String(512), default="")  # reserved: remote fleet node URL
     enabled = Column(Boolean, default=True)
+    group_id = Column(Integer, default=None)  # optional NodeGroup membership
     # Per-node number pool ("each IP one loop", so the node IS the loop unit):
     # the origin/drop sale zones it dials and the generated A/B pool file.
     origin_zone = Column(String(255), default="")
@@ -81,6 +129,7 @@ class Server(Base):
             "ip": self.ip,
             "description": self.description,
             "enabled": self.enabled,
+            "group_id": self.group_id,
             "origin_zone": self.origin_zone or "",
             "dest_zone": self.dest_zone or "",
             "pool_count": self.pool_count or 0,
@@ -237,6 +286,7 @@ class Database:
             ("pool_count", "INTEGER DEFAULT 0"),
             ("pool_length", "INTEGER DEFAULT 11"),
             ("csv_path", "VARCHAR(1024) DEFAULT ''"),
+            ("group_id", "INTEGER"),
         ],
     }
 
