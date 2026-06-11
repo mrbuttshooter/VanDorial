@@ -96,19 +96,18 @@
   </send>
 
   <!-- ── Hold for the configured call duration ──────────────────────────
-       The per-call hold (ms) travels in the -inf row's third column ([field2]),
-       baked by LoopEngine._prepare_csv for both fixed and range modes. An
-       attributed <pause> deliberately ignores SIPp's -d flag, so the duration
-       MUST come from the CSV — never -d.
+       A bare <pause/> holds the call for SIPp's -d value (milliseconds), which
+       the LoopEngine sets from the campaign's duration_s. We do NOT put
+       milliseconds="[field2]" here: SIPp parses the milliseconds attribute as a
+       static integer at load time and does NOT substitute -inf injection fields
+       inside it (same limitation as the recv timeout attribute), so a per-row
+       [field2] hold makes the scenario fail to load. (Per-call RANDOM durations
+       are a follow-up — they need a SIPp call-variable pause, not -d.)
 
        No originator-side media is played: keeping the SIP dialog up for the
-       hold does NOT require the UAC to source RTP, and two-way media is the
-       UAS's job (-rtp_echo). (Optional one-way originator media could be added
-       later via <exec play_pcap_audio="..."> with an ABSOLUTE path rendered by
-       LoopEngine and a SIPp build with pcap support — libpcap is in the
-       Dockerfile — but it is intentionally omitted here to avoid a missing-file
-       load abort.) -->
-  <pause milliseconds="[field2]" />
+       hold does NOT require the UAC to source RTP; two-way media is the UAS's
+       job (-rtp_echo). -->
+  <pause />
 
   <!-- ── BYE → A-side clock STOPS here (t_bye_sent) ─────────────────────── -->
   <send retrans="500">

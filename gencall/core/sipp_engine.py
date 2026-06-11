@@ -142,6 +142,7 @@ class SIPpInstance:
     max_calls: int = 0  # 0 = unlimited
     call_limit: int = 10  # concurrent call limit
     duration: int = 0  # 0 = run forever
+    media_port: int = 0  # RTP echo base port (SIPp -mp); 0 = use config min_rtp_port
     csv_file: str = ""
     auth_user: str = ""
     auth_pass: str = ""
@@ -200,15 +201,14 @@ class SIPpInstance:
             cmd.extend(["-mi", self.local_ip])
         cmd.extend(["-p", str(self.local_port)])
 
-        # RTP media port window. ALWAYS pin SIPp's media ports inside the
-        # firewalled range (config [sip] min/max_rtp_port) — without this SIPp
-        # uses its built-in ~6000 base, which the host firewall drops, so return
-        # media never arrives. min < max is validated in Config (warn-only); we
-        # emit whatever is configured so the window is explicit on every launch.
-        cmd.extend([
-            "-min_rtp_port", str(config.min_rtp_port),
-            "-max_rtp_port", str(config.max_rtp_port),
-        ])
+        # RTP echo media port. SIPp's real option is -mp (the local RTP echo base
+        # port; it also echoes on +2) — there is NO -min_rtp_port/-max_rtp_port in
+        # SIPp, and passing them makes sipp reject the whole command line and dump
+        # usage. Pin -mp inside the firewalled range so return media is not dropped.
+        # The UAS and each UAC get distinct media_port values (set by the
+        # LoopEngine) so two sipp processes on one host never collide on a port.
+        media_port = self.media_port if self.media_port > 0 else config.min_rtp_port
+        cmd.extend(["-mp", str(media_port)])
 
         # Transport
         cmd.extend(["-t", self.transport.value])

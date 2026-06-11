@@ -197,8 +197,11 @@ class LoopEngine:
             max_dur = 7200
         transport = _TRANSPORT_MAP.get(self.config.sipp_transport.lower(), SIPpTransport.UDP)
 
-        # -rtp_echo: two-way media; -key duration_max_s: scenario guard value.
-        extra = f"-rtp_echo -key duration_max_s {max_dur}"
+        # -rtp_echo: two-way media (SIPp echoes RTP on -mp and -mp+2). The
+        # answered-call max-duration guard is a LITERAL in loop_uas.xml's recv
+        # timeout (SIPp does not substitute -key keywords inside the timeout
+        # attribute), so we no longer pass -key duration_max_s here.
+        extra = "-rtp_echo"
         return SIPpInstance(
             id=UAS_INSTANCE_ID,
             scenario_file=UAS_TEMPLATE,
@@ -211,6 +214,7 @@ class LoopEngine:
             call_rate=1.0,
             max_calls=0,             # answer forever
             call_limit=max_answered,
+            media_port=self.config.min_rtp_port,  # UAS RTP echo base (-mp)
             extra_args=extra,
         )
 
@@ -389,7 +393,15 @@ class LoopEngine:
                 call_rate=float(rate),
                 max_calls=max_calls,
                 call_limit=int(max_concurrent),
-                duration=0,  # hold is per-row [field2] ms in the CSV, not -d
+                # Hold each call for duration_s via SIPp -d (an attributed <pause>
+                # cannot read a per-row [field2] — SIPp does not substitute -inf
+                # fields inside the milliseconds attribute). The UAC scenario uses
+                # a bare <pause/>, which honours -d. (Per-call random range is a
+                # follow-up: it needs a SIPp call-variable pause, not -d.)
+                duration=int(duration_s) if duration_s else 0,
+                # UAC RTP media port (-mp): offset from the UAS base so the two
+                # sipp processes on this host never bind the same media port.
+                media_port=self.config.min_rtp_port + 100,
                 csv_file=resolved_csv,
                 campaign_id=campaign_id,
             )

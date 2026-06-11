@@ -42,16 +42,17 @@ def test_build_command_has_no_bg_flag(stub_sipp):
     assert "-bg" not in cmd
 
 
-def test_build_command_always_emits_rtp_port_window(stub_sipp):
-    """RTP media ports are pinned inside the firewalled config window."""
+def test_build_command_pins_rtp_echo_port_with_mp(stub_sipp):
+    """RTP echo media port uses SIPp's real -mp flag, pinned inside the config
+    window. -min_rtp_port/-max_rtp_port are NOT valid SIPp options (they make
+    sipp reject the command line) and must never be emitted."""
     inst = _instance()
     cmd = inst.build_command(stub_sipp.config)
-    assert "-min_rtp_port" in cmd
-    assert "-max_rtp_port" in cmd
+    assert "-mp" in cmd
+    assert "-min_rtp_port" not in cmd and "-max_rtp_port" not in cmd
     cfg = stub_sipp.config
-    # The values immediately follow their flags and match config.
-    assert cmd[cmd.index("-min_rtp_port") + 1] == str(cfg.min_rtp_port)
-    assert cmd[cmd.index("-max_rtp_port") + 1] == str(cfg.max_rtp_port)
+    # media_port == 0 on the instance falls back to config.min_rtp_port.
+    assert cmd[cmd.index("-mp") + 1] == str(cfg.min_rtp_port)
 
 
 def test_build_command_emits_i_and_mi_when_local_ip_set(stub_sipp):
@@ -68,7 +69,7 @@ def test_build_command_omits_i_mi_when_no_local_ip(stub_sipp):
     cmd = inst.build_command(stub_sipp.config)
     assert "-i" not in cmd
     assert "-mi" not in cmd
-    assert "-min_rtp_port" in cmd  # still pinned
+    assert "-mp" in cmd  # RTP echo port still pinned
 
 
 def test_fixed_duration_does_not_pass_d_flag_via_engine(stub_sipp):

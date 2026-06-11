@@ -19,8 +19,10 @@
   (firewall is the real boundary; the app layer is verification-only - design
   §4.1 trust filter).
 
-  The answered-call max-duration is injected as the recv timeout below; the
-  LoopEngine renders [duration_max_s] from config (default 7200 s).
+  The answered-call max-duration is a LITERAL in the recv timeout below
+  (7200000 ms = 2 h). SIPp does NOT substitute -key keywords inside a timeout
+  attribute (it parses it as a static integer at load), so the guard cannot be
+  config-driven without rendering the XML — change the literal here to adjust.
 -->
 <scenario name="GenCall - Loop UAS">
 
@@ -96,7 +98,7 @@
   <!-- ── Wait for BYE, bounded by the answered-call max-duration guard ───
        ontimeout jumps to the guard label, which BYEs the stuck call from our
        side so it can never hold a channel forever (design §4.1). -->
-  <recv request="BYE" timeout="[duration_max_s]000" ontimeout="max_duration_guard" crlf="true" />
+  <recv request="BYE" timeout="7200000" ontimeout="max_duration_guard" crlf="true" />
 
   <!-- ── BYE received → B-side clock STOPS here (t_bye_received) ─────────── -->
   <nop>

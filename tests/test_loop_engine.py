@@ -221,8 +221,8 @@ def test_range_duration_field2_within_window(loop_engine):
         assert 2000 <= hold <= 5000
 
 
-def test_uas_command_has_i_mi_and_rtp_window(loop_engine, monkeypatch):
-    """The persistent UAS binds the SIP-facing IP (-i/-mi) + RTP window."""
+def test_uas_command_has_i_mi_and_mp(loop_engine, monkeypatch):
+    """The persistent UAS binds the SIP-facing IP (-i/-mi) + an RTP echo port (-mp)."""
     # Set a SIP-facing local IP so -i/-mi are emitted.
     monkeypatch.setattr(type(loop_engine.config), "sip_local_ip",
                         property(lambda self: "10.9.9.9"))
@@ -230,22 +230,22 @@ def test_uas_command_has_i_mi_and_rtp_window(loop_engine, monkeypatch):
     cmd = inst.build_command(loop_engine.config)
     assert "-i" in cmd and cmd[cmd.index("-i") + 1] == "10.9.9.9"
     assert "-mi" in cmd and cmd[cmd.index("-mi") + 1] == "10.9.9.9"
-    assert "-min_rtp_port" in cmd and "-max_rtp_port" in cmd
+    assert "-mp" in cmd
+    assert "-min_rtp_port" not in cmd and "-max_rtp_port" not in cmd
 
 
-def test_uas_enforces_positive_duration_max_s(loop_engine, monkeypatch):
-    """A 0/unset answered-call guard is forced positive before launch.
-
-    The UAS recv timeout is "[duration_max_s]000" ms; a 0 guard would BYE every
-    call the instant it answers. _build_uas_instance must substitute a positive
-    value (the 7200 s fallback) into the -key.
-    """
-    monkeypatch.setattr(type(loop_engine.config),
-                        "loops_answered_max_duration_s",
-                        property(lambda self: 0))
+def test_uas_max_duration_guard_is_a_literal_not_a_key(loop_engine):
+    """The answered-call max-duration guard is a LITERAL integer in loop_uas.xml's
+    recv timeout — SIPp does not substitute a -key keyword inside a timeout
+    attribute, so the old "[duration_max_s]000" form failed to load. The UAS
+    therefore no longer passes -key duration_max_s; it just passes -rtp_echo."""
+    import re
     inst = loop_engine._build_uas_instance()
-    assert "-key duration_max_s 0" not in inst.extra_args
-    assert "duration_max_s 7200" in inst.extra_args
+    assert inst.extra_args == "-rtp_echo"
+    assert "duration_max_s" not in inst.extra_args
+    xml = open(inst.scenario_file, encoding="latin-1").read()
+    m = re.search(r'request="BYE"\s+timeout="(\d+)"', xml)
+    assert m and int(m.group(1)) > 0, "UAS recv BYE timeout must be a positive integer literal"
 
 
 # ─── CallRecordParser wiring (design §4.2 — the records BLOCKER) ──────────────
