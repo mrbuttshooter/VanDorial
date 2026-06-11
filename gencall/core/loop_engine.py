@@ -388,6 +388,10 @@ class LoopEngine:
                 remote_host=dest_host,
                 remote_port=int(dest_port),
                 local_port=0,             # OS-assigned ephemeral source port
+                # Source IP for outbound calls. Empty => the OS picks per routing.
+                # Set [sip] local_ip to pin a specific NIC/IP (the address your
+                # carrier/MADA whitelists as VanDorial's origination source).
+                local_ip=self.config.sip_local_ip,
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=float(rate),

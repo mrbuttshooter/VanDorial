@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
 <!--
-  GenCall - Basic SIP Call Scenario (UAC)
-  INVITE -> 200 OK -> ACK -> pause -> BYE -> 200 OK
+  GenCall - Basic SIP Call (UAC) — a self-contained reachability / call test.
+  Built on SIPp's proven built-in uac skeleton (valid on sipp 3.6.1):
+  INVITE -> 200 -> ACK -> 3 s hold -> BYE -> 200.
+
+  Self-contained: needs NO -inf CSV (the one-shot test launcher provides none).
+  Earlier this scenario used [field0]/[field1] (only defined with -inf) and an
+  unused 'remote_tag' ereg, which sipp 3.6.1 treats as a fatal scenario error —
+  that is why a one-shot basic_call exited with code 1. The called user is
+  [service] (default 'service'); set it on the SUT side or via -s.
 -->
 <scenario name="GenCall - Basic Call">
 
@@ -9,11 +17,11 @@
     <![CDATA[
       INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "GenCall" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      From: "GenCall" <sip:gencall@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
       To: <sip:[service]@[remote_ip]:[remote_port]>
       Call-ID: [call_id]
       CSeq: 1 INVITE
-      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
+      Contact: <sip:gencall@[local_ip]:[local_port];transport=[transport]>
       Max-Forwards: 70
       Content-Type: application/sdp
       Content-Length: [len]
@@ -33,47 +41,33 @@
     ]]>
   </send>
 
-  <!-- Expect 100 Trying -->
   <recv response="100" optional="true" />
-
-  <!-- Expect 180 Ringing -->
   <recv response="180" optional="true" />
-
-  <!-- Expect 183 Session Progress -->
   <recv response="183" optional="true" />
+  <recv response="200" rtd="true" crlf="true" />
 
-  <!-- Expect 200 OK -->
-  <recv response="200" rtd="true" crlf="true">
-    <action>
-      <ereg regexp=".*" search_in="hdr" header="To:" assign_to="remote_tag" />
-    </action>
-  </recv>
-
-  <!-- Send ACK -->
   <send>
     <![CDATA[
       ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "GenCall" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      [last_To:]
+      From: "GenCall" <sip:gencall@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
       CSeq: 1 ACK
-      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
+      Contact: <sip:gencall@[local_ip]:[local_port];transport=[transport]>
       Max-Forwards: 70
       Content-Length: 0
     ]]>
   </send>
 
-  <!-- Call duration -->
-  <pause milliseconds="[field1]" />
+  <pause milliseconds="3000" />
 
-  <!-- Send BYE -->
   <send retrans="500">
     <![CDATA[
       BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "GenCall" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      [last_To:]
+      From: "GenCall" <sip:gencall@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
       Call-ID: [call_id]
       CSeq: 2 BYE
       Max-Forwards: 70
@@ -81,7 +75,6 @@
     ]]>
   </send>
 
-  <!-- Expect 200 OK for BYE -->
   <recv response="200" crlf="true" />
 
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />
