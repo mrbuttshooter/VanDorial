@@ -310,7 +310,36 @@ class SIPpEngine:
         # engine still runs standalone (and in tests) without a registry wired.
         self.registry = registry
         self._lock = threading.Lock()
+        # Media (RTP) ports in use across all running instances. SIPp binds the
+        # -mp port (and +2 for -rtp_echo), so two instances sharing one base port
+        # collide ("Address already in use", SIPp exits 254). We hand each
+        # instance a UNIQUE base port from the config window so the persistent UAS,
+        # every per-campaign UAC, and any one-shot test never clash.
+        self._media_ports_used: set[int] = set()
         self._set_file_limit()
+
+    def _alloc_media_port(self) -> int:
+        """Reserve a unique even RTP base port in [min_rtp_port, max_rtp_port].
+
+        Stepped by 4 to leave room for RTP (p), RTCP (p+1) and the -rtp_echo
+        mirror (p+2). Caller must hold self._lock. Falls back to min_rtp_port if
+        the window is exhausted (logged) rather than failing the launch.
+        """
+        lo = self.config.min_rtp_port
+        hi = self.config.max_rtp_port
+        p = lo if lo % 2 == 0 else lo + 1
+        while p + 2 <= hi:
+            if p not in self._media_ports_used:
+                self._media_ports_used.add(p)
+                return p
+            p += 4
+        logger.warning("RTP port window %d-%d exhausted; reusing %d", lo, hi, lo)
+        return lo
+
+    def _release_media_port(self, instance: "SIPpInstance") -> None:
+        port = getattr(instance, "media_port", 0)
+        if port:
+            self._media_ports_used.discard(port)
 
     def _set_file_limit(self):
         """Set the open file limit for SIPp."""
@@ -332,6 +361,12 @@ class SIPpEngine:
                     return False
 
             self.instances[instance.id] = instance
+            # Assign a unique RTP base port (or register an explicitly-set one) so
+            # no two SIPp instances bind the same -mp and collide (exit 254).
+            if not getattr(instance, "media_port", 0):
+                instance.media_port = self._alloc_media_port()
+            else:
+                self._media_ports_used.add(instance.media_port)
             # Set STARTING synchronously while we still hold the engine lock so a
             # concurrent monitor pass (LoopEngine restart check) sees this
             # instance as not-dead the instant it is registered — preventing a
@@ -473,6 +508,7 @@ class SIPpEngine:
                             instance._process.wait(timeout=5)
 
                 instance.state = SIPpState.STOPPED
+                self._release_media_port(instance)
                 # The PID is gone — forget it so reconciliation never targets it.
                 if self.registry is not None and stopped_pid is not None:
                     try:
@@ -500,6 +536,7 @@ class SIPpEngine:
                 return False
             if instance.state == SIPpState.RUNNING:
                 return False
+            self._release_media_port(instance)
             # Cleanup stats file
             if instance._stats_file and os.path.exists(instance._stats_file):
                 os.remove(instance._stats_file)

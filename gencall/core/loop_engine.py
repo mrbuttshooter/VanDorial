@@ -214,7 +214,9 @@ class LoopEngine:
             call_rate=1.0,
             max_calls=0,             # answer forever
             call_limit=max_answered,
-            media_port=self.config.min_rtp_port,  # UAS RTP echo base (-mp)
+            # media_port left 0: SIPpEngine assigns a unique RTP base port from
+            # the config window so the UAS, every UAC and one-shot tests never
+            # collide on -mp (which made SIPp exit 254 "Address already in use").
             extra_args=extra,
         )
 
@@ -403,9 +405,8 @@ class LoopEngine:
                 # a bare <pause/>, which honours -d. (Per-call random range is a
                 # follow-up: it needs a SIPp call-variable pause, not -d.)
                 duration=int(duration_s) if duration_s else 0,
-                # UAC RTP media port (-mp): offset from the UAS base so the two
-                # sipp processes on this host never bind the same media port.
-                media_port=self.config.min_rtp_port + 100,
+                # media_port left 0: SIPpEngine assigns a unique RTP base port, so
+                # concurrent campaigns' UACs (and the UAS) never bind the same -mp.
                 csv_file=resolved_csv,
                 campaign_id=campaign_id,
             )
