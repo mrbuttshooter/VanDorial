@@ -6,9 +6,14 @@
 import type {
   Connector,
   ConnectorRequest,
+  GenerateNumbersRequest,
+  GenerateNumbersResult,
   Health,
   LoopCampaign,
+  SaleZoneCountry,
   Scenario,
+  Server,
+  ServerRequest,
   StartLoopRequest,
   StartTestRequest,
   StatsSnapshot,
@@ -218,6 +223,28 @@ export const api = {
       `/api/loops/${encodeURIComponent(id)}/records.csv`,
       `${id}_records.csv`,
     ),
+
+  // ---- Sale zones + number generation (web "drop zone" flow) ----
+  saleZones: () =>
+    request<{ countries: SaleZoneCountry[] }>("/api/sale-zones"),
+  generateNumbers: (req: GenerateNumbersRequest) =>
+    request<GenerateNumbersResult>("/api/loops/numbers", {
+      method: "POST",
+      body: req,
+    }),
+
+  // ---- Servers (source-IP "nodes") ----
+  listServers: () => request<{ servers: Server[] }>("/api/servers"),
+  sourceIps: () => request<{ source_ips: string[] }>("/api/source-ips"),
+  createServer: (req: ServerRequest) =>
+    request<{ status: string; server: Server }>("/api/servers", {
+      method: "POST",
+      body: req,
+    }),
+  deleteServer: (id: number) =>
+    request<{ status: string; id: number }>(`/api/servers/${id}`, {
+      method: "DELETE",
+    }),
 };
 
 /** Authenticated file download: GET `path` with the X-API-Key header, read the

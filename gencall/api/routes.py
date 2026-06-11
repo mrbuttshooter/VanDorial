@@ -19,7 +19,7 @@ from gencall.core.sipp_engine import (
 from gencall.core.stats import StatsEngine
 from gencall.core.api_gateway import APIGateway
 from gencall.scenarios.manager import ScenarioManager
-from gencall.db.models import Database, Connector, Scenario, TestRun, User
+from gencall.db.models import Database, Connector, Scenario, Server, TestRun, User
 
 logger = logging.getLogger("gencall.api")
 
@@ -108,6 +108,12 @@ class ConnectorRequest(BaseModel):
     transport: str = "udp"
     auth_user: str = ""
     auth_pass: str = ""
+
+
+class ServerRequest(BaseModel):
+    name: str
+    ip: str
+    description: str = ""
 
 
 class ScenarioRequest(BaseModel):
@@ -389,6 +395,89 @@ def delete_connector(name: str):
         session.delete(c)
         session.commit()
         return {"status": "deleted", "name": name}
+    finally:
+        session.close()
+
+
+# ─── Servers (source-IP "nodes") ────────────────────────────────────────────────
+
+def _detect_source_ips() -> list[str]:
+    """Best-effort list of the box's bound IPv4 addresses (for the Add-Server
+    suggestion list). Loopback and link-local are filtered out."""
+    ips: set[str] = set()
+    try:
+        import socket
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    try:
+        import psutil  # optional; richer per-NIC enumeration when present
+        for addrs in psutil.net_if_addrs().values():
+            for a in addrs:
+                if getattr(a, "family", None) == 2:  # AF_INET
+                    ips.add(a.address)
+    except Exception:
+        pass
+    return sorted(
+        ip for ip in ips
+        if not ip.startswith("127.") and not ip.startswith("169.254.")
+    )
+
+
+@app.get("/api/source-ips", dependencies=[Depends(require_api_key)])
+def list_source_ips():
+    """Auto-detected source IPv4s on this box (suggestions for adding servers)."""
+    return {"source_ips": _detect_source_ips()}
+
+
+@app.get("/api/servers", dependencies=[Depends(require_api_key)])
+def list_servers():
+    """List origination servers (a server = a source IP a loop can run from)."""
+    if not db:
+        return {"servers": []}
+    session = db.get_session()
+    try:
+        return {"servers": [s.to_dict() for s in session.query(Server).all()]}
+    finally:
+        session.close()
+
+
+@app.post("/api/servers", dependencies=[Depends(require_api_key)])
+def create_server(req: ServerRequest):
+    """Register a server. ``name`` is unique; ``ip`` is the source bind address."""
+    if not db:
+        raise HTTPException(500, "Database not configured")
+    name = (req.name or "").strip()
+    ip = (req.ip or "").strip()
+    if not name or not ip:
+        raise HTTPException(422, "name and ip are required")
+    session = db.get_session()
+    try:
+        s = Server(name=name, ip=ip, description=req.description or "")
+        session.add(s)
+        session.commit()
+        return {"status": "created", "server": s.to_dict()}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, f"could not create server (duplicate name?): {e}")
+    finally:
+        session.close()
+
+
+@app.delete("/api/servers/{server_id}", dependencies=[Depends(require_api_key)])
+def delete_server(server_id: int):
+    """Delete a server by id."""
+    if not db:
+        raise HTTPException(500, "Database not configured")
+    session = db.get_session()
+    try:
+        s = session.query(Server).filter_by(id=server_id).first()
+        if not s:
+            raise HTTPException(404, f"Server {server_id} not found")
+        session.delete(s)
+        session.commit()
+        return {"status": "deleted", "id": server_id}
     finally:
         session.close()
 

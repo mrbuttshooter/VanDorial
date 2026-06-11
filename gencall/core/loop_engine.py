@@ -91,6 +91,10 @@ class CapExceeded(Exception):
     """Raised when a start would breach a configured cap (design §4.1)."""
 
 
+class IPBusy(Exception):
+    """Raised when a source IP already has a running loop (one loop per IP)."""
+
+
 class LoopEngine:
     """Owns one persistent UAS + N per-campaign UAC processes.
 
@@ -321,6 +325,7 @@ class LoopEngine:
         match_key="exact",
         target_calls=0,
         target_minutes=0,
+        local_ip="",
     ) -> dict:
         """Start a Loop Campaign: spawn one UAC and persist a 'running' row.
 
@@ -336,6 +341,18 @@ class LoopEngine:
             if running >= cap:
                 raise CapExceeded(
                     f"max concurrent loops reached ({running}/{cap})"
+                )
+
+            # Source IP for this loop's outbound UAC ("Node = IP"). An explicit
+            # local_ip overrides the config default; "" => the OS picks per route.
+            effective_ip = (local_ip or self.config.sip_local_ip or "").strip()
+            # One loop per IP: refuse a second running loop on the same source IP
+            # (a bound IP can run exactly one origination loop). An empty IP means
+            # "OS-routed" and is not exclusive — many such loops may coexist.
+            if effective_ip and self._ip_has_running_loop(effective_ip):
+                raise IPBusy(
+                    f"source IP {effective_ip} already runs a loop "
+                    "(one loop per IP)"
                 )
 
             # Per-campaign resource envelope (OOM guard, design §4.1). Enforced
@@ -390,10 +407,10 @@ class LoopEngine:
                 remote_host=dest_host,
                 remote_port=int(dest_port),
                 local_port=0,             # OS-assigned ephemeral source port
-                # Source IP for outbound calls. Empty => the OS picks per routing.
-                # Set [sip] local_ip to pin a specific NIC/IP (the address your
-                # carrier/MADA whitelists as VanDorial's origination source).
-                local_ip=self.config.sip_local_ip,
+                # Source IP for outbound calls (per-loop "Node = IP"). Empty =>
+                # the OS picks per routing. Pinned to the chosen server's IP so
+                # MADA sees the whitelisted VanDorial origination source.
+                local_ip=effective_ip,
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=float(rate),
@@ -427,6 +444,7 @@ class LoopEngine:
                 "name": name or campaign_id,
                 "status": "running",
                 "node_id": None,
+                "local_ip": effective_ip,
                 "dest_host": dest_host,
                 "dest_port": int(dest_port),
                 "transport": transport,
@@ -574,6 +592,16 @@ class LoopEngine:
                 count += 1
         return count
 
+    def _ip_has_running_loop(self, ip: str) -> bool:
+        """True if some campaign with source IP ``ip`` has a RUNNING UAC."""
+        for cid, c in self._campaigns.items():
+            if (c.get("local_ip") or "").strip() != ip:
+                continue
+            inst = self.engine.get_instance(c.get("instance_id") or f"uac-{cid}")
+            if inst is not None and inst.state == SIPpState.RUNNING:
+                return True
+        return False
+
     def _prepare_csv(self, csv_path, duration_mode, duration_s, duration_max_s):
         """Return a SIPp ``-inf`` path whose THIRD column ([field2]) is the
         per-call hold in milliseconds.
@@ -633,16 +661,17 @@ class LoopEngine:
 
     @staticmethod
     def _write_inf(rows, _unused):
-        """Write a SIPp ``-inf`` file (``SEQUENTIAL`` + ``;``-rows) to a temp path.
+        """Write a SIPp ``-inf`` file (``RANDOM`` + ``;``-rows) to a temp path.
 
-        ``rows`` are 2-tuples (a, b) or 3-tuples (a, b, duration_ms). Returns the
-        file path. The file lives in the platform temp dir; it is a generated
-        artifact for one campaign's UAC.
+        ``RANDOM`` so each call draws a random row from the (large) number pool
+        rather than marching the file in order. ``rows`` are 2-tuples (a, b) or
+        3-tuples (a, b, duration_ms). Returns the file path. The file lives in
+        the platform temp dir; it is a generated artifact for one campaign's UAC.
         """
         fd, path = tempfile.mkstemp(prefix="gencall_loop_", suffix=".csv")
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-                fh.write("SEQUENTIAL\n")
+                fh.write("RANDOM\n")
                 for row in rows:
                     fh.write(";".join(str(c) for c in row) + ";\n")
         except OSError:
@@ -666,20 +695,20 @@ class LoopEngine:
                 conn.execute(
                     text(
                         "INSERT INTO loop_campaigns "
-                        "(id, name, status, node_id, dest_host, dest_port, "
-                        " transport, csv_path, rate, max_concurrent, "
+                        "(id, name, status, node_id, local_ip, dest_host, "
+                        " dest_port, transport, csv_path, rate, max_concurrent, "
                         " duration_mode, duration_s, duration_max_s, match_key, "
                         " target_calls, target_minutes, created_at, started_at, "
                         " stopped_at) "
-                        "VALUES (:id, :name, :status, :node_id, :dest_host, "
-                        " :dest_port, :transport, :csv_path, :rate, "
+                        "VALUES (:id, :name, :status, :node_id, :local_ip, "
+                        " :dest_host, :dest_port, :transport, :csv_path, :rate, "
                         " :max_concurrent, :duration_mode, :duration_s, "
                         " :duration_max_s, :match_key, :target_calls, "
                         " :target_minutes, :created_at, :started_at, :stopped_at)"
                     ),
                     {k: campaign.get(k) for k in (
-                        "id", "name", "status", "node_id", "dest_host",
-                        "dest_port", "transport", "csv_path", "rate",
+                        "id", "name", "status", "node_id", "local_ip",
+                        "dest_host", "dest_port", "transport", "csv_path", "rate",
                         "max_concurrent", "duration_mode", "duration_s",
                         "duration_max_s", "match_key", "target_calls",
                         "target_minutes", "created_at", "started_at",
@@ -711,10 +740,11 @@ class LoopEngine:
 
     def _row_to_campaign(self, row):
         keys = (
-            "id", "name", "status", "node_id", "dest_host", "dest_port",
-            "transport", "csv_path", "rate", "max_concurrent", "duration_mode",
-            "duration_s", "duration_max_s", "match_key", "target_calls",
-            "target_minutes", "created_at", "started_at", "stopped_at",
+            "id", "name", "status", "node_id", "local_ip", "dest_host",
+            "dest_port", "transport", "csv_path", "rate", "max_concurrent",
+            "duration_mode", "duration_s", "duration_max_s", "match_key",
+            "target_calls", "target_minutes", "created_at", "started_at",
+            "stopped_at",
         )
         c = dict(zip(keys, row))
         c["instance_id"] = f"uac-{c['id']}"
@@ -729,7 +759,7 @@ class LoopEngine:
             with self.db.engine.connect() as conn:
                 row = conn.execute(
                     text(
-                        "SELECT id, name, status, node_id, dest_host, dest_port, "
+                        "SELECT id, name, status, node_id, local_ip, dest_host, dest_port, "
                         "transport, csv_path, rate, max_concurrent, duration_mode, "
                         "duration_s, duration_max_s, match_key, target_calls, "
                         "target_minutes, created_at, started_at, stopped_at "
@@ -751,7 +781,7 @@ class LoopEngine:
             with self.db.engine.connect() as conn:
                 rows = conn.execute(
                     text(
-                        "SELECT id, name, status, node_id, dest_host, dest_port, "
+                        "SELECT id, name, status, node_id, local_ip, dest_host, dest_port, "
                         "transport, csv_path, rate, max_concurrent, duration_mode, "
                         "duration_s, duration_max_s, match_key, target_calls, "
                         "target_minutes, created_at, started_at, stopped_at "

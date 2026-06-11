@@ -198,3 +198,23 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* New Loop form section divider + advanced disclosure. */
+.formSection {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding-bottom: var(--space-1);
+}
+
+.advancedSummary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: var(--space-2) 0;
+  user-select: none;
+}

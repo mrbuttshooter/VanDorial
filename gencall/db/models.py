@@ -48,6 +48,36 @@ class Connector(Base):
         }
 
 
+class Server(Base):
+    """A named origination server = a source IP a loop can run from.
+
+    "Node = IP": each loop binds its outbound UAC to a server's ``ip`` (-i/-mi),
+    and the engine enforces one running loop per IP. On a single box these are
+    the box's own NIC addresses; the same record extends to a remote fleet node
+    later (``api_url`` reserved for that, unused today). The user adds these in
+    the console and picks one from a dropdown when starting a loop.
+    """
+    __tablename__ = "servers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+    ip = Column(String(45), nullable=False)
+    description = Column(Text, default="")
+    api_url = Column(String(512), default="")  # reserved: remote fleet node URL
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "ip": self.ip,
+            "description": self.description,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Scenario(Base):
     """A saved SIP test scenario."""
     __tablename__ = "scenarios"

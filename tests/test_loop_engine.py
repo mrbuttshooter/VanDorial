@@ -20,7 +20,7 @@ import time
 import pytest
 
 from gencall.core.config import Config
-from gencall.core.loop_engine import CapExceeded, LoopEngine, UAS_INSTANCE_ID
+from gencall.core.loop_engine import CapExceeded, IPBusy, LoopEngine, UAS_INSTANCE_ID
 from gencall.core.process_registry import ProcessRegistry
 from gencall.core.sipp_engine import SIPpEngine, SIPpState
 from gencall.db.migrations import apply_migrations
@@ -94,6 +94,40 @@ def test_start_campaign_spawns_uac_registers_pid_and_db_row(loop_engine, db):
         ).fetchone()
     assert row is not None
     assert row[0] == "running"
+
+
+def test_local_ip_binds_uac_and_persists(loop_engine, db):
+    """A per-loop source IP binds the UAC and is recorded on the campaign + row."""
+    campaign = loop_engine.start_campaign(
+        dest_host="1.2.3.4", rate=1.0, duration_s=1, local_ip="10.9.9.9",
+    )
+    cid = campaign["id"]
+    assert campaign["local_ip"] == "10.9.9.9"
+    inst = _wait_running(loop_engine.engine, f"uac-{cid}")
+    assert inst.local_ip == "10.9.9.9"  # SIPp -i/-mi bind
+
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT local_ip FROM loop_campaigns WHERE id = :id"), {"id": cid}
+        ).fetchone()
+    assert row[0] == "10.9.9.9"
+
+
+def test_one_loop_per_ip_is_enforced(loop_engine):
+    """A second running loop on the SAME source IP is refused; a different IP is ok."""
+    first = loop_engine.start_campaign(
+        dest_host="1.2.3.4", rate=1.0, duration_s=30, local_ip="10.0.0.5")
+    _wait_running(loop_engine.engine, f"uac-{first['id']}")
+
+    with pytest.raises(IPBusy):
+        loop_engine.start_campaign(
+            dest_host="1.2.3.4", rate=1.0, duration_s=30, local_ip="10.0.0.5")
+
+    # A different IP is allowed concurrently.
+    second = loop_engine.start_campaign(
+        dest_host="1.2.3.4", rate=1.0, duration_s=30, local_ip="10.0.0.6")
+    assert second["status"] == "running"
 
 
 def test_stop_campaign_kills_uac_and_marks_stopped(loop_engine, db):
@@ -199,7 +233,8 @@ def test_fixed_duration_bakes_nonempty_field2_ms(loop_engine):
     """
     csv = loop_engine._prepare_csv("", "fixed", 3, 0)  # 3 s fixed
     rows = _csv_rows(csv)
-    assert rows[0].upper() == "SEQUENTIAL"
+    # RANDOM so each call draws a random pair from the pool (was SEQUENTIAL).
+    assert rows[0].upper() == "RANDOM"
     # First data row: a;b;hold_ms;  -> field2 is column index 2 == 3000 ms.
     cells = [c for c in rows[1].split(";")]
     assert cells[2] == "3000"
@@ -413,6 +448,72 @@ def api_client(loop_engine, db, monkeypatch):
     client = TestClient(app)
     client.headers.update({"X-API-Key": raw_key})
     return client
+
+
+def test_sale_zones_endpoint_returns_country_tree(api_client):
+    """GET /api/sale-zones returns a country -> [zones] tree for the pickers."""
+    resp = api_client.get("/api/sale-zones")
+    assert resp.status_code == 200, resp.text
+    countries = {c["name"]: c["zones"] for c in resp.json()["countries"]}
+    assert "Nigeria" in countries
+    assert "Nigeria-Lagos" in countries["Nigeria"]
+    assert "Guinea-Mobile (Orange)" in countries["Guinea"]
+
+
+def test_generate_numbers_endpoint_writes_pool(api_client):
+    """POST /api/loops/numbers generates a pool and returns its path + preview."""
+    resp = api_client.post("/api/loops/numbers", json={
+        "origin_zone": "Nigeria-Lagos",
+        "dest_zone": "Guinea-Mobile (Orange)",
+        "count": 25, "length": 11, "seed": 1,
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 25
+    assert body["csv_path"].endswith(".csv")
+    # preview rows are bare A;B (no trailing ';'), A under the origin zone code.
+    a, b = body["preview"][0].split(";")
+    assert a.startswith("2341") and b.isdigit()
+    # the written file is dialable straight into a campaign
+    import os
+    with open(body["csv_path"], encoding="utf-8") as fh:
+        first = fh.readline().strip()
+    assert first.count(";") == 1
+    os.remove(body["csv_path"])
+
+
+def test_generate_numbers_unknown_zone_is_422(api_client):
+    resp = api_client.post("/api/loops/numbers", json={
+        "origin_zone": "Atlantis", "dest_zone": "Guinea-Mobile (Orange)", "count": 5,
+    })
+    assert resp.status_code == 422, resp.text
+
+
+def test_servers_crud_roundtrip(loop_engine, db, monkeypatch):
+    """Add / list / delete a server through the worker /api/servers routes."""
+    from fastapi.testclient import TestClient
+
+    from gencall.api import routes
+    from gencall.core.api_gateway import APIGateway, APIKeyManager
+
+    gateway = APIGateway()
+    gateway.keys = APIKeyManager(db=db)
+    raw_key, _ = gateway.keys.create_key("srv-test")
+    monkeypatch.setattr(routes, "gateway", gateway, raising=False)
+    monkeypatch.setattr(routes, "db", db, raising=False)
+
+    client = TestClient(routes.app)
+    client.headers.update({"X-API-Key": raw_key})
+
+    created = client.post("/api/servers", json={"name": "vd1", "ip": "10.0.0.7"})
+    assert created.status_code == 200, created.text
+    sid = created.json()["server"]["id"]
+
+    listed = client.get("/api/servers").json()["servers"]
+    assert any(s["ip"] == "10.0.0.7" and s["name"] == "vd1" for s in listed)
+
+    assert client.delete(f"/api/servers/{sid}").status_code == 200
+    assert all(s["id"] != sid for s in client.get("/api/servers").json()["servers"])
 
 
 def test_loop_endpoint_fails_closed_503_when_no_gateway(loop_engine, monkeypatch):

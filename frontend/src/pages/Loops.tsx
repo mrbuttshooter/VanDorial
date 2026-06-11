@@ -19,11 +19,31 @@ import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { duration, int, num, pct } from "@/lib/format";
 import type {
+  GenerateNumbersResult,
   LoopCampaign,
   LoopStats,
   StartLoopRequest,
   Transport,
 } from "@/lib/types";
+
+/** Number-generation picker state (Country → Sale Zone cascade). */
+interface GenState {
+  originCountry: string;
+  originZone: string;
+  destCountry: string;
+  destZone: string;
+  count: number;
+  length: number;
+}
+
+const BLANK_GEN: GenState = {
+  originCountry: "",
+  originZone: "",
+  destCountry: "",
+  destZone: "",
+  count: 500000,
+  length: 11,
+};
 
 const BLANK: StartLoopRequest = {
   name: "",
@@ -85,22 +105,59 @@ export function Loops() {
 
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState<StartLoopRequest>(BLANK);
+  const [gen, setGen] = useState<GenState>(BLANK_GEN);
   const [busy, setBusy] = useState(false);
+
+  // Servers (source IPs) and the sale-zone tree power the loop form pickers.
+  const servers = useAsync(() => api.listServers(), []);
+  const zoneTree = useAsync(() => api.saleZones(), []);
+
+  const countries = useMemo(
+    () => (zoneTree.data?.countries ?? []),
+    [zoneTree.data],
+  );
+  const zonesFor = (countryName: string): string[] =>
+    countries.find((c) => c.name === countryName)?.zones ?? [];
 
   const set = <K extends keyof StartLoopRequest>(k: K, v: StartLoopRequest[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+  const setG = <K extends keyof GenState>(k: K, v: GenState[K]) =>
+    setGen((g) => ({ ...g, [k]: v }));
+
+  const resetForm = () => {
+    setForm(BLANK);
+    setGen(BLANK_GEN);
+  };
 
   const launch = async () => {
     if (!form.dest_host?.trim()) {
-      toast.error("Destination host is required.");
+      toast.error("Destination (MADA) host is required.");
+      return;
+    }
+    // Numbers come from EITHER the Country→Zone pickers (generated now) or a
+    // manually-entered server-side CSV path. Pickers win when both zones are set.
+    const usingPickers = gen.originZone && gen.destZone;
+    if (!usingPickers && !form.csv_path?.trim()) {
+      toast.error("Pick an origin + drop zone, or enter a CSV path.");
       return;
     }
     setBusy(true);
     try {
-      const res = await api.startLoop(form);
+      let csvPath = form.csv_path ?? "";
+      if (usingPickers) {
+        const r: GenerateNumbersResult = await api.generateNumbers({
+          origin_zone: gen.originZone,
+          dest_zone: gen.destZone,
+          count: gen.count,
+          length: gen.length,
+        });
+        csvPath = r.csv_path;
+        toast.ok(`Generated ${r.count.toLocaleString()} numbers`);
+      }
+      const res = await api.startLoop({ ...form, csv_path: csvPath });
       toast.ok(`Loop campaign launched · ${res.campaign.id}`);
       setShowNew(false);
-      setForm(BLANK);
+      resetForm();
       loops.refetch();
     } catch (e) {
       toast.error(`Launch failed: ${e instanceof Error ? e.message : e}`);
@@ -190,30 +247,128 @@ export function Loops() {
       <Modal
         open={showNew}
         title={<><IconPlay /> New Loop Campaign</>}
-        onClose={() => setShowNew(false)}
+        onClose={() => { setShowNew(false); resetForm(); }}
         footer={
           <ModalActions
-            onCancel={() => setShowNew(false)}
+            onCancel={() => { setShowNew(false); resetForm(); }}
             onConfirm={launch}
             confirmLabel="Launch"
             disabled={busy}
           />
         }
       >
-        <Field label="Campaign name" hint="Leave blank to auto-generate an id.">
-          <input
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
-            placeholder="madrid-loop"
-          />
-        </Field>
-        <Field label="Number-pair CSV path" hint="Server-side path to the A;B pair file. Blank = synthesized pair.">
-          <input
-            value={form.csv_path}
-            onChange={(e) => set("csv_path", e.target.value)}
-            placeholder="/data/pairs/madrid.csv"
-          />
-        </Field>
+        <FieldRow>
+          <Field label="Campaign name" hint="Blank = auto id.">
+            <input
+              value={form.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="ng-lagos-to-guinea"
+            />
+          </Field>
+          <Field
+            label="Source server (IP)"
+            hint={
+              servers.data?.servers?.length
+                ? "One loop per IP."
+                : "Add servers on the Servers page."
+            }
+          >
+            <select
+              value={form.local_ip ?? ""}
+              onChange={(e) => set("local_ip", e.target.value)}
+            >
+              <option value="">OS default route</option>
+              {(servers.data?.servers ?? [])
+                .filter((sv) => sv.enabled)
+                .map((sv) => (
+                  <option key={sv.id} value={sv.ip}>
+                    {sv.name} — {sv.ip}
+                  </option>
+                ))}
+            </select>
+          </Field>
+        </FieldRow>
+
+        {/* ---- Numbers: Country → Sale Zone cascade ---- */}
+        <div className={s.formSection}>Numbers (drop zones)</div>
+        <FieldRow>
+          <Field label="Origin country">
+            <select
+              value={gen.originCountry}
+              onChange={(e) =>
+                setGen((g) => ({ ...g, originCountry: e.target.value, originZone: "" }))
+              }
+            >
+              <option value="">
+                {zoneTree.loading ? "Loading…" : "Select country"}
+              </option>
+              {countries.map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Origin sale zone (A / oad)">
+            <select
+              value={gen.originZone}
+              disabled={!gen.originCountry}
+              onChange={(e) => setG("originZone", e.target.value)}
+            >
+              <option value="">Select zone</option>
+              {zonesFor(gen.originCountry).map((z) => (
+                <option key={z} value={z}>{z}</option>
+              ))}
+            </select>
+          </Field>
+        </FieldRow>
+        <FieldRow>
+          <Field label="Drop country">
+            <select
+              value={gen.destCountry}
+              onChange={(e) =>
+                setGen((g) => ({ ...g, destCountry: e.target.value, destZone: "" }))
+              }
+            >
+              <option value="">
+                {zoneTree.loading ? "Loading…" : "Select country"}
+              </option>
+              {countries.map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Drop sale zone (B / dad)">
+            <select
+              value={gen.destZone}
+              disabled={!gen.destCountry}
+              onChange={(e) => setG("destZone", e.target.value)}
+            >
+              <option value="">Select zone</option>
+              {zonesFor(gen.destCountry).map((z) => (
+                <option key={z} value={z}>{z}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="How many" hint="Random draw pool.">
+            <input
+              type="number"
+              value={gen.count}
+              onChange={(e) => setG("count", Number(e.target.value))}
+            />
+          </Field>
+        </FieldRow>
+        <details>
+          <summary className={s.advancedSummary}>Advanced: use a server-side CSV path instead</summary>
+          <Field label="Number-pair CSV path" hint="Overrides the zone pickers. A;B per row.">
+            <input
+              value={form.csv_path}
+              onChange={(e) => set("csv_path", e.target.value)}
+              placeholder="/tmp/loop_numbers.csv"
+            />
+          </Field>
+        </details>
+
+        {/* ---- Destination (MADA switch) ---- */}
+        <div className={s.formSection}>Destination (MADA switch)</div>
         <FieldRow>
           <Field label="Destination host">
             <input

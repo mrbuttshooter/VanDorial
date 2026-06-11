@@ -97,6 +97,39 @@ def load_zones(deck_path: str) -> "OrderedDict[str, List[str]]":
     return zones
 
 
+# Countries whose own name contains a dash, so country-splitting must NOT cut
+# them at the first '-'. Extend as the deck reveals more.
+KNOWN_DASH_COUNTRIES = ("Guinea-Bissau", "Timor-Leste")
+
+
+def derive_country(zone: str) -> str:
+    """Derive a country label from a zone name.
+
+    Strips a trailing ``(operator)``, then takes the text before the first
+    ``-`` — EXCEPT for known dash-named countries (e.g. Guinea-Bissau), which
+    are kept whole. So ``Nigeria-Lagos`` -> ``Nigeria``,
+    ``Guinea-Mobile (Orange)`` -> ``Guinea``, ``Guinea-Bissau-Mobile`` ->
+    ``Guinea-Bissau``, ``Bosnia & Herzegovina (BH Telecom)`` ->
+    ``Bosnia & Herzegovina``.
+    """
+    name = zone.split(" (", 1)[0].strip()
+    for dc in KNOWN_DASH_COUNTRIES:
+        if name == dc or name.startswith(dc + "-"):
+            return dc
+    return name.split("-", 1)[0].strip()
+
+
+def build_country_tree(zones: Dict[str, List[str]]) -> "OrderedDict[str, List[str]]":
+    """Group zone names by derived country: ``country -> [zone, ...]`` (sorted)."""
+    tree: "OrderedDict[str, List[str]]" = OrderedDict()
+    for zone in zones:
+        tree.setdefault(derive_country(zone), []).append(zone)
+    out: "OrderedDict[str, List[str]]" = OrderedDict()
+    for country in sorted(tree):
+        out[country] = sorted(tree[country])
+    return out
+
+
 def find_zone(zones: Dict[str, List[str]], query: str) -> str:
     """Resolve a zone name from a query: exact (case-insensitive) wins; otherwise
     a UNIQUE case-insensitive substring match. Raises ValueError listing
@@ -232,12 +265,18 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
     return pairs
 
 
-def write_csv(pairs: List[Pair], out, header: bool = True) -> None:
-    """SIPp ``-inf`` body: optional ``SEQUENTIAL`` header then ``A;B;`` rows."""
-    if header:
-        out.write("SEQUENTIAL\n")
+def write_csv(pairs: List[Pair], out, order: Optional[str] = None) -> None:
+    """Write A/B pairs as ``A;B`` rows, one pair per line (no trailing ``;``).
+
+    ``order`` (``"sequential"`` / ``"random"``) prepends that SIPp ``-inf`` header
+    line for standalone use; ``None`` (default) writes a bare headerless pool —
+    the LoopEngine re-renders its own ``-inf`` (header + per-call hold column)
+    from this pool, so a header here is not required.
+    """
+    if order:
+        out.write(order.strip().upper() + "\n")
     for a, b in pairs:
-        out.write(f"{a};{b};\n")
+        out.write(f"{a};{b}\n")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -250,6 +289,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--codes", help="Sale Codes deck CSV (zone,code). Default: bundled deck/sample.")
     p.add_argument("--list-zones", nargs="?", const="", metavar="SUBSTR",
                    help="list zones (optionally filtered by substring) and exit")
+    p.add_argument("--list-countries", nargs="?", const="", metavar="SUBSTR",
+                   help="list countries (optionally filtered) with their zone counts and exit")
     # origin (A / oad)
     p.add_argument("--oad-zone", help="origin sale zone (A-number)")
     p.add_argument("--oad-code", help="pin the origin code instead of spreading the zone")
@@ -259,12 +300,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--dad-code", help="pin the destination code instead of spreading the zone")
     p.add_argument("--dad", help="advanced: raw switch pattern for B (e.g. '^..22462.*')")
     # output
-    p.add_argument("--count", type=int, default=100, help="rows to generate (default 100)")
+    p.add_argument("--count", type=int, default=500000,
+                   help="rows to generate (default 500000 — a large random draw pool)")
     p.add_argument("--length", type=int, default=11,
                    help="total digits per number (default 11; min code+4 enforced)")
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducible output")
     p.add_argument("--out", default="-", help="output path, or '-' for stdout (default)")
-    p.add_argument("--no-header", action="store_true", help="omit the SEQUENTIAL header")
+    p.add_argument("--order", choices=["sequential", "random"], default=None,
+                   help="prepend a SIPp -inf order header (default: none — bare A;B pool)")
     p.add_argument("--allow-dupes", action="store_true", help="allow duplicate A/B pairs")
     return p
 
@@ -277,6 +320,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (FileNotFoundError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    if args.list_countries is not None:
+        q = args.list_countries.lower()
+        tree = build_country_tree(zones)
+        hits = [(c, zs) for c, zs in tree.items() if q in c.lower()]
+        if not hits:
+            print(f"no countries match {args.list_countries!r}", file=sys.stderr)
+            return 1
+        for country, zs in hits:
+            print(f"{country}  [{len(zs)} zone(s)]")
+        print(f"\n{len(hits)} country(ies); deck: {deck}", file=sys.stderr)
+        return 0
 
     if args.list_zones is not None:
         q = args.list_zones.lower()
@@ -303,10 +358,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.out == "-":
-        write_csv(pairs, sys.stdout, header=not args.no_header)
+        write_csv(pairs, sys.stdout, order=args.order)
     else:
         with open(args.out, "w", encoding="utf-8", newline="") as fh:
-            write_csv(pairs, fh, header=not args.no_header)
+            write_csv(pairs, fh, order=args.order)
         print(f"wrote {len(pairs)} A/B pairs -> {args.out}  (deck: {deck})",
               file=sys.stderr)
     return 0

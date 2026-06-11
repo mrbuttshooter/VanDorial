@@ -87,12 +87,36 @@ def test_unique_pairs_by_default(zones):
     assert len(set(pairs)) == len(pairs)
 
 
-def test_write_csv_format_is_sipp_inf():
+def test_write_csv_default_is_bare_a_b_rows():
+    """Default output is one `A;B` pair per line — no header, no trailing ';'."""
     buf = io.StringIO()
-    g.write_csv([("2341000", "2246200")], buf)
-    text = buf.getvalue()
-    assert text.splitlines()[0] == "SEQUENTIAL"
-    assert text.splitlines()[1] == "2341000;2246200;"
+    g.write_csv([("44750348677", "2427070364797")], buf)
+    assert buf.getvalue() == "44750348677;2427070364797\n"
+
+
+def test_write_csv_order_header_optional():
+    buf = io.StringIO()
+    g.write_csv([("2341000", "2246200")], buf, order="random")
+    lines = buf.getvalue().splitlines()
+    assert lines == ["RANDOM", "2341000;2246200"]
+
+
+def test_derive_country_handles_breakouts_and_dash_names():
+    assert g.derive_country("Nigeria-Lagos") == "Nigeria"
+    assert g.derive_country("Guinea-Mobile (Orange)") == "Guinea"
+    assert g.derive_country("Nigeria") == "Nigeria"
+    assert g.derive_country("Bosnia & Herzegovina (BH Telecom)") == "Bosnia & Herzegovina"
+    # dash-named country kept whole
+    assert g.derive_country("Guinea-Bissau-Mobile") == "Guinea-Bissau"
+
+
+def test_build_country_tree_groups_zones(zones):
+    tree = g.build_country_tree(zones)
+    assert "Nigeria" in tree and "Guinea" in tree
+    assert "Nigeria-Lagos" in tree["Nigeria"]
+    assert "Guinea-Mobile (Orange)" in tree["Guinea"]
+    # Guinea base must NOT swallow Nigeria zones
+    assert all(z.startswith("Guinea") for z in tree["Guinea"])
 
 
 def test_pattern_path_still_matches_switch_regex(zones):
@@ -125,8 +149,8 @@ def test_cli_generates_to_file(tmp_path):
                  "--length", "11", "--seed", "1", "--out", str(out)])
     assert rc == 0
     lines = out.read_text().splitlines()
-    assert lines[0] == "SEQUENTIAL"
-    assert len(lines) == 6  # header + 5 rows
-    for row in lines[1:]:
-        a, b, _ = row.split(";")
+    assert len(lines) == 5  # no header, 5 rows
+    for row in lines:
+        a, b = row.split(";")
         assert a.startswith("2341")
+        assert b.isdigit()

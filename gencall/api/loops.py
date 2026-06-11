@@ -30,8 +30,9 @@ from gencall.api.loop_validation import (
     validate_transport,
 )
 from gencall.core.config import Config
-from gencall.core.loop_engine import CapExceeded, LoopEngine
+from gencall.core.loop_engine import CapExceeded, IPBusy, LoopEngine
 from gencall.core.loop_matcher import LoopMatcher
+from gencall.scripts import gen_loop_csv
 
 logger = logging.getLogger("gencall.api.loops")
 
@@ -69,6 +70,9 @@ class StartLoopRequest(BaseModel):
     # Port must be a real, routable port (1-65535); 0 / negatives rejected.
     dest_port: int = Field(default=5060, ge=1, le=65535)
     transport: str = "udp"
+    # Source IP this loop originates from ("Node = IP"). "" => OS-routed (legacy
+    # single-IP behaviour). The engine enforces one running loop per non-empty IP.
+    local_ip: str = ""
     csv_path: str = ""
     # Rate must be positive (a 0/negative rate is a misconfiguration, never an
     # "until stopped" sentinel). Upper bound is enforced against config.
@@ -129,7 +133,10 @@ def start_loop(req: StartLoopRequest):
             match_key=req.match_key,
             target_calls=req.target_calls,
             target_minutes=req.target_minutes,
+            local_ip=req.local_ip,
         )
+    except IPBusy as e:
+        raise HTTPException(409, str(e))
     except CapExceeded as e:
         raise HTTPException(409, str(e))
     except RuntimeError as e:
@@ -193,3 +200,76 @@ def export_loop_records(campaign_id: str):
 def answer_status():
     """UAS health + current answered-call count (design §4.4)."""
     return _engine().answer_status()
+
+
+# ─── Sale zones + number generation (web "drop zone" flow) ───────────────────
+
+# The deck is loaded once and cached (it is large and read-only).
+_ZONES_CACHE: Optional[dict] = None
+
+
+def _zones():
+    global _ZONES_CACHE
+    if _ZONES_CACHE is None:
+        _ZONES_CACHE = gen_loop_csv.load_zones(gen_loop_csv.resolve_deck_path())
+    return _ZONES_CACHE
+
+
+class GenerateNumbersRequest(BaseModel):
+    """Generate an A/B number pool from a chosen origin + drop sale zone."""
+    origin_zone: str
+    dest_zone: str
+    origin_code: str = ""          # optional: pin one code instead of spreading
+    dest_code: str = ""
+    count: int = Field(default=500000, ge=1, le=5_000_000)
+    length: int = Field(default=11, ge=4, le=18)
+    seed: Optional[int] = None
+
+
+@router.get("/api/sale-zones", dependencies=[Depends(require_api_key)])
+def sale_zones():
+    """Country -> [sale zones] tree for the cascading Country/Zone pickers."""
+    try:
+        tree = gen_loop_csv.build_country_tree(_zones())
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
+    return {"countries": [{"name": c, "zones": zs} for c, zs in tree.items()]}
+
+
+@router.post("/api/loops/numbers", dependencies=[Depends(require_api_key)])
+def generate_numbers(req: GenerateNumbersRequest):
+    """Generate an A/B number pool server-side and return its path + a preview.
+
+    The returned ``csv_path`` is fed straight into a loop campaign's ``csv_path``;
+    each call then draws a random pair from the pool (the engine renders a RANDOM
+    -inf). Numbers are validated to start with a real zone code so MADA routes
+    them to the chosen drop zone.
+    """
+    import os
+    import tempfile
+
+    zones = _zones()
+    try:
+        pairs = gen_loop_csv.generate_pairs(
+            zones,
+            oad_zone=req.origin_zone, oad_code=req.origin_code or None,
+            dad_zone=req.dest_zone, dad_code=req.dest_code or None,
+            count=req.count, length=req.length, seed=req.seed,
+        )
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(422, str(e))
+
+    numbers_dir = os.path.join(tempfile.gettempdir(), "gencall_numbers")
+    os.makedirs(numbers_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="numbers_", suffix=".csv", dir=numbers_dir)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+        gen_loop_csv.write_csv(pairs, fh)
+
+    preview = [f"{a};{b}" for a, b in pairs[:10]]
+    return {
+        "csv_path": path,
+        "count": len(pairs),
+        "origin_zone": req.origin_zone,
+        "dest_zone": req.dest_zone,
+        "preview": preview,
+    }
