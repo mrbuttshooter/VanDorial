@@ -75,7 +75,6 @@
   <!-- ── 200 OK received → A-side clock STARTS here (t_200ok_received) ──── -->
   <recv response="200" rtd="true" crlf="true">
     <action>
-      <ereg regexp=".*" search_in="hdr" header="To:" assign_to="remote_tag" />
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=answer t_200ok_received=[clock_tick] final_code=200" />
     </action>
   </recv>
