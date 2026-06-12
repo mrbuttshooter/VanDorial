@@ -48,14 +48,32 @@ def test_find_zone_absent_raises(zones):
 def test_zone_pairs_start_with_zone_codes(zones):
     pairs = g.generate_pairs(
         zones, oad_zone="Nigeria-Lagos", dad_zone="Guinea-Mobile (Orange)",
-        count=50, length=11, seed=1)
+        count=50, seed=1)
     assert len(pairs) == 50
     orange = set(zones["Guinea-Mobile (Orange)"])
     for a, b in pairs:
         assert a.isdigit() and b.isdigit()
-        assert len(a) == 11 and len(b) == 11
+        # Valid E.164 lengths by country (Nigeria 234 -> 13, Guinea 224 -> 12),
+        # NOT a flat length — a wrong-length dialed number is what MADA 404'd.
+        assert len(a) == 13 and len(b) == 12
         assert a.startswith("2341")                       # oad zone code
         assert any(b.startswith(c) for c in orange)       # one of the dad codes
+
+
+def test_e164_length_by_country_and_override():
+    assert g.e164_total_length("22462", 11) == 12        # Guinea
+    assert g.e164_total_length("2341", 11) == 13         # Nigeria
+    assert g.e164_total_length("99999", 11) == 11        # unknown -> fallback
+
+
+def test_per_side_length_override(zones):
+    # Force Lagos A to 11 (a Lagos landline) while Guinea B stays E.164 (12).
+    pairs = g.generate_pairs(
+        zones, oad_zone="Nigeria-Lagos", dad_code="22462",
+        count=10, seed=2, oad_length=11)
+    for a, b in pairs:
+        assert len(a) == 11 and a.startswith("2341")
+        assert len(b) == 12 and b.startswith("22462")
 
 
 def test_pin_dad_code_uses_only_that_code(zones):

@@ -152,6 +152,53 @@ def find_zone(zones: Dict[str, List[str]], query: str) -> str:
 
 # ── Number building ───────────────────────────────────────────────────────────
 
+# Total E.164 length (country code + national significant number) for common
+# destinations. Used as the DEFAULT per-side number length so generated numbers
+# are valid E.164 — a flat --length produced wrong-length numbers (e.g. an 11-digit
+# Guinea number when valid Guinea is 12), which carriers reject with cause=3
+# "no route to destination". Longest-prefix match on the dialed code's leading
+# digits. Within-country variation (mobile vs fixed) exists; override a specific
+# side with --oad-length / --dad-length when a zone needs an exact length.
+E164_TOTAL_LEN = {
+    "1": 11, "7": 11, "20": 12, "27": 11, "30": 12, "31": 11, "32": 11,
+    "33": 11, "34": 11, "36": 11, "39": 12, "40": 11, "41": 11, "43": 12,
+    "44": 12, "45": 10, "46": 11, "47": 10, "48": 11, "49": 12, "51": 11,
+    "52": 12, "53": 10, "54": 12, "55": 12, "56": 11, "57": 12, "58": 12,
+    "60": 11, "61": 11, "62": 12, "63": 12, "64": 11, "65": 10, "66": 11,
+    "81": 12, "82": 12, "84": 11, "86": 13, "90": 12, "91": 12, "92": 12,
+    "93": 11, "94": 11, "95": 11, "98": 12,
+    "211": 12, "212": 12, "213": 12, "216": 11, "218": 12, "220": 10,
+    "221": 12, "222": 11, "223": 11, "224": 12, "225": 13, "226": 11,
+    "227": 11, "228": 11, "229": 11, "230": 10, "231": 12, "232": 11,
+    "233": 12, "234": 13, "235": 11, "236": 11, "237": 12, "238": 10,
+    "239": 10, "240": 12, "241": 11, "242": 12, "243": 12, "244": 12,
+    "245": 10, "248": 10, "249": 12, "250": 12, "251": 12, "252": 12,
+    "253": 11, "254": 12, "255": 12, "256": 12, "257": 11, "258": 12,
+    "260": 12, "261": 12, "262": 12, "263": 12, "264": 11, "265": 12,
+    "266": 11, "267": 11, "268": 11, "269": 10, "291": 10, "297": 10,
+    "350": 11, "351": 12, "352": 11, "353": 12, "354": 10, "355": 12,
+    "356": 11, "357": 11, "358": 12, "359": 12, "370": 11, "371": 11,
+    "372": 11, "373": 11, "374": 11, "375": 12, "376": 9, "377": 11,
+    "380": 12, "381": 12, "382": 11, "385": 12, "386": 11, "387": 11,
+    "389": 11, "420": 12, "421": 12, "423": 12, "501": 11, "502": 11,
+    "503": 11, "504": 11, "505": 11, "506": 11, "507": 11, "509": 11,
+    "591": 11, "592": 10, "593": 12, "595": 12, "598": 11, "880": 13,
+    "960": 10, "961": 11, "962": 12, "963": 12, "964": 13, "965": 11,
+    "966": 12, "967": 12, "968": 11, "971": 12, "972": 12, "973": 11,
+    "974": 11, "975": 11, "976": 11, "977": 13, "992": 12, "993": 11,
+    "994": 12, "995": 12, "996": 12, "998": 12,
+}
+
+
+def e164_total_length(dialed_code: str, fallback: int) -> int:
+    """Best-effort total E.164 length (CC + NSN) for a dialed code, by longest
+    country-code prefix match; ``fallback`` when the country is unknown."""
+    for n in (3, 2, 1):
+        if dialed_code[:n] in E164_TOTAL_LEN:
+            return E164_TOTAL_LEN[dialed_code[:n]]
+    return fallback
+
+
 def gen_from_code(code: str, total_len: int, rng: random.Random,
                   min_sub: int = 4) -> str:
     """``code`` + random subscriber digits, padded to ``total_len`` digits.
@@ -229,30 +276,36 @@ def _side_codes(zones, zone_name, code_override, pattern):
 
 def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
                    dad_zone=None, dad_code=None, dad_pattern=None,
-                   count=100, length=11, seed=None, unique=True) -> List[Pair]:
+                   count=100, length=11, seed=None, unique=True,
+                   oad_length=None, dad_length=None) -> List[Pair]:
     """Generate ``count`` validated (A, B) pairs.
 
     Each side is driven by a zone (codes spread across the zone), a pinned code,
-    or a raw switch pattern. Numbers are re-validated (must start with a chosen
-    code, or match the pattern) before being accepted."""
+    or a raw switch pattern. Each number is padded to a VALID E.164 length for
+    its country (so carriers don't reject a wrong-length number) — derived from
+    the dialed code's country code via ``e164_total_length``. Pass ``oad_length``
+    / ``dad_length`` to force an exact length for a side; ``length`` is the final
+    fallback for unknown countries. Numbers are re-validated (must start with a
+    chosen code, or match the pattern) before being accepted."""
     rng = random.Random(seed)
     a_codes, a_re, a_pat = _side_codes(zones, oad_zone, oad_code, oad_pattern)
     b_codes, b_re, b_pat = _side_codes(zones, dad_zone, dad_code, dad_pattern)
 
-    def make(codes, regex, pat) -> str:
+    def make(codes, regex, pat, explicit_len) -> str:
         if pat:
-            n = gen_from_pattern(pat, length, rng)
-            return n if regex.match(n) else make(codes, regex, pat)
+            n = gen_from_pattern(pat, explicit_len or length, rng)
+            return n if regex.match(n) else make(codes, regex, pat, explicit_len)
         code = rng.choice(codes)
-        return gen_from_code(code, length, rng)
+        target = explicit_len or e164_total_length(code, length)
+        return gen_from_code(code, target, rng)
 
     pairs: List[Pair] = []
     seen: set = set()
     attempts, cap = 0, count * 50 + 100
     while len(pairs) < count and attempts < cap:
         attempts += 1
-        a = make(a_codes, a_re, a_pat)
-        b = make(b_codes, b_re, b_pat)
+        a = make(a_codes, a_re, a_pat, oad_length)
+        b = make(b_codes, b_re, b_pat, dad_length)
         pair = (a, b)
         if unique and pair in seen:
             continue
@@ -266,7 +319,8 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
 
 
 def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
-                       seed=None, origin_code="", dest_code="", out_dir=None):
+                       seed=None, origin_code="", dest_code="", out_dir=None,
+                       oad_length=None, dad_length=None):
     """Generate an A/B number pool for a node and write it to a file.
 
     Resolves the deck, builds ``count`` validated pairs for the origin/drop sale
@@ -283,6 +337,7 @@ def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
         oad_zone=origin_zone, oad_code=origin_code or None,
         dad_zone=dest_zone, dad_code=dest_code or None,
         count=count, length=length, seed=seed,
+        oad_length=oad_length, dad_length=dad_length,
     )
     out_dir = out_dir or os.path.join(tempfile.gettempdir(), "gencall_numbers")
     os.makedirs(out_dir, exist_ok=True)
@@ -331,7 +386,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--count", type=int, default=500000,
                    help="rows to generate (default 500000 — a large random draw pool)")
     p.add_argument("--length", type=int, default=11,
-                   help="total digits per number (default 11; min code+4 enforced)")
+                   help="fallback total digits when the country's E.164 length is unknown")
+    p.add_argument("--oad-length", type=int, default=None,
+                   help="force exact A-number length (overrides the E.164 default)")
+    p.add_argument("--dad-length", type=int, default=None,
+                   help="force exact B-number length (overrides the E.164 default)")
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducible output")
     p.add_argument("--out", default="-", help="output path, or '-' for stdout (default)")
     p.add_argument("--order", choices=["sequential", "random"], default=None,
@@ -380,6 +439,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             dad_zone=args.dad_zone, dad_code=args.dad_code, dad_pattern=args.dad,
             count=args.count, length=args.length, seed=args.seed,
             unique=not args.allow_dupes,
+            oad_length=args.oad_length, dad_length=args.dad_length,
         )
     except (ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
