@@ -354,9 +354,15 @@ export const api = {
       results: GroupStartResult["results"];
     }>(`/api/loop-presets/${id}/run`, { method: "POST", body: target }),
 
-  // ---- Fleet nodes (remote boxes; the topbar box switcher) ----
+  // ---- Fleet nodes (remote boxes; managed on the Nodes page) ----
   // These always hit the LOCAL box's registry (scopedPath leaves them local).
   listFleetNodes: () => request<{ nodes: FleetNode[] }>("/api/fleet-nodes"),
+  /** Probe an address+key WITHOUT saving — the "Test connection" button. */
+  checkFleetNode: (address: string, api_key: string) =>
+    request<{ address: string; online: boolean; version: string | null; error: string | null }>(
+      "/api/fleet-nodes/check",
+      { method: "POST", body: { address, api_key } },
+    ),
   createFleetNode: (req: FleetNodeRequest) =>
     request<{ status: string; node: FleetNode }>("/api/fleet-nodes", {
       method: "POST",

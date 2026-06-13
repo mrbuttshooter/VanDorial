@@ -8,10 +8,10 @@ import { Modal, ModalActions } from "@/components/ui/Modal";
 import { Field, FieldRow, EmptyState, Spinner } from "@/components/ui/Misc";
 import { IconPlug, IconPlus, IconTrash, IconRefresh } from "@/components/icons";
 import { useAsync } from "@/hooks/useAsync";
-import { api } from "@/lib/api";
+import { api, getActiveBox, setActiveBox } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { ago, int } from "@/lib/format";
-import type { Server, ServerRequest } from "@/lib/types";
+import type { FleetNode, Server, ServerRequest } from "@/lib/types";
 
 /** Add/edit-node form state: a node = a source IP + its own number pool (origin +
  *  drop sale zone, optionally pinned to one code). "Each IP one loop". */
@@ -189,6 +189,8 @@ export function Nodes() {
 
   return (
     <>
+      <RemoteBoxes />
+
       <div className={s.toolbar}>
         <span className="hud-label">{rows.length} nodes</span>
         <div className={s.spacer} />
@@ -427,5 +429,157 @@ export function Nodes() {
         </Field>
       </Modal>
     </>
+  );
+}
+
+/* ---- Boxes (this box + remote workers) -----------------------------------
+   A box = a whole GenCall machine. "This box" is local; remote boxes are other
+   workers you registered (address + their API key). Pick one to MANAGE — every
+   page (incl. the source-IP nodes below) then drives that box via the proxy.
+   Add/Test/Check/Remove all live here, on the Nodes page. */
+function RemoteBoxes() {
+  const boxes = useAsync(() => api.listFleetNodes(), [], 10000);
+  const toast = useToast();
+  const activeBox = getActiveBox();
+  const [form, setForm] = useState({ name: "", address: "", api_key: "" });
+  const [busy, setBusy] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const list = boxes.data?.nodes ?? [];
+  const setF = (k: "name" | "address" | "api_key", v: string) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  // Switching box is a big context change — full reload so every page + the
+  // topbar indicator reflect it cleanly (active box is persisted).
+  const switchTo = (id: number | null) => {
+    setActiveBox(id);
+    window.location.reload();
+  };
+
+  const testConn = async () => {
+    if (!form.address.trim()) {
+      toast.error("Enter an address to test.");
+      return;
+    }
+    setTest({ ok: false, msg: "testing…" });
+    try {
+      const r = await api.checkFleetNode(form.address, form.api_key);
+      setTest(
+        r.online
+          ? { ok: true, msg: `online · v${r.version ?? "?"}` }
+          : { ok: false, msg: `offline · ${r.error ?? "unreachable"}` },
+      );
+    } catch (e) {
+      setTest({ ok: false, msg: `error: ${e instanceof Error ? e.message : e}` });
+    }
+  };
+
+  const add = async () => {
+    if (!form.name.trim() || !form.address.trim()) {
+      toast.error("Name and address are required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.createFleetNode({ name: form.name, address: form.address, api_key: form.api_key });
+      toast.ok(`Added box ${form.name}`);
+      setForm({ name: "", address: "", api_key: "" });
+      setTest(null);
+      boxes.refetch();
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const del = async (b: FleetNode) => {
+    try {
+      await api.deleteFleetNode(b.id);
+      if (getActiveBox() === b.id) setActiveBox(null);
+      toast.warn(`Removed ${b.name}`);
+      boxes.refetch();
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const managing = (on: boolean) =>
+    on ? (
+      <span style={{ marginLeft: 8, color: "var(--cyan)", fontSize: "var(--fs-2xs)", textTransform: "uppercase", letterSpacing: "var(--tracking-wide)" }}>
+        ● managing
+      </span>
+    ) : null;
+
+  return (
+    <Panel title="Boxes (this box + remote workers)" flush>
+      <div className={ui.tableWrap}>
+        <table className={ui.table}>
+          <thead>
+            <tr><th>Box</th><th>Address</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr style={activeBox == null ? { background: "var(--bg-inset)" } : undefined}>
+              <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>
+                This box (local){managing(activeBox == null)}
+              </td>
+              <td style={{ color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)" }}>127.0.0.1</td>
+              <td><Badge tone="signal">online</Badge></td>
+              <td style={{ textAlign: "right" }}>
+                {activeBox != null && (
+                  <Button size="sm" variant="ghost" onClick={() => switchTo(null)}>Switch here</Button>
+                )}
+              </td>
+            </tr>
+            {list.map((b) => (
+              <tr key={b.id} style={activeBox === b.id ? { background: "var(--bg-inset)" } : undefined}>
+                <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>
+                  {b.name}{managing(activeBox === b.id)}
+                </td>
+                <td style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>{b.address}</td>
+                <td><Badge tone={b.online ? "signal" : "crit"}>{b.online ? "online" : "offline"}</Badge></td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {activeBox !== b.id && (
+                    <Button size="sm" variant="primary" disabled={!b.online} onClick={() => switchTo(b.id)}>
+                      Manage
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" title="Re-check" onClick={() => boxes.refetch()}>
+                    <IconRefresh /> Check
+                  </Button>
+                  <Button size="sm" variant="ghost" icon title="Remove box" onClick={() => del(b)}>
+                    <IconTrash />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className={s.formSection}>Add a remote box</div>
+      <FieldRow>
+        <Field label="Name">
+          <input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="vandorial-3" />
+        </Field>
+        <Field label="Address" hint="host:port (http:// added)">
+          <input value={form.address} onChange={(e) => setF("address", e.target.value)} placeholder="10.35.21.3:8000" />
+        </Field>
+        <Field label="API key" hint="that box's X-API-Key">
+          <input type="password" value={form.api_key} onChange={(e) => setF("api_key", e.target.value)} placeholder="gc_…" autoComplete="off" />
+        </Field>
+      </FieldRow>
+      <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
+        <Button size="sm" variant="ghost" onClick={testConn}>Test connection</Button>
+        <Button size="sm" variant="primary" onClick={add} disabled={busy}>
+          <IconPlus /> {busy ? "Adding…" : "Add box"}
+        </Button>
+        {test && (
+          <span style={{ fontSize: "var(--fs-sm)", color: test.ok ? "var(--signal)" : "var(--crit)" }}>
+            {test.msg}
+          </span>
+        )}
+      </div>
+    </Panel>
   );
 }

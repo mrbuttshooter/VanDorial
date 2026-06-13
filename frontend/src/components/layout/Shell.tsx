@@ -4,21 +4,18 @@ import styles from "./layout.module.css";
 import fleet from "@/pages/fleet.module.css";
 import { Sidebar } from "./Sidebar";
 import { Button } from "../ui/Button";
-import { Badge } from "../ui/Badge";
-import { Field, FieldRow } from "../ui/Misc";
-import { IconPower, IconPlus, IconTrash } from "../icons";
+import { IconPower } from "../icons";
 import { useLiveStats, useStreamStatus } from "@/hooks/useStream";
 import { api, getActiveBox, setActiveBox } from "@/lib/api";
 import { useToast } from "../ui/Toast";
 import { abbrev, num } from "@/lib/format";
 import { Modal, ModalActions } from "../ui/Modal";
 import { useAsync } from "@/hooks/useAsync";
-import type { FleetNode } from "@/lib/types";
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Dashboard", sub: "Live traffic overview" },
   "/fleet": { title: "Fleet Overview", sub: "Cluster-wide telemetry" },
-  "/nodes": { title: "Nodes", sub: "Origination source IPs + number pools (one loop per IP)" },
+  "/nodes": { title: "Nodes", sub: "Boxes + origination source IPs (one loop per IP)" },
   "/groups": { title: "Groups", sub: "Membership & campaigns" },
   "/campaigns": { title: "Campaigns", sub: "Active & queued test runs" },
   "/scenarios": { title: "Scenarios", sub: "SIP message flows" },
@@ -37,9 +34,6 @@ export function Shell() {
   const connected = useStreamStatus();
   const toast = useToast();
   const [confirmStop, setConfirmStop] = useState(false);
-  // Bumped on box switch so the whole page area remounts and refetches against
-  // the newly-selected box (through the proxy).
-  const [boxKey, setBoxKey] = useState(0);
 
   const active = latest?.active_instances ?? 0;
 
@@ -63,7 +57,7 @@ export function Shell() {
             <span className={styles.crumbSub}>/ {meta.sub}</span>
           </div>
 
-          <BoxSelector onSwitch={() => setBoxKey((k) => k + 1)} />
+          <BoxSwitch />
 
           <div className={styles.topMeters}>
             <div className={styles.meter}>
@@ -107,7 +101,7 @@ export function Shell() {
         </header>
 
         <main className={styles.content}>
-          <div className={styles.contentInner} key={`${boxKey}:${loc.pathname}`}>
+          <div className={styles.contentInner} key={loc.pathname}>
             <Outlet />
           </div>
         </main>
@@ -135,25 +129,23 @@ export function Shell() {
   );
 }
 
-/* ---- Box selector (one-GUI control plane) ------------------------------
-   Pick "This box" (local) or a registered remote worker. Selecting a box routes
-   every worker-facing call through that box's proxy (see api.scopedPath), so the
-   same Nodes/Loops/Presets/History pages manage whichever box is selected. */
-function BoxSelector({ onSwitch }: { onSwitch: () => void }) {
+/* ---- Quick box switch (manage boxes on the Nodes page) ------------------
+   Pick "This box" or a registered remote box. Switching routes every
+   worker-facing call through that box's proxy; we full-reload so every page +
+   this indicator reflect the new box cleanly. Add/check/remove boxes lives on
+   the Nodes page. */
+function BoxSwitch() {
   const boxes = useAsync(() => api.listFleetNodes(), [], 15000);
-  const [active, setActive] = useState<number | null>(getActiveBox());
-  const [manage, setManage] = useState(false);
-
+  const active = getActiveBox();
   const list = boxes.data?.nodes ?? [];
 
   const choose = (id: number | null) => {
     setActiveBox(id);
-    setActive(id);
-    onSwitch();
+    window.location.reload();
   };
 
   return (
-    <div className={fleet.scopeBar} title="Managed box">
+    <div className={fleet.scopeBar} title="Managed box — add/remove on the Nodes page">
       <span className="hud-label">Box</span>
       <select
         className={fleet.scopeSelect}
@@ -175,120 +167,6 @@ function BoxSelector({ onSwitch }: { onSwitch: () => void }) {
           style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--cyan)", boxShadow: "0 0 8px var(--cyan)" }}
         />
       )}
-      <button
-        className={fleet.scopeSelect}
-        style={{ cursor: "pointer", padding: "0 8px" }}
-        onClick={() => setManage(true)}
-        title="Add / remove boxes"
-      >
-        ⚙
-      </button>
-      {manage && (
-        <ManageBoxes
-          onClose={() => {
-            setManage(false);
-            boxes.refetch();
-          }}
-        />
-      )}
     </div>
-  );
-}
-
-function ManageBoxes({ onClose }: { onClose: () => void }) {
-  const boxes = useAsync(() => api.listFleetNodes(), [], 8000);
-  const toast = useToast();
-  const [form, setForm] = useState({ name: "", address: "", api_key: "" });
-  const [busy, setBusy] = useState(false);
-
-  const list = boxes.data?.nodes ?? [];
-  const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
-
-  const add = async () => {
-    if (!form.name.trim() || !form.address.trim()) {
-      toast.error("Name and address are required.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.createFleetNode({ name: form.name, address: form.address, api_key: form.api_key });
-      toast.ok(`Added box ${form.name}`);
-      setForm({ name: "", address: "", api_key: "" });
-      boxes.refetch();
-    } catch (e) {
-      toast.error(`${e instanceof Error ? e.message : e}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const del = async (b: FleetNode) => {
-    try {
-      await api.deleteFleetNode(b.id);
-      if (getActiveBox() === b.id) setActiveBox(null);
-      toast.warn(`Removed ${b.name}`);
-      boxes.refetch();
-    } catch (e) {
-      toast.error(`${e instanceof Error ? e.message : e}`);
-    }
-  };
-
-  return (
-    <Modal
-      open
-      title="Boxes — remote workers"
-      onClose={onClose}
-      footer={<ModalActions onCancel={onClose} onConfirm={onClose} confirmLabel="Done" />}
-    >
-      <FieldRow>
-        <Field label="Name">
-          <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="vandorial-3" />
-        </Field>
-        <Field label="Address" hint="host:port (http:// added)">
-          <input value={form.address} onChange={(e) => set("address", e.target.value)} placeholder="10.35.21.3:8000" />
-        </Field>
-      </FieldRow>
-      <Field label="API key" hint="that box's X-API-Key">
-        <input type="password" value={form.api_key} onChange={(e) => set("api_key", e.target.value)} placeholder="gc_…" autoComplete="off" />
-      </Field>
-      <div style={{ margin: "var(--space-3) 0" }}>
-        <Button variant="primary" size="sm" onClick={add} disabled={busy}>
-          <IconPlus /> {busy ? "Adding…" : "Add box"}
-        </Button>
-      </div>
-
-      {list.length === 0 ? (
-        <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
-          No remote boxes yet. Add one above, then pick it in the topbar to manage it from here.
-        </p>
-      ) : (
-        <div style={{ display: "grid", gap: 6 }}>
-          {list.map((b) => (
-            <div
-              key={b.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "6px 10px",
-                border: "1px solid var(--line)",
-                borderRadius: "var(--r-sm)",
-                background: "var(--bg-inset)",
-              }}
-            >
-              <Badge tone={b.online ? "signal" : "muted"}>{b.online ? "online" : "offline"}</Badge>
-              <span style={{ color: "var(--text-bright)", fontWeight: 600 }}>{b.name}</span>
-              <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)", fontSize: "var(--fs-xs)" }}>
-                {b.address}
-              </span>
-              <div style={{ flex: 1 }} />
-              <Button size="sm" variant="ghost" icon title="Remove box" onClick={() => del(b)}>
-                <IconTrash />
-              </Button>
-            </div>
-          ))}
-        </div>
-      )}
-    </Modal>
   );
 }

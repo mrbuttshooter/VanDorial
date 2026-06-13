@@ -50,6 +50,12 @@ class FleetNodeRequest(BaseModel):
     enabled: bool = True
 
 
+class CheckRequest(BaseModel):
+    """Probe an address+key WITHOUT saving it (the 'Test connection' button)."""
+    address: str
+    api_key: str = ""
+
+
 async def _probe(address: str, api_key: str) -> dict:
     """Best-effort health of a remote worker (short timeout)."""
     try:
@@ -83,6 +89,18 @@ async def list_fleet_nodes():
             "created_at": created,
         })
     return {"nodes": out}
+
+
+@router.post("/api/fleet-nodes/check", dependencies=[Depends(require_api_key)])
+async def check_fleet_node(req: CheckRequest):
+    """Test reachability of a box address+key before saving it. Returns
+    {online, version, error}. Declared before the create route — distinct path."""
+    addr = (req.address or "").strip().rstrip("/")
+    if not addr:
+        raise HTTPException(422, "address is required")
+    if not addr.startswith(("http://", "https://")):
+        addr = "http://" + addr
+    return {"address": addr, **(await _probe(addr, req.api_key))}
 
 
 @router.post("/api/fleet-nodes", dependencies=[Depends(require_api_key)])
