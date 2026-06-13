@@ -1,16 +1,14 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { useState } from "react";
 import styles from "./layout.module.css";
-import fleet from "@/pages/fleet.module.css";
 import { Sidebar } from "./Sidebar";
 import { Button } from "../ui/Button";
 import { IconPower } from "../icons";
 import { useLiveStats, useStreamStatus } from "@/hooks/useStream";
-import { api, getActiveBox, setActiveBox } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useToast } from "../ui/Toast";
 import { abbrev, num } from "@/lib/format";
 import { Modal, ModalActions } from "../ui/Modal";
-import { useAsync } from "@/hooks/useAsync";
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Dashboard", sub: "Live traffic overview" },
@@ -56,8 +54,6 @@ export function Shell() {
             <span className={styles.crumbTitle}>{meta.title}</span>
             <span className={styles.crumbSub}>/ {meta.sub}</span>
           </div>
-
-          <BoxSwitch />
 
           <div className={styles.topMeters}>
             <div className={styles.meter}>
@@ -125,48 +121,6 @@ export function Shell() {
           {active === 1 ? "" : "s"} immediately. In-flight calls will be torn down.
         </p>
       </Modal>
-    </div>
-  );
-}
-
-/* ---- Quick box switch (manage boxes on the Nodes page) ------------------
-   Pick "This box" or a registered remote box. Switching routes every
-   worker-facing call through that box's proxy; we full-reload so every page +
-   this indicator reflect the new box cleanly. Add/check/remove boxes lives on
-   the Nodes page. */
-function BoxSwitch() {
-  const boxes = useAsync(() => api.listFleetNodes(), [], 15000);
-  const active = getActiveBox();
-  const list = boxes.data?.nodes ?? [];
-
-  const choose = (id: number | null) => {
-    setActiveBox(id);
-    window.location.reload();
-  };
-
-  return (
-    <div className={fleet.scopeBar} title="Managed box — add/remove on the Nodes page">
-      <span className="hud-label">Box</span>
-      <select
-        className={fleet.scopeSelect}
-        value={active ?? ""}
-        onChange={(e) => choose(e.target.value ? Number(e.target.value) : null)}
-        aria-label="Managed box"
-      >
-        <option value="">This box (local)</option>
-        {list.map((b) => (
-          <option key={b.id} value={b.id}>
-            {b.name}
-            {b.online === false ? " · offline" : ""}
-          </option>
-        ))}
-      </select>
-      {active != null && (
-        <span
-          title="Driving a remote box"
-          style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--cyan)", boxShadow: "0 0 8px var(--cyan)" }}
-        />
-      )}
     </div>
   );
 }

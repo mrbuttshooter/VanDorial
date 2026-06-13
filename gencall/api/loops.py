@@ -64,9 +64,24 @@ def _lookup_node(node_id: int) -> Optional[dict]:
     session = db.get_session()
     try:
         s = session.query(Server).filter_by(id=node_id).first()
-        return s.to_dict() if s else None
+        if not s:
+            return None
+        d = s.to_dict()
+        d["api_key"] = s.api_key  # internal: needed to proxy to a remote worker
+        return d
     finally:
         session.close()
+
+
+def _worker_post(api_url: str, api_key: str, path: str, payload: dict, timeout: float = 25.0):
+    """Sync POST to a remote worker's API with its key (proxy a loop start)."""
+    import httpx
+
+    headers = {"X-API-Key": api_key} if api_key else {}
+    with httpx.Client(verify=False, timeout=timeout) as c:
+        resp = c.post(api_url.rstrip("/") + path, json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json() if resp.content else {}
 
 
 # ─── Request model ───────────────────────────────────────────────────────────
@@ -151,6 +166,25 @@ def start_loop(req: StartLoopRequest):
             raise HTTPException(
                 422, f"Node '{node['name']}' has no number pool — generate one first"
             )
+        # REMOTE node (one controller, many workers): run the loop ON its worker.
+        if node.get("api_url"):
+            payload = {
+                "name": req.name, "dest_host": req.dest_host, "dest_port": req.dest_port,
+                "transport": req.transport, "local_ip": local_ip, "csv_path": csv_path,
+                "rate": req.rate, "max_concurrent": req.max_concurrent,
+                "duration_mode": req.duration_mode, "duration_s": req.duration_s,
+                "duration_max_s": req.duration_max_s, "match_key": req.match_key,
+                "target_calls": req.target_calls, "target_minutes": req.target_minutes,
+            }
+            try:
+                res = _worker_post(node["api_url"], node.get("api_key", ""),
+                                   "/api/loops", payload)
+            except Exception as e:
+                raise HTTPException(502, f"worker {node['api_url']} loop start failed: {e}")
+            campaign = res.get("campaign") or res
+            if isinstance(campaign, dict):
+                campaign["remote"] = node["api_url"]
+            return {"status": "started", "campaign": campaign}
 
     try:
         campaign = _engine().start_campaign(
@@ -421,7 +455,8 @@ def start_node_group(group_id: int, req: GroupStartRequest = Body(default=None))
         params = {f: getattr(g, f) for f in _GROUP_FIELDS if f not in ("name", "description")}
         members = [
             {"id": m.id, "name": m.name, "ip": m.ip,
-             "csv_path": m.csv_path, "enabled": m.enabled}
+             "csv_path": m.csv_path, "enabled": m.enabled,
+             "api_url": m.api_url, "api_key": m.api_key}
             for m in session.query(Server).filter_by(group_id=group_id).all()
             if wanted is None or m.id in wanted
         ]
@@ -538,6 +573,18 @@ def _start_on_member(name: str, params: dict, member: dict) -> dict:
         return {**base, "ok": False, "skipped": "disabled"}
     if not member.get("csv_path"):
         return {**base, "ok": False, "skipped": "no number pool"}
+    # REMOTE member: start the loop on its worker.
+    if member.get("api_url"):
+        payload = {"name": name, "local_ip": member["ip"],
+                   "csv_path": member["csv_path"], **params}
+        try:
+            res = _worker_post(member["api_url"], member.get("api_key", ""),
+                               "/api/loops", payload)
+            camp = res.get("campaign") if isinstance(res.get("campaign"), dict) else None
+            return {**base, "ok": True, "remote": member["api_url"],
+                    "campaign_id": camp.get("id") if camp else None}
+        except Exception as e:
+            return {**base, "ok": False, "error": str(e)}
     try:
         campaign = _engine().start_campaign(
             name=name, local_ip=member["ip"], csv_path=member["csv_path"],
@@ -658,7 +705,8 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
             if not n:
                 raise HTTPException(404, f"Node {req.node_id} not found")
             members = [{"id": n.id, "name": n.name, "ip": n.ip,
-                        "csv_path": n.csv_path, "enabled": n.enabled}]
+                        "csv_path": n.csv_path, "enabled": n.enabled,
+                        "api_url": n.api_url, "api_key": n.api_key}]
         elif req.group_id is not None:
             g = session.query(NodeGroup).filter_by(id=req.group_id).first()
             if not g:
@@ -666,7 +714,8 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
             wanted = set(req.node_ids) if req.node_ids else None
             members = [
                 {"id": m.id, "name": m.name, "ip": m.ip,
-                 "csv_path": m.csv_path, "enabled": m.enabled}
+                 "csv_path": m.csv_path, "enabled": m.enabled,
+                 "api_url": m.api_url, "api_key": m.api_key}
                 for m in session.query(Server).filter_by(group_id=g.id).all()
                 if wanted is None or m.id in wanted
             ]

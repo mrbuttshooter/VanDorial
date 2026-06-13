@@ -663,18 +663,19 @@ def test_node_pool_pins_drop_code(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
-def test_fleet_node_registry_and_proxy(stub_sipp, tmp_path, monkeypatch):
-    """The worker exposes a fleet-node registry + proxy (one-GUI control plane):
-    register a remote box, list it (offline since unreachable in the test), and
-    a proxy to an unknown box id is 404."""
+def test_remote_node_pool_gen_proxies_to_worker(stub_sipp, tmp_path, monkeypatch):
+    """A node with api_url is REMOTE: its pool generation proxies to that worker.
+    Pointed at an unreachable worker, create returns 502 (the remote path was
+    taken, not local generation). A local node (no api_url) still generates a
+    pool here and reports remote=False."""
     import textwrap
     from fastapi.testclient import TestClient
 
     from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
-    db_path = tmp_path / "fleet.db"
-    cfg_path = tmp_path / "fleet.cfg"
+    db_path = tmp_path / "remote.db"
+    cfg_path = tmp_path / "remote.cfg"
     cfg_path.write_text(textwrap.dedent(f"""\
         [sipp]
         command = {stub_sipp.launcher}
@@ -692,27 +693,33 @@ def test_fleet_node_registry_and_proxy(stub_sipp, tmp_path, monkeypatch):
 
     app, _config = gc_main.create_app(str(cfg_path))
     le = loops_api.loop_engine
-    raw_key, _ = APIKeyManager(db=le.db).create_key("fleet")
+    raw_key, _ = APIKeyManager(db=le.db).create_key("remote")
     client = TestClient(app)
     client.headers.update({"X-API-Key": raw_key})
     try:
-        r = client.post("/api/fleet-nodes",
-                        json={"name": "box-3", "address": "10.9.9.9:8000", "api_key": "gc_x"})
-        assert r.status_code == 200, r.text
-        node = r.json()["node"]
-        assert node["address"] == "http://10.9.9.9:8000"  # scheme auto-added
-        assert node["has_key"] is True                    # key stored, not echoed
-        assert "api_key" not in node
+        # Remote node pointed at an unreachable worker -> pool-gen proxy fails (502).
+        r = client.post("/api/servers", json={
+            "name": "remote-x", "ip": "10.0.0.80",
+            "api_url": "http://127.0.0.1:9", "api_key": "gc_x",
+            "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+            "dest_code": "22462", "count": 5,
+        })
+        assert r.status_code == 502, r.text  # remote path taken, not local
 
-        lst = client.get("/api/fleet-nodes").json()["nodes"]
-        box = next(n for n in lst if n["name"] == "box-3")
-        assert box["online"] is False  # unreachable in the test
+        # check-worker probe of an unreachable worker reports offline (no raise).
+        chk = client.post("/api/servers/check-worker",
+                          json={"api_url": "http://127.0.0.1:9", "api_key": "x"})
+        assert chk.status_code == 200 and chk.json()["online"] is False
 
-        # Proxy to an unknown box id is a clean 404 (not a 502/crash).
-        assert client.get("/api/fleet-nodes/9999/proxy/api/health").status_code == 404
-
-        assert client.delete(f"/api/fleet-nodes/{node['id']}").status_code == 200
-        assert client.get("/api/fleet-nodes").json()["nodes"] == []
+        # Local node still generates its pool here.
+        r2 = client.post("/api/servers", json={
+            "name": "local-x", "ip": "10.0.0.81",
+            "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+            "dest_code": "22462", "count": 5,
+        })
+        assert r2.status_code == 200, r2.text
+        srv = r2.json()["server"]
+        assert srv["remote"] is False and srv["has_pool"], srv
     finally:
         try:
             le.stop_monitor()

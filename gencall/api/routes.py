@@ -116,6 +116,11 @@ class ServerRequest(BaseModel):
     ip: str
     description: str = ""
     group_id: Optional[int] = None  # optional NodeGroup membership
+    # Remote worker (one controller, many workers): when api_url is set this node
+    # lives on ANOTHER box — pool-gen + loop-start are proxied there. Blank =
+    # local node on this box.
+    api_url: str = ""
+    api_key: str = ""
     # Optional per-node number pool. When origin_zone + dest_zone are given the
     # pool is generated on create; otherwise the node starts with no pool and you
     # generate it later via POST /api/servers/{id}/generate.
@@ -488,12 +493,43 @@ def _ip_has_running_loop(ip: str) -> bool:
         return False
 
 
+def _worker_post(api_url: str, api_key: str, path: str, payload: dict, timeout: float = 25.0):
+    """Sync POST to a remote worker's API with its key. Raises on HTTP error."""
+    import httpx
+
+    headers = {"X-API-Key": api_key} if api_key else {}
+    url = api_url.rstrip("/") + path
+    with httpx.Client(verify=False, timeout=timeout) as c:
+        resp = c.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json() if resp.content else {}
+
+
 def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
                         count: int, length: int,
                         origin_code: str = "", dest_code: str = "") -> None:
     """Generate ``s``'s number pool from its zones (optionally pinned to a single
-    code per side) and store path/count on it. Removes the node's previous pool
-    file. Raises HTTPException(422) on an unknown zone / impossible request."""
+    code per side) and store path/count on it. For a REMOTE node (api_url set)
+    the pool is generated ON that worker (so the box that runs the loop has the
+    file); ``csv_path`` then holds the path on the worker."""
+    if s.api_url:
+        try:
+            res = _worker_post(s.api_url, s.api_key, "/api/loops/numbers", {
+                "origin_zone": origin_zone, "dest_zone": dest_zone,
+                "origin_code": origin_code or "", "dest_code": dest_code or "",
+                "count": count, "length": length,
+            })
+        except Exception as e:
+            raise HTTPException(502, f"worker {s.api_url} pool generation failed: {e}")
+        s.origin_zone = origin_zone
+        s.dest_zone = dest_zone
+        s.origin_code = origin_code or ""
+        s.dest_code = dest_code or ""
+        s.pool_count = int(res.get("count") or 0)
+        s.pool_length = length
+        s.csv_path = res.get("csv_path") or ""   # path ON the worker
+        return
+
     from gencall.scripts.gen_loop_csv import generate_pool_file
 
     try:
@@ -525,6 +561,34 @@ def _unlink_quiet(path: str) -> None:
             pass
 
 
+class CheckWorkerRequest(BaseModel):
+    api_url: str
+    api_key: str = ""
+
+
+@app.post("/api/servers/check-worker", dependencies=[Depends(require_api_key)])
+def check_worker(req: CheckWorkerRequest):
+    """Probe a remote worker's /api/health (the 'Test connection' button) WITHOUT
+    saving anything. Distinct path; declared before /api/servers/{id} routes."""
+    import httpx
+
+    url = (req.api_url or "").strip().rstrip("/")
+    if not url:
+        raise HTTPException(422, "api_url is required")
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    try:
+        headers = {"X-API-Key": req.api_key} if req.api_key else {}
+        with httpx.Client(verify=False, timeout=5.0) as c:
+            r = c.get(url + "/api/health", headers=headers)
+        if r.status_code == 200:
+            d = r.json()
+            return {"address": url, "online": True, "version": d.get("version"), "error": None}
+        return {"address": url, "online": False, "version": None, "error": f"HTTP {r.status_code}"}
+    except Exception as e:
+        return {"address": url, "online": False, "version": None, "error": str(e)}
+
+
 @app.post("/api/servers", dependencies=[Depends(require_api_key)])
 def create_server(req: ServerRequest):
     """Register a node (a source IP). If origin_zone + dest_zone are supplied,
@@ -537,8 +601,12 @@ def create_server(req: ServerRequest):
         raise HTTPException(422, "name and ip are required")
     session = db.get_session()
     try:
+        api_url = (req.api_url or "").strip().rstrip("/")
+        if api_url and not api_url.startswith(("http://", "https://")):
+            api_url = "http://" + api_url
         s = Server(name=name, ip=ip, description=req.description or "",
-                   group_id=req.group_id, pool_length=req.length)
+                   group_id=req.group_id, pool_length=req.length,
+                   api_url=api_url, api_key=req.api_key or "")
         if req.origin_zone and req.dest_zone:
             _generate_node_pool(s, req.origin_zone, req.dest_zone,
                                 req.count, req.length,
@@ -596,6 +664,8 @@ class ServerUpdate(BaseModel):
     description: Optional[str] = None
     group_id: Optional[int] = None  # -1 clears membership; None leaves unchanged
     enabled: Optional[bool] = None
+    api_url: Optional[str] = None   # "" clears (back to local); None leaves unchanged
+    api_key: Optional[str] = None   # blank leaves unchanged
 
 
 @app.put("/api/servers/{server_id}", dependencies=[Depends(require_api_key)])
@@ -617,6 +687,13 @@ def update_server(server_id: int, req: ServerUpdate):
             s.enabled = req.enabled
         if req.group_id is not None:
             s.group_id = None if req.group_id < 0 else req.group_id
+        if req.api_url is not None:
+            u = req.api_url.strip().rstrip("/")
+            if u and not u.startswith(("http://", "https://")):
+                u = "http://" + u
+            s.api_url = u
+        if req.api_key:
+            s.api_key = req.api_key
         session.commit()
         return {"status": "updated", "server": s.to_dict()}
     except HTTPException:

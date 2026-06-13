@@ -217,6 +217,10 @@ export interface Server {
   description: string;
   enabled: boolean;
   group_id: number | null;
+  /* Remote worker this node lives on ("" = local box). */
+  api_url: string;
+  remote: boolean;
+  has_key: boolean;
   origin_zone: string;
   dest_zone: string;
   origin_code: string;
@@ -233,6 +237,9 @@ export interface ServerRequest {
   ip: string;
   description?: string;
   group_id?: number | null;
+  /* Remote worker (one controller, many workers). Blank = local box. */
+  api_url?: string;
+  api_key?: string;
   origin_zone?: string;
   dest_zone?: string;
   /* Optional pinned code within each zone (e.g. only 22462). "" = whole zone. */
@@ -364,26 +371,12 @@ export interface SaleZonesResponse {
   codes: Record<string, string[]>;
 }
 
-/* A remote GenCall worker box this one can drive (gencall/api/fleet.py).
-   The topbar box switcher lists these; picking one routes every worker-facing
-   call through /api/fleet-nodes/{id}/proxy so the single GUI manages it. */
-export interface FleetNode {
-  id: number;
-  name: string;
-  address: string;       // http://host:port
-  enabled: boolean;
-  has_key: boolean;
-  online?: boolean;
-  version?: string | null;
-  error?: string | null;
-  created_at: string | null;
-}
-
-export interface FleetNodeRequest {
-  name: string;
+/* Result of POST /api/servers/check-worker — the "Test connection" probe. */
+export interface WorkerCheck {
   address: string;
-  api_key?: string;
-  enabled?: boolean;
+  online: boolean;
+  version: string | null;
+  error: string | null;
 }
 
 export interface StartTestRequest {

@@ -95,36 +95,6 @@ class NodeGroup(Base):
         }
 
 
-class FleetNode(Base):
-    """A remote GenCall worker BOX this one can drive (one-GUI control plane).
-
-    Distinct from ``Server`` (a source IP on THIS box) and ``NodeGroup`` (a set of
-    source IPs): a FleetNode is another whole machine on the VLAN — its base URL
-    (e.g. http://10.35.21.3:8000) + that worker's API key. The GUI's box switcher
-    lists these; picking one routes every worker-facing call through
-    /api/fleet-nodes/{id}/proxy so the single GUI manages the remote box too.
-    api_key is a secret and is NOT returned by to_dict().
-    """
-    __tablename__ = "fleet_nodes"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(255), unique=True, nullable=False)
-    address = Column(String(512), nullable=False)   # http://host:port (no trailing /)
-    api_key = Column(String(255), default="")
-    enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "address": self.address,
-            "enabled": bool(self.enabled),
-            "has_key": bool(self.api_key),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
-
-
 class LoopPreset(Base):
     """A saved, re-runnable loop "recipe" (design: presets + history).
 
@@ -188,7 +158,11 @@ class Server(Base):
     name = Column(String(255), unique=True, nullable=False)
     ip = Column(String(45), nullable=False)
     description = Column(Text, default="")
-    api_url = Column(String(512), default="")  # reserved: remote fleet node URL
+    # Remote-worker binding: when api_url is set this node lives on ANOTHER box,
+    # and its pool generation + loop start are proxied to that worker (one
+    # controller, many workers). Blank api_url => local node on this box.
+    api_url = Column(String(512), default="")   # http://host:port of the worker
+    api_key = Column(String(255), default="")   # that worker's X-API-Key (secret)
     enabled = Column(Boolean, default=True)
     group_id = Column(Integer, default=None)  # optional NodeGroup membership
     # Per-node number pool ("each IP one loop", so the node IS the loop unit):
@@ -213,6 +187,9 @@ class Server(Base):
             "description": self.description,
             "enabled": self.enabled,
             "group_id": self.group_id,
+            "api_url": self.api_url or "",
+            "remote": bool(self.api_url),
+            "has_key": bool(self.api_key),
             "origin_zone": self.origin_zone or "",
             "dest_zone": self.dest_zone or "",
             "origin_code": self.origin_code or "",
@@ -374,6 +351,8 @@ class Database:
             ("pool_length", "INTEGER DEFAULT 11"),
             ("csv_path", "VARCHAR(1024) DEFAULT ''"),
             ("group_id", "INTEGER"),
+            ("api_url", "VARCHAR(512) DEFAULT ''"),
+            ("api_key", "VARCHAR(255) DEFAULT ''"),
         ],
     }
 

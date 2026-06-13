@@ -178,14 +178,6 @@ def create_app(config_path: str = None):
     loops_api.loop_engine = loop_engine
     app.include_router(loops_api.router)
 
-    # ── Fleet-node proxy (one-GUI control plane) ─────────────────────────────
-    # This worker can register OTHER worker boxes and proxy the GUI's calls to
-    # them (/api/fleet-nodes + /api/fleet-nodes/{id}/proxy/...), so a single
-    # console drives the whole fleet without a separate controller process.
-    from gencall.api import fleet as fleet_api
-    fleet_api.db = db
-    app.include_router(fleet_api.router)
-
     # ── Loop accounting (design §4.3) ────────────────────────────────────────
     # The LoopMatcher joins out/in call_records into per-campaign loop_stats on a
     # throttled (>= 10 s) schedule and feeds each snapshot to the WS 'loops'
