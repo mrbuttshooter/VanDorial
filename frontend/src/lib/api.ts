@@ -6,6 +6,8 @@
 import type {
   Connector,
   ConnectorRequest,
+  FleetNode,
+  FleetNodeRequest,
   GeneratePoolRequest,
   GroupStartResult,
   Health,
@@ -38,6 +40,48 @@ export class ApiError extends Error {
 }
 
 const BASE = ""; // same origin; Vite proxies /api in dev
+
+/* ---- Active box (one-GUI control plane) ----------------------------------
+   When a remote box is selected in the topbar switcher, every worker-facing
+   call is transparently routed through this box's controller proxy on the local
+   box: /api/servers → /api/fleet-nodes/{id}/proxy/api/servers. The fleet-node
+   registry itself (/api/fleet-nodes...) and /api/health always stay LOCAL.
+   null = "this box" (direct). Persisted so a refresh keeps your selection. */
+const ACTIVE_BOX_STORAGE = "gencall_active_box";
+
+function readActiveBox(): number | null {
+  try {
+    const v = localStorage.getItem(ACTIVE_BOX_STORAGE);
+    return v ? Number(v) : null;
+  } catch {
+    return null;
+  }
+}
+
+let activeBoxId: number | null = readActiveBox();
+
+export function getActiveBox(): number | null {
+  return activeBoxId;
+}
+
+export function setActiveBox(id: number | null): void {
+  activeBoxId = id;
+  try {
+    if (id == null) localStorage.removeItem(ACTIVE_BOX_STORAGE);
+    else localStorage.setItem(ACTIVE_BOX_STORAGE, String(id));
+  } catch {
+    /* storage unavailable — ignore */
+  }
+}
+
+/** Rewrite a worker-facing path to go through the active box's proxy. The
+ *  fleet-node registry and health are always local to the GUI box. */
+function scopedPath(path: string): string {
+  if (activeBoxId == null) return path;
+  if (!path.startsWith("/api/")) return path;
+  if (path === "/api/health" || path.startsWith("/api/fleet-nodes")) return path;
+  return `/api/fleet-nodes/${activeBoxId}/proxy${path}`;
+}
 
 /* ---- API key -------------------------------------------------------------
    The backend (gencall/api/routes.py) enforces an `X-API-Key` header on every
@@ -78,7 +122,7 @@ async function request<T>(
 
   let res: Response;
   try {
-    res = await fetch(BASE + path, opts);
+    res = await fetch(BASE + scopedPath(path), opts);
   } catch (networkErr) {
     // Backend unreachable. In mock mode we never get here (intercepted below),
     // so surface a clear, actionable error.
@@ -309,6 +353,24 @@ export const api = {
       total: number;
       results: GroupStartResult["results"];
     }>(`/api/loop-presets/${id}/run`, { method: "POST", body: target }),
+
+  // ---- Fleet nodes (remote boxes; the topbar box switcher) ----
+  // These always hit the LOCAL box's registry (scopedPath leaves them local).
+  listFleetNodes: () => request<{ nodes: FleetNode[] }>("/api/fleet-nodes"),
+  createFleetNode: (req: FleetNodeRequest) =>
+    request<{ status: string; node: FleetNode }>("/api/fleet-nodes", {
+      method: "POST",
+      body: req,
+    }),
+  updateFleetNode: (id: number, req: FleetNodeRequest) =>
+    request<{ status: string; node: FleetNode }>(`/api/fleet-nodes/${id}`, {
+      method: "PUT",
+      body: req,
+    }),
+  deleteFleetNode: (id: number) =>
+    request<{ status: string; id: number }>(`/api/fleet-nodes/${id}`, {
+      method: "DELETE",
+    }),
 };
 
 /** Authenticated file download: GET `path` with the X-API-Key header, read the
@@ -322,7 +384,7 @@ async function downloadAuthed(path: string, filename: string): Promise<void> {
 
   let res: Response;
   try {
-    res = await fetch(BASE + path, { headers });
+    res = await fetch(BASE + scopedPath(path), { headers });
   } catch (networkErr) {
     throw new ApiError(0, `Network unreachable: ${String(networkErr)}`);
   }

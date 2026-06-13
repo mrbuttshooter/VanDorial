@@ -95,6 +95,36 @@ class NodeGroup(Base):
         }
 
 
+class FleetNode(Base):
+    """A remote GenCall worker BOX this one can drive (one-GUI control plane).
+
+    Distinct from ``Server`` (a source IP on THIS box) and ``NodeGroup`` (a set of
+    source IPs): a FleetNode is another whole machine on the VLAN — its base URL
+    (e.g. http://10.35.21.3:8000) + that worker's API key. The GUI's box switcher
+    lists these; picking one routes every worker-facing call through
+    /api/fleet-nodes/{id}/proxy so the single GUI manages the remote box too.
+    api_key is a secret and is NOT returned by to_dict().
+    """
+    __tablename__ = "fleet_nodes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+    address = Column(String(512), nullable=False)   # http://host:port (no trailing /)
+    api_key = Column(String(255), default="")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "address": self.address,
+            "enabled": bool(self.enabled),
+            "has_key": bool(self.api_key),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class LoopPreset(Base):
     """A saved, re-runnable loop "recipe" (design: presets + history).
 

@@ -364,6 +364,28 @@ export interface SaleZonesResponse {
   codes: Record<string, string[]>;
 }
 
+/* A remote GenCall worker box this one can drive (gencall/api/fleet.py).
+   The topbar box switcher lists these; picking one routes every worker-facing
+   call through /api/fleet-nodes/{id}/proxy so the single GUI manages it. */
+export interface FleetNode {
+  id: number;
+  name: string;
+  address: string;       // http://host:port
+  enabled: boolean;
+  has_key: boolean;
+  online?: boolean;
+  version?: string | null;
+  error?: string | null;
+  created_at: string | null;
+}
+
+export interface FleetNodeRequest {
+  name: string;
+  address: string;
+  api_key?: string;
+  enabled?: boolean;
+}
+
 export interface StartTestRequest {
   name?: string;
   scenario: string;

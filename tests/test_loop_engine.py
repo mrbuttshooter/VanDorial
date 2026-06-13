@@ -663,6 +663,66 @@ def test_node_pool_pins_drop_code(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
+def test_fleet_node_registry_and_proxy(stub_sipp, tmp_path, monkeypatch):
+    """The worker exposes a fleet-node registry + proxy (one-GUI control plane):
+    register a remote box, list it (offline since unreachable in the test), and
+    a proxy to an unknown box id is 404."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "fleet.db"
+    cfg_path = tmp_path / "fleet.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("fleet")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        r = client.post("/api/fleet-nodes",
+                        json={"name": "box-3", "address": "10.9.9.9:8000", "api_key": "gc_x"})
+        assert r.status_code == 200, r.text
+        node = r.json()["node"]
+        assert node["address"] == "http://10.9.9.9:8000"  # scheme auto-added
+        assert node["has_key"] is True                    # key stored, not echoed
+        assert "api_key" not in node
+
+        lst = client.get("/api/fleet-nodes").json()["nodes"]
+        box = next(n for n in lst if n["name"] == "box-3")
+        assert box["online"] is False  # unreachable in the test
+
+        # Proxy to an unknown box id is a clean 404 (not a 502/crash).
+        assert client.get("/api/fleet-nodes/9999/proxy/api/health").status_code == 404
+
+        assert client.delete(f"/api/fleet-nodes/{node['id']}").status_code == 200
+        assert client.get("/api/fleet-nodes").json()["nodes"] == []
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and
