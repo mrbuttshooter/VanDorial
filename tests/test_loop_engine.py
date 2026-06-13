@@ -604,6 +604,65 @@ def test_loop_preset_save_run_and_history_over_http(stub_sipp, tmp_path, monkeyp
         Config.reset()
 
 
+def test_node_pool_pins_drop_code(stub_sipp, tmp_path, monkeypatch):
+    """A node created with a pinned dest_code generates B-numbers from ONLY that
+    code — so we never dial the 224720/224721 Orange breakouts the switch has no
+    route for (every CDPN must start with the pinned 22462)."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "pin.db"
+    cfg_path = tmp_path / "pin.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("pin")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        r = client.post("/api/servers", json={
+            "name": "pin-node", "ip": "10.0.0.91",
+            "origin_zone": "Nigeria-Lagos",
+            "dest_zone": "Guinea-Mobile (Orange)", "dest_code": "22462",
+            "count": 40,
+        })
+        assert r.status_code == 200, r.text
+        srv = r.json()["server"]
+        assert srv["dest_code"] == "22462"
+        assert srv["has_pool"]
+        with open(srv["csv_path"], encoding="utf-8") as f:
+            rows = [ln.strip() for ln in f if ln.strip()]
+        assert rows, "pool file should have numbers"
+        for ln in rows:
+            _a, b = ln.split(";")
+            assert b.startswith("22462"), f"unrouted code generated: {b}"
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and

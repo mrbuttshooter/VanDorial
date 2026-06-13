@@ -15,7 +15,7 @@ import type {
   NodeGroup,
   NodeGroupRequest,
   RunPresetRequest,
-  SaleZoneCountry,
+  SaleZonesResponse,
   Scenario,
   Server,
   ServerRequest,
@@ -231,9 +231,8 @@ export const api = {
       `${id}_records.csv`,
     ),
 
-  // ---- Sale zones (Country -> Zone pickers on the Nodes page) ----
-  saleZones: () =>
-    request<{ countries: SaleZoneCountry[] }>("/api/sale-zones"),
+  // ---- Sale zones (Country -> Zone -> Code pickers on the Nodes page) ----
+  saleZones: () => request<SaleZonesResponse>("/api/sale-zones"),
 
   // ---- Nodes (source-IP servers, each carrying its own number pool) ----
   listServers: () => request<{ servers: Server[] }>("/api/servers"),

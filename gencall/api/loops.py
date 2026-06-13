@@ -709,12 +709,18 @@ class GenerateNumbersRequest(BaseModel):
 
 @router.get("/api/sale-zones", dependencies=[Depends(require_api_key)])
 def sale_zones():
-    """Country -> [sale zones] tree for the cascading Country/Zone pickers."""
+    """Country -> [sale zones] tree + a zone -> [codes] map for the cascading
+    Country / Sale Zone / Code pickers. ``codes`` lets the UI pin a single dialing
+    code (e.g. only 22462) instead of spreading across a whole zone."""
     try:
-        tree = gen_loop_csv.build_country_tree(_zones())
+        zones = _zones()  # {zone: [codes]} (shortest-first)
+        tree = gen_loop_csv.build_country_tree(zones)
     except FileNotFoundError as e:
         raise HTTPException(503, str(e))
-    return {"countries": [{"name": c, "zones": zs} for c, zs in tree.items()]}
+    return {
+        "countries": [{"name": c, "zones": zs} for c, zs in tree.items()],
+        "codes": {z: list(codes) for z, codes in zones.items()},
+    }
 
 
 @router.post("/api/loops/numbers", dependencies=[Depends(require_api_key)])

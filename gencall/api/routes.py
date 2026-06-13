@@ -121,6 +121,10 @@ class ServerRequest(BaseModel):
     # generate it later via POST /api/servers/{id}/generate.
     origin_zone: str = ""
     dest_zone: str = ""
+    # Optional pinned code within each zone (e.g. dial only 22462). Empty =>
+    # spread across the whole zone's codes.
+    origin_code: str = ""
+    dest_code: str = ""
     # Pool size is bounded: generation is synchronous, so an unbounded count
     # could pin a request thread + RAM. 2M is plenty for a random-draw pool.
     count: int = Field(default=500000, ge=1, le=2_000_000)
@@ -129,9 +133,11 @@ class ServerRequest(BaseModel):
 
 class GeneratePoolRequest(BaseModel):
     """(Re)generate a node's number pool. Empty fields reuse the node's stored
-    zones/length so a bare POST just refreshes the pool."""
+    zones/codes/length so a bare POST just refreshes the pool."""
     origin_zone: str = ""
     dest_zone: str = ""
+    origin_code: str = ""
+    dest_code: str = ""
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=0, ge=0, le=18)  # 0 => keep the node's stored length
 
@@ -483,15 +489,17 @@ def _ip_has_running_loop(ip: str) -> bool:
 
 
 def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
-                        count: int, length: int) -> None:
-    """Generate ``s``'s number pool from its zones and store path/count on it.
-    Removes the node's previous pool file. Raises HTTPException(422) on an unknown
-    zone / impossible request."""
+                        count: int, length: int,
+                        origin_code: str = "", dest_code: str = "") -> None:
+    """Generate ``s``'s number pool from its zones (optionally pinned to a single
+    code per side) and store path/count on it. Removes the node's previous pool
+    file. Raises HTTPException(422) on an unknown zone / impossible request."""
     from gencall.scripts.gen_loop_csv import generate_pool_file
 
     try:
         path, n, _preview = generate_pool_file(
             origin_zone=origin_zone, dest_zone=dest_zone,
+            origin_code=origin_code or "", dest_code=dest_code or "",
             count=count, length=length,
         )
     except (ValueError, RuntimeError) as e:
@@ -501,6 +509,8 @@ def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
     _unlink_quiet(s.csv_path)  # drop the superseded pool file
     s.origin_zone = origin_zone
     s.dest_zone = dest_zone
+    s.origin_code = origin_code or ""
+    s.dest_code = dest_code or ""
     s.pool_count = n
     s.pool_length = length
     s.csv_path = path
@@ -531,7 +541,8 @@ def create_server(req: ServerRequest):
                    group_id=req.group_id, pool_length=req.length)
         if req.origin_zone and req.dest_zone:
             _generate_node_pool(s, req.origin_zone, req.dest_zone,
-                                req.count, req.length)
+                                req.count, req.length,
+                                origin_code=req.origin_code, dest_code=req.dest_code)
         session.add(s)
         session.commit()
         return {"status": "created", "server": s.to_dict()}
@@ -566,7 +577,11 @@ def generate_server_pool(server_id: int, req: GeneratePoolRequest):
         if not origin or not dest:
             raise HTTPException(422, "origin_zone and dest_zone are required")
         length = req.length or s.pool_length or 11
-        _generate_node_pool(s, origin, dest, req.count, length)
+        # Re-pin to the requested code, else keep the node's stored pin.
+        ocode = req.origin_code if req.origin_code != "" else (s.origin_code or "")
+        dcode = req.dest_code if req.dest_code != "" else (s.dest_code or "")
+        _generate_node_pool(s, origin, dest, req.count, length,
+                            origin_code=ocode, dest_code=dcode)
         session.commit()
         return {"status": "generated", "server": s.to_dict()}
     except HTTPException:

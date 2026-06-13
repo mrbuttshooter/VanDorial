@@ -219,6 +219,8 @@ export interface Server {
   group_id: number | null;
   origin_zone: string;
   dest_zone: string;
+  origin_code: string;
+  dest_code: string;
   pool_count: number;
   pool_length: number;
   csv_path: string;
@@ -233,6 +235,9 @@ export interface ServerRequest {
   group_id?: number | null;
   origin_zone?: string;
   dest_zone?: string;
+  /* Optional pinned code within each zone (e.g. only 22462). "" = whole zone. */
+  origin_code?: string;
+  dest_code?: string;
   count?: number;
   length?: number;
 }
@@ -295,6 +300,8 @@ export interface GroupStartResult {
 export interface GeneratePoolRequest {
   origin_zone?: string;
   dest_zone?: string;
+  origin_code?: string;
+  dest_code?: string;
   count?: number;
   length?: number;
 }
@@ -348,6 +355,13 @@ export interface RunPresetRequest {
 export interface SaleZoneCountry {
   name: string;
   zones: string[];
+}
+
+/* GET /api/sale-zones payload: the country->zones tree plus a zone->codes map
+   for the third "Code" dropdown (pin a single dialing code). */
+export interface SaleZonesResponse {
+  countries: SaleZoneCountry[];
+  codes: Record<string, string[]>;
 }
 
 export interface StartTestRequest {

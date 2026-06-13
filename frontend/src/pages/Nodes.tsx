@@ -22,8 +22,10 @@ interface NodeForm {
   groupId: string;
   originCountry: string;
   originZone: string;
+  originCode: string;
   destCountry: string;
   destZone: string;
+  destCode: string;
   count: number;
 }
 
@@ -34,8 +36,10 @@ const BLANK: NodeForm = {
   groupId: "",
   originCountry: "",
   originZone: "",
+  originCode: "",
   destCountry: "",
   destZone: "",
+  destCode: "",
   count: 500000,
 };
 
@@ -64,6 +68,7 @@ export function Nodes() {
   const countries = useMemo(() => zoneTree.data?.countries ?? [], [zoneTree.data]);
   const zonesFor = (c: string): string[] =>
     countries.find((x) => x.name === c)?.zones ?? [];
+  const codesFor = (z: string): string[] => zoneTree.data?.codes?.[z] ?? [];
 
   const create = async () => {
     if (!form.name.trim() || !form.ip.trim()) {
@@ -83,6 +88,8 @@ export function Nodes() {
         group_id: form.groupId ? Number(form.groupId) : null,
         origin_zone: form.originZone,
         dest_zone: form.destZone,
+        origin_code: form.originCode,
+        dest_code: form.destCode,
         count: form.count,
       } as ServerRequest);
       toast.ok(
@@ -174,7 +181,13 @@ export function Nodes() {
                     </td>
                     <td style={{ color: "var(--text-muted)" }}>
                       {n.has_pool ? (
-                        <>{n.origin_zone} <span style={{ color: "var(--text-faint)" }}>→</span> {n.dest_zone}</>
+                        <>
+                          {n.origin_zone}
+                          {n.origin_code ? <span style={{ color: "var(--text-faint)" }}> ({n.origin_code})</span> : null}
+                          <span style={{ color: "var(--text-faint)" }}> → </span>
+                          {n.dest_zone}
+                          {n.dest_code ? <span style={{ color: "var(--cyan)" }}> ({n.dest_code})</span> : null}
+                        </>
                       ) : (
                         <span style={{ color: "var(--text-faint)" }}>— no pool —</span>
                       )}
@@ -250,21 +263,31 @@ export function Nodes() {
           </Field>
         )}
 
-        <div className={s.formSection}>Numbers (drop zones)</div>
+        <div className={s.formSection}>Numbers (Country → Sale zone → Code)</div>
         <FieldRow>
           <Field label="Origin country">
             <select
               value={form.originCountry}
-              onChange={(e) => setForm((f) => ({ ...f, originCountry: e.target.value, originZone: "" }))}
+              onChange={(e) => setForm((f) => ({ ...f, originCountry: e.target.value, originZone: "", originCode: "" }))}
             >
               <option value="">{zoneTree.loading ? "Loading…" : "Select country"}</option>
               {countries.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
             </select>
           </Field>
           <Field label="Origin sale zone (A)">
-            <select value={form.originZone} disabled={!form.originCountry} onChange={(e) => set("originZone", e.target.value)}>
+            <select
+              value={form.originZone}
+              disabled={!form.originCountry}
+              onChange={(e) => setForm((f) => ({ ...f, originZone: e.target.value, originCode: "" }))}
+            >
               <option value="">Select zone</option>
               {zonesFor(form.originCountry).map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </Field>
+          <Field label="Origin code (A)" hint="All = spread the zone.">
+            <select value={form.originCode} disabled={!form.originZone} onChange={(e) => set("originCode", e.target.value)}>
+              <option value="">All codes</option>
+              {codesFor(form.originZone).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Field>
         </FieldRow>
@@ -272,28 +295,38 @@ export function Nodes() {
           <Field label="Drop country">
             <select
               value={form.destCountry}
-              onChange={(e) => setForm((f) => ({ ...f, destCountry: e.target.value, destZone: "" }))}
+              onChange={(e) => setForm((f) => ({ ...f, destCountry: e.target.value, destZone: "", destCode: "" }))}
             >
               <option value="">{zoneTree.loading ? "Loading…" : "Select country"}</option>
               {countries.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
             </select>
           </Field>
           <Field label="Drop sale zone (B)">
-            <select value={form.destZone} disabled={!form.destCountry} onChange={(e) => set("destZone", e.target.value)}>
+            <select
+              value={form.destZone}
+              disabled={!form.destCountry}
+              onChange={(e) => setForm((f) => ({ ...f, destZone: e.target.value, destCode: "" }))}
+            >
               <option value="">Select zone</option>
               {zonesFor(form.destCountry).map((z) => <option key={z} value={z}>{z}</option>)}
             </select>
           </Field>
-          <Field label="How many" hint="Random draw pool (max 2,000,000).">
-            <input
-              type="number"
-              min={1}
-              max={2000000}
-              value={form.count}
-              onChange={(e) => set("count", Number(e.target.value) || 0)}
-            />
+          <Field label="Drop code (B)" hint="Pick the routable code (e.g. 22462).">
+            <select value={form.destCode} disabled={!form.destZone} onChange={(e) => set("destCode", e.target.value)}>
+              <option value="">All codes</option>
+              {codesFor(form.destZone).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </Field>
         </FieldRow>
+        <Field label="How many" hint="Random draw pool (max 2,000,000).">
+          <input
+            type="number"
+            min={1}
+            max={2000000}
+            value={form.count}
+            onChange={(e) => set("count", Number(e.target.value) || 0)}
+          />
+        </Field>
         <Field label="Description" hint="Optional.">
           <input value={form.description} onChange={(e) => set("description", e.target.value)} />
         </Field>

@@ -165,6 +165,11 @@ class Server(Base):
     # the origin/drop sale zones it dials and the generated A/B pool file.
     origin_zone = Column(String(255), default="")
     dest_zone = Column(String(255), default="")
+    # Optional pinned code within each zone (e.g. dial ONLY 22462, not the whole
+    # Guinea-Orange zone whose 224720/224721 breakouts the switch won't route).
+    # Empty => spread across all of the zone's codes (previous behaviour).
+    origin_code = Column(String(32), default="")
+    dest_code = Column(String(32), default="")
     pool_count = Column(Integer, default=0)
     pool_length = Column(Integer, default=11)
     csv_path = Column(String(1024), default="")
@@ -180,6 +185,8 @@ class Server(Base):
             "group_id": self.group_id,
             "origin_zone": self.origin_zone or "",
             "dest_zone": self.dest_zone or "",
+            "origin_code": self.origin_code or "",
+            "dest_code": self.dest_code or "",
             "pool_count": self.pool_count or 0,
             "pool_length": self.pool_length or 11,
             "csv_path": self.csv_path or "",
@@ -331,6 +338,8 @@ class Database:
         "servers": [
             ("origin_zone", "VARCHAR(255) DEFAULT ''"),
             ("dest_zone", "VARCHAR(255) DEFAULT ''"),
+            ("origin_code", "VARCHAR(32) DEFAULT ''"),
+            ("dest_code", "VARCHAR(32) DEFAULT ''"),
             ("pool_count", "INTEGER DEFAULT 0"),
             ("pool_length", "INTEGER DEFAULT 11"),
             ("csv_path", "VARCHAR(1024) DEFAULT ''"),
