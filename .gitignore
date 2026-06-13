@@ -39,7 +39,9 @@ frontend/.vite/
 .DS_Store
 *.local
 
-# Proprietary sale-codes deck (full international rate-deck zone/code map).
-# Kept OUT of the public repo; delivered to the box as a data file. The committed
-# sample (sale_codes.sample.csv) is enough for tests + a demo run.
-gencall/scripts/data/sale_codes.csv
+# Full sale-codes deck (international rate-deck zone/code map). NOW BUNDLED so it
+# ships with the build to the air-gapped box (operator chose convenience over
+# keeping it out of the repo). The committed sample (sale_codes.sample.csv) is the
+# fallback for tests + a demo run when the full deck is absent.
+# (If this repo is/► becomes public, move the deck back out and deliver it
+#  separately — it contains commercial rate codes.)

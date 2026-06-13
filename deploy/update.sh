@@ -7,11 +7,12 @@
 #
 #   PRESERVED (never overwritten/deleted):
 #     - etc/gencall.cfg        (live config: sipp path, MADA settings, allowlists)
-#     - scripts/data/          (the proprietary sale_codes deck — NOT in the bundle)
 #     - venv / .venv           (editable install; replacing .py is enough)
 #     - *.db / *.sqlite*       (databases)
 #     - logs/
 #   The DB dir /opt/gencall/data is OUTSIDE the package tree, so untouched anyway.
+#   The full sale-codes deck (scripts/data/sale_codes.csv) IS bundled now and is
+#   intentionally deployed (overwrites the box copy) so all zones are available.
 #
 # Usage:
 #   sudo bash update.sh [/path/to/VanDorial-*.tar.gz|.zip]
@@ -66,9 +67,12 @@ fi
 RSYNC_OPTS=(-a)
 [[ "${PRUNE:-0}" == "1" ]] && { RSYNC_OPTS+=(--delete); say "PRUNE on: stale code files will be removed"; }
 say "syncing code -> $INSTALL_DIR"
+# NOTE: we deliberately do NOT --exclude 'data' anymore: the full sale-codes deck
+# (scripts/data/sale_codes.csv) is now bundled and SHOULD overwrite the box's copy.
+# The database lives at /opt/gencall/data (OUTSIDE this install dir, never touched),
+# and any stray *.db/*.sqlite* inside the tree is still excluded below.
 rsync "${RSYNC_OPTS[@]}" \
   --exclude 'etc' \
-  --exclude 'data' \
   --exclude 'venv' --exclude '.venv' \
   --exclude '*.db' --exclude '*.sqlite*' \
   --exclude 'logs' \
