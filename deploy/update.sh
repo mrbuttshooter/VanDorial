@@ -79,8 +79,11 @@ find "$INSTALL_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/
 
 # 6) restart the worker (auto-detect the unit name) ------------------------
 UNIT=""
-for u in gencall-worker gencall; do
-  if systemctl list-unit-files 2>/dev/null | grep -q "^${u}\.service"; then UNIT="$u"; break; fi
+for u in gencall-worker gencall gencall-controller; do
+  # `systemctl cat` exits 0 iff a unit file exists (active or not) — more robust
+  # than grepping list-unit-files, whose output formatting/truncation made the
+  # match miss gencall-worker.service on cy214.
+  if systemctl cat "${u}.service" >/dev/null 2>&1; then UNIT="$u"; break; fi
 done
 if [[ -n "$UNIT" ]]; then
   say "restarting $UNIT  (running loops will stop and reconcile)"
