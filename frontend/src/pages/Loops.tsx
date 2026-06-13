@@ -415,6 +415,7 @@ function RunModal({
   const [mode, setMode] = useState<"node" | "group">("node");
   const [nodeId, setNodeId] = useState<number | undefined>(undefined);
   const [groupId, setGroupId] = useState<number | undefined>(undefined);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const usableNodes = useMemo(
@@ -422,17 +423,35 @@ function RunModal({
     [nodes.data],
   );
   const groupRows = groups.data?.groups ?? [];
+  const selectedGroup = groupRows.find((g) => g.id === groupId);
+  const groupMembers = useMemo(
+    () => (selectedGroup?.nodes ?? []).filter((m) => m.enabled && m.has_pool),
+    [selectedGroup],
+  );
+
+  // Choosing a group pre-selects ALL its runnable members; uncheck to skip.
+  const chooseGroup = (gid: number | undefined) => {
+    setGroupId(gid);
+    const g = groupRows.find((x) => x.id === gid);
+    setPicked(new Set((g?.nodes ?? []).filter((m) => m.enabled && m.has_pool).map((m) => m.id)));
+  };
+  const toggle = (id: number) =>
+    setPicked((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
 
   const run = async () => {
-    const target: RunPresetRequest =
-      mode === "node" ? { node_id: nodeId } : { group_id: groupId };
-    if (mode === "node" && !nodeId) {
-      toast.error("Pick a node.");
-      return;
-    }
-    if (mode === "group" && !groupId) {
-      toast.error("Pick a group.");
-      return;
+    let target: RunPresetRequest;
+    if (mode === "node") {
+      if (!nodeId) { toast.error("Pick a node."); return; }
+      target = { node_id: nodeId };
+    } else {
+      if (!groupId) { toast.error("Pick a group."); return; }
+      if (picked.size === 0) { toast.error("Select at least one node in the group."); return; }
+      target = { group_id: groupId, node_ids: [...picked] };
     }
     setBusy(true);
     try {
@@ -502,22 +521,73 @@ function RunModal({
           </select>
         </Field>
       ) : (
-        <Field
-          label="Group"
-          hint={groupRows.length ? "Fans out to every member node." : "No groups yet."}
-        >
-          <select
-            value={groupId ?? ""}
-            onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : undefined)}
+        <>
+          <Field
+            label="Group"
+            hint={groupRows.length ? "Pick which member IPs below." : "No groups yet."}
           >
-            <option value="">Select group</option>
-            {groupRows.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name} — {g.node_count ?? 0} nodes
-              </option>
-            ))}
-          </select>
-        </Field>
+            <select
+              value={groupId ?? ""}
+              onChange={(e) => chooseGroup(e.target.value ? Number(e.target.value) : undefined)}
+            >
+              <option value="">Select group</option>
+              {groupRows.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} — {g.node_count ?? 0} nodes
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {selectedGroup && (
+            <Field
+              label={`Run on which IPs (${picked.size}/${groupMembers.length})`}
+              hint="All selected — uncheck any you don't want to run."
+            >
+              {groupMembers.length === 0 ? (
+                <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+                  No member nodes with a pool.
+                </span>
+              ) : (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 4,
+                    maxHeight: 200,
+                    overflowY: "auto",
+                    border: "1px solid var(--line)",
+                    borderRadius: "var(--r-sm)",
+                    padding: "var(--space-2)",
+                    background: "var(--bg-inset)",
+                  }}
+                >
+                  {groupMembers.map((m) => (
+                    <label
+                      key={m.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: "var(--fs-sm)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={picked.has(m.id)}
+                        onChange={() => toggle(m.id)}
+                      />
+                      <span style={{ color: "var(--text-bright)" }}>{m.name}</span>
+                      <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
+                        {m.ip}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </Field>
+          )}
+        </>
       )}
 
       {mode === "node" && usableNodes.length === 0 && (
