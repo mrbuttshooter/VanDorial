@@ -10,8 +10,11 @@ import type {
   GroupStartResult,
   Health,
   LoopCampaign,
+  LoopPreset,
+  LoopPresetRequest,
   NodeGroup,
   NodeGroupRequest,
+  RunPresetRequest,
   SaleZoneCountry,
   Scenario,
   Server,
@@ -211,6 +214,8 @@ export const api = {
       method: "POST",
       body: req,
     }),
+  /** Past + present loop runs with their final stats, newest first (History tab). */
+  loopHistory: () => request<{ runs: LoopCampaign[] }>("/api/loops/history"),
   stopLoop: (id: string) =>
     request<{ status: string; campaign: LoopCampaign }>(
       `/api/loops/${encodeURIComponent(id)}/stop`,
@@ -279,6 +284,32 @@ export const api = {
       `/api/node-groups/${id}/stop`,
       { method: "POST" },
     ),
+
+  // ---- Loop presets (saved recipes; Run on a node or a group) ----
+  listLoopPresets: () => request<{ presets: LoopPreset[] }>("/api/loop-presets"),
+  createLoopPreset: (req: LoopPresetRequest) =>
+    request<{ status: string; preset: LoopPreset }>("/api/loop-presets", {
+      method: "POST",
+      body: req,
+    }),
+  updateLoopPreset: (id: number, req: LoopPresetRequest) =>
+    request<{ status: string; preset: LoopPreset }>(`/api/loop-presets/${id}`, {
+      method: "PUT",
+      body: req,
+    }),
+  deleteLoopPreset: (id: number) =>
+    request<{ status: string; id: number }>(`/api/loop-presets/${id}`, {
+      method: "DELETE",
+    }),
+  /** Launch a saved preset on a node (or fan out across a group). */
+  runLoopPreset: (id: number, target: RunPresetRequest) =>
+    request<{
+      status: string;
+      preset: string;
+      started: number;
+      total: number;
+      results: GroupStartResult["results"];
+    }>(`/api/loop-presets/${id}/run`, { method: "POST", body: target }),
 };
 
 /** Authenticated file download: GET `path` with the X-API-Key header, read the

@@ -195,6 +195,21 @@ def list_loops():
     return {"campaigns": _engine().list_campaigns()}
 
 
+@router.get("/api/loops/history", dependencies=[Depends(require_api_key)])
+def loop_history():
+    """Past + present loop runs with their final loop_stats, newest first.
+
+    Feeds the History tab's loop archive. Declared BEFORE /api/loops/{id} so the
+    literal 'history' path is not swallowed as a campaign id.
+    """
+    runs = _engine().list_campaigns()
+    if loop_matcher is not None:
+        for c in runs:
+            c["loop_stats"] = loop_matcher.latest_stats(c["id"])
+    runs.sort(key=lambda c: (c.get("created_at") or ""), reverse=True)
+    return {"runs": runs}
+
+
 @router.get("/api/loops/{campaign_id}", dependencies=[Depends(require_api_key)])
 def get_loop(campaign_id: str):
     """Live status for one campaign incl. its UAC's SIPp stats + latest loop_stats.
@@ -462,6 +477,210 @@ def stop_node_group(group_id: int):
                 pass
     return {"status": "stopped", "group": group_name, "stopped": len(stopped),
             "campaign_ids": stopped}
+
+
+# ─── Loop presets (saved recipes; run on a node or a group) ──────────────────
+
+class LoopPresetRequest(BaseModel):
+    """A saved loop recipe: destination + ACD/rate/targets, but NO source. The
+    node or group to run it on is chosen at run time (POST .../run)."""
+    name: str
+    description: str = ""
+    dest_host: str = ""
+    dest_port: int = Field(default=5060, ge=1, le=65535)
+    transport: str = "udp"
+    rate: float = Field(default=1.0, gt=0)
+    max_concurrent: int = Field(default=10, gt=0)
+    duration_mode: str = "fixed"
+    duration_s: int = Field(default=180, ge=0)
+    duration_max_s: int = Field(default=0, ge=0)
+    match_key: str = "exact"
+    target_calls: int = Field(default=0, ge=0)
+    target_minutes: int = Field(default=0, ge=0)
+
+    @field_validator("transport")
+    @classmethod
+    def _check_transport(cls, v: str) -> str:
+        return validate_transport(v)
+
+
+class RunPresetRequest(BaseModel):
+    """Where to fire a preset: a single source-IP node, OR a group (optionally a
+    subset of its members via ``node_ids``)."""
+    node_id: Optional[int] = None
+    group_id: Optional[int] = None
+    node_ids: Optional[list[int]] = None
+
+
+_PRESET_FIELDS = (
+    "name", "description", "dest_host", "dest_port", "transport", "rate",
+    "max_concurrent", "duration_mode", "duration_s", "duration_max_s",
+    "match_key", "target_calls", "target_minutes",
+)
+
+# The subset of preset fields passed straight to start_campaign (everything bar
+# name/description, which are presentation only).
+_PRESET_RUN_PARAMS = (
+    "dest_host", "dest_port", "transport", "rate", "max_concurrent",
+    "duration_mode", "duration_s", "duration_max_s", "match_key",
+    "target_calls", "target_minutes",
+)
+
+
+def _start_on_member(name: str, params: dict, member: dict) -> dict:
+    """Start one loop on a member node; return a per-node result (never raises).
+
+    ``member`` is a plain dict (id/name/ip/csv_path/enabled) snapshotted before
+    the DB session closed. A disabled node, a node with no pool, or an IP already
+    looping is reported (not fatal) so a group run carries on."""
+    base = {"node": member["name"], "ip": member["ip"]}
+    if not member.get("enabled", True):
+        return {**base, "ok": False, "skipped": "disabled"}
+    if not member.get("csv_path"):
+        return {**base, "ok": False, "skipped": "no number pool"}
+    try:
+        campaign = _engine().start_campaign(
+            name=name, local_ip=member["ip"], csv_path=member["csv_path"],
+            node_id=member["id"], **params,
+        )
+        return {**base, "ok": True, "campaign_id": campaign["id"]}
+    except IPBusy as e:
+        return {**base, "ok": False, "skipped": str(e)}
+    except (CapExceeded, RuntimeError) as e:
+        return {**base, "ok": False, "error": str(e)}
+
+
+@router.get("/api/loop-presets", dependencies=[Depends(require_api_key)])
+def list_loop_presets():
+    """List saved loop presets (newest first)."""
+    from gencall.db.models import LoopPreset
+
+    session = _db().get_session()
+    try:
+        rows = session.query(LoopPreset).order_by(LoopPreset.id.desc()).all()
+        return {"presets": [p.to_dict() for p in rows]}
+    finally:
+        session.close()
+
+
+@router.post("/api/loop-presets", dependencies=[Depends(require_api_key)])
+def create_loop_preset(req: LoopPresetRequest):
+    """Create a saved loop preset."""
+    from gencall.db.models import LoopPreset
+
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(422, "name is required")
+    session = _db().get_session()
+    try:
+        p = LoopPreset(**{f: getattr(req, f) for f in _PRESET_FIELDS})
+        p.name = name
+        session.add(p)
+        session.commit()
+        return {"status": "created", "preset": p.to_dict()}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, f"could not create preset (duplicate name?): {e}")
+    finally:
+        session.close()
+
+
+@router.put("/api/loop-presets/{preset_id}", dependencies=[Depends(require_api_key)])
+def update_loop_preset(preset_id: int, req: LoopPresetRequest):
+    """Replace a preset's fields."""
+    from gencall.db.models import LoopPreset
+
+    session = _db().get_session()
+    try:
+        p = session.query(LoopPreset).filter_by(id=preset_id).first()
+        if not p:
+            raise HTTPException(404, f"Preset {preset_id} not found")
+        for f in _PRESET_FIELDS:
+            setattr(p, f, getattr(req, f))
+        session.commit()
+        return {"status": "updated", "preset": p.to_dict()}
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(400, str(e))
+    finally:
+        session.close()
+
+
+@router.delete("/api/loop-presets/{preset_id}", dependencies=[Depends(require_api_key)])
+def delete_loop_preset(preset_id: int):
+    """Delete a preset (does not touch any running campaign it launched)."""
+    from gencall.db.models import LoopPreset
+
+    session = _db().get_session()
+    try:
+        p = session.query(LoopPreset).filter_by(id=preset_id).first()
+        if not p:
+            raise HTTPException(404, f"Preset {preset_id} not found")
+        session.delete(p)
+        session.commit()
+        return {"status": "deleted", "id": preset_id}
+    finally:
+        session.close()
+
+
+@router.post("/api/loop-presets/{preset_id}/run", dependencies=[Depends(require_api_key)])
+def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
+    """Run a saved preset on a chosen source-IP node OR a group.
+
+    The preset supplies the recipe (dest/ACD/rate/targets); the node or group
+    supplies the source IP + number pool. Running on a group fans the recipe out
+    to every member node (one loop per IP). Returns a per-node result list."""
+    from gencall.db.models import LoopPreset, NodeGroup, Server
+
+    req = req or RunPresetRequest()
+    config = _engine().config or Config()
+    session = _db().get_session()
+    try:
+        p = session.query(LoopPreset).filter_by(id=preset_id).first()
+        if not p:
+            raise HTTPException(404, f"Preset {preset_id} not found")
+        if not (p.dest_host or "").strip():
+            raise HTTPException(422, "preset has no destination host set")
+        preset_name = p.name
+        params = {f: getattr(p, f) for f in _PRESET_RUN_PARAMS}
+        # Validate the destination + caps ONCE before launching.
+        try:
+            validate_dest_host(params["dest_host"], config.loops_dest_allowlist)
+            validate_caps(params["rate"], params["max_concurrent"], config)
+        except (DestHostError, ValueError) as e:
+            raise HTTPException(422, str(e))
+        # Resolve the target(s): a single node, or a group's (optionally subset) members.
+        if req.node_id is not None:
+            n = session.query(Server).filter_by(id=req.node_id).first()
+            if not n:
+                raise HTTPException(404, f"Node {req.node_id} not found")
+            members = [{"id": n.id, "name": n.name, "ip": n.ip,
+                        "csv_path": n.csv_path, "enabled": n.enabled}]
+        elif req.group_id is not None:
+            g = session.query(NodeGroup).filter_by(id=req.group_id).first()
+            if not g:
+                raise HTTPException(404, f"Group {req.group_id} not found")
+            wanted = set(req.node_ids) if req.node_ids else None
+            members = [
+                {"id": m.id, "name": m.name, "ip": m.ip,
+                 "csv_path": m.csv_path, "enabled": m.enabled}
+                for m in session.query(Server).filter_by(group_id=g.id).all()
+                if wanted is None or m.id in wanted
+            ]
+            if not members:
+                raise HTTPException(422, "group has no member nodes to run")
+        else:
+            raise HTTPException(422, "pick a node_id or group_id to run the preset on")
+    finally:
+        session.close()
+
+    results = [_start_on_member(f"{preset_name}-{m['name']}", params, m) for m in members]
+    started = sum(1 for r in results if r.get("ok"))
+    return {"status": "started", "preset": preset_name, "started": started,
+            "total": len(members), "results": results}
 
 
 # ─── Sale zones + number generation (web "drop zone" flow) ───────────────────

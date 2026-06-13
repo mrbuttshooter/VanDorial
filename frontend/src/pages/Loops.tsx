@@ -12,6 +12,7 @@ import {
   IconPlus,
   IconRefresh,
   IconDownload,
+  IconTrash,
 } from "@/components/icons";
 import { useAsync } from "@/hooks/useAsync";
 import { useStream } from "@/hooks/useStream";
@@ -21,21 +22,25 @@ import { duration, int, num, pct } from "@/lib/format";
 import { Link } from "react-router-dom";
 import type {
   LoopCampaign,
+  LoopPreset,
+  LoopPresetRequest,
   LoopStats,
-  StartLoopRequest,
+  RunPresetRequest,
   Transport,
 } from "@/lib/types";
 
-const BLANK: StartLoopRequest = {
+/* A preset is the loop "recipe" — destination + ACD/rate/targets, no source.
+   You pick the node or group to fire it on at Run time. */
+const PRESET_BLANK: LoopPresetRequest = {
   name: "",
-  node_id: undefined,
+  description: "",
   dest_host: "",
   dest_port: 5060,
   transport: "udp",
   rate: 1,
   max_concurrent: 10,
   duration_mode: "fixed",
-  duration_s: 180,
+  duration_s: 114,
   duration_max_s: 0,
   match_key: "exact",
   target_calls: 0,
@@ -74,35 +79,57 @@ function targetProgress(c: LoopCampaign, st: LoopStats | undefined): number | nu
 
 export function Loops() {
   const loops = useAsync(() => api.listLoops(), [], 3000);
+  const presets = useAsync(() => api.listLoopPresets(), []);
   const toast = useToast();
 
-  // Latest loop_stats snapshot per campaign, fed live by the WS 'loops' topic
-  // (backend loop_matcher shape) and keyed by campaign_id.
+  // Latest loop_stats snapshot per campaign, fed live by the WS 'loops' topic.
   const [stats, setStats] = useState<Record<string, LoopStats>>({});
   useStream<LoopStats>("loops", (st) => {
     if (!st || !st.campaign_id) return;
     setStats((prev) => ({ ...prev, [st.campaign_id]: st }));
   });
 
-  const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState<StartLoopRequest>(BLANK);
+  // Preset create/edit modal.
+  const [showPreset, setShowPreset] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [form, setForm] = useState<LoopPresetRequest>(PRESET_BLANK);
   const [busy, setBusy] = useState(false);
 
-  // Nodes (source IP + its number pool) — a loop picks one node.
-  const nodes = useAsync(() => api.listServers(), []);
-  const usableNodes = useMemo(
-    () => (nodes.data?.servers ?? []).filter((n) => n.enabled && n.has_pool),
-    [nodes.data],
-  );
+  // Run modal (pick node or group for a chosen preset).
+  const [runFor, setRunFor] = useState<LoopPreset | null>(null);
 
-  const set = <K extends keyof StartLoopRequest>(k: K, v: StartLoopRequest[K]) =>
+  const set = <K extends keyof LoopPresetRequest>(k: K, v: LoopPresetRequest[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const resetForm = () => setForm(BLANK);
+  const openNew = () => {
+    setEditId(null);
+    setForm(PRESET_BLANK);
+    setShowPreset(true);
+  };
 
-  const launch = async () => {
-    if (!form.node_id) {
-      toast.error("Pick a node (source IP + numbers).");
+  const openEdit = (p: LoopPreset) => {
+    setEditId(p.id);
+    setForm({
+      name: p.name,
+      description: p.description,
+      dest_host: p.dest_host,
+      dest_port: p.dest_port,
+      transport: p.transport as Transport,
+      rate: p.rate,
+      max_concurrent: p.max_concurrent,
+      duration_mode: p.duration_mode,
+      duration_s: p.duration_s,
+      duration_max_s: p.duration_max_s,
+      match_key: p.match_key,
+      target_calls: p.target_calls,
+      target_minutes: p.target_minutes,
+    });
+    setShowPreset(true);
+  };
+
+  const savePreset = async () => {
+    if (!form.name?.trim()) {
+      toast.error("Preset name is required.");
       return;
     }
     if (!form.dest_host?.trim()) {
@@ -111,15 +138,29 @@ export function Loops() {
     }
     setBusy(true);
     try {
-      const res = await api.startLoop(form);
-      toast.ok(`Loop campaign launched · ${res.campaign.id}`);
-      setShowNew(false);
-      resetForm();
-      loops.refetch();
+      if (editId != null) {
+        await api.updateLoopPreset(editId, form);
+        toast.ok("Preset updated");
+      } else {
+        await api.createLoopPreset(form);
+        toast.ok("Preset saved");
+      }
+      setShowPreset(false);
+      presets.refetch();
     } catch (e) {
-      toast.error(`Launch failed: ${e instanceof Error ? e.message : e}`);
+      toast.error(`${e instanceof Error ? e.message : e}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const delPreset = async (p: LoopPreset) => {
+    try {
+      await api.deleteLoopPreset(p.id);
+      toast.warn(`Deleted preset ${p.name}`);
+      presets.refetch();
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
     }
   };
 
@@ -142,123 +183,116 @@ export function Loops() {
   };
 
   const campaigns = loops.data?.campaigns ?? [];
-  // Running campaigns first, then most-recently created.
-  const ordered = useMemo(() => {
-    return [...campaigns].sort((a, b) => {
-      if (a.status === "running" && b.status !== "running") return -1;
-      if (b.status === "running" && a.status !== "running") return 1;
-      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-    });
-  }, [campaigns]);
-
-  const runningCount = campaigns.filter((c) => c.status === "running").length;
+  const running = useMemo(
+    () =>
+      campaigns
+        .filter((c) => c.status === "running")
+        .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? "")),
+    [campaigns],
+  );
+  const presetRows = presets.data?.presets ?? [];
 
   return (
     <>
       <div className={s.toolbar}>
         <span className="hud-label">
-          {runningCount} running · {campaigns.length} total
+          {running.length} running · {presetRows.length} presets
         </span>
         <div className={s.spacer} />
-        <Button size="sm" variant="ghost" onClick={() => loops.refetch()}>
+        <Button size="sm" variant="ghost" onClick={() => { loops.refetch(); presets.refetch(); }}>
           <IconRefresh /> Refresh
         </Button>
-        <Button variant="primary" onClick={() => setShowNew(true)}>
-          <IconPlus /> New Loop Campaign
+        <Button variant="primary" onClick={openNew}>
+          <IconPlus /> New Preset
         </Button>
       </div>
 
-      {loops.loading && !loops.data ? (
-        <Panel title="Loop Campaigns" flush live>
+      {/* ---- Running now ---- */}
+      {running.length > 0 && (
+        <Panel title="Running now" flush live>
+          <div className={s.cards}>
+            {running.map((c) => (
+              <LoopCard
+                key={c.id}
+                campaign={c}
+                stats={stats[c.id]}
+                onStop={() => stop(c.id)}
+                onDownload={() => download(c.id)}
+              />
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {/* ---- Saved presets ---- */}
+      <Panel title="Saved loops (presets)" flush>
+        {presets.loading && !presets.data ? (
           <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
             <Spinner />
           </div>
-        </Panel>
-      ) : ordered.length === 0 ? (
-        <Panel title="Loop Campaigns" flush>
+        ) : presetRows.length === 0 ? (
           <EmptyState
-            title="No loop campaigns yet"
-            hint="Start a campaign to drive minutes-for-minutes loop traffic at a destination."
+            title="No saved loops yet"
+            hint="Save a loop recipe (destination + ACD + rate) once, then click Run to fire it on any node or group — no more rebuilding the form each time."
             action={
-              <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>
-                New loop campaign
+              <Button variant="primary" size="sm" onClick={openNew}>
+                New preset
               </Button>
             }
           />
-        </Panel>
-      ) : (
-        <div className={s.cards}>
-          {ordered.map((c) => (
-            <LoopCard
-              key={c.id}
-              campaign={c}
-              stats={stats[c.id]}
-              onStop={() => stop(c.id)}
-              onDownload={() => download(c.id)}
-            />
-          ))}
-        </div>
-      )}
+        ) : (
+          <div className={s.cards}>
+            {presetRows.map((p) => (
+              <PresetCard
+                key={p.id}
+                preset={p}
+                onRun={() => setRunFor(p)}
+                onEdit={() => openEdit(p)}
+                onDelete={() => delPreset(p)}
+              />
+            ))}
+          </div>
+        )}
+      </Panel>
 
-      {/* ---- New campaign modal ---- */}
+      {/* ---- Preset create/edit modal ---- */}
       <Modal
-        open={showNew}
-        title={<><IconPlay /> New Loop Campaign</>}
-        onClose={() => { setShowNew(false); resetForm(); }}
+        open={showPreset}
+        title={<>{editId != null ? "Edit preset" : "New preset"}</>}
+        onClose={() => setShowPreset(false)}
         footer={
           <ModalActions
-            onCancel={() => { setShowNew(false); resetForm(); }}
-            onConfirm={launch}
-            confirmLabel="Launch"
+            onCancel={() => setShowPreset(false)}
+            onConfirm={savePreset}
+            confirmLabel={editId != null ? "Save" : "Create"}
             disabled={busy}
           />
         }
       >
         <FieldRow>
-          <Field label="Campaign name" hint="Blank = auto id.">
+          <Field label="Preset name" hint="e.g. guinea-orange-1.90">
             <input
               value={form.name}
               onChange={(e) => set("name", e.target.value)}
-              placeholder="ng-lagos-to-guinea"
+              placeholder="guinea-orange-1.90"
             />
           </Field>
-          <Field
-            label="Node (source IP + numbers)"
-            hint={
-              usableNodes.length
-                ? "One loop per IP."
-                : "Add a node with a number pool first."
-            }
-          >
-            <select
-              value={form.node_id ?? ""}
-              onChange={(e) =>
-                set("node_id", e.target.value ? Number(e.target.value) : undefined)
-              }
-            >
-              <option value="">Select node</option>
-              {usableNodes.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name} — {n.ip} · {n.origin_zone} → {n.dest_zone}
-                </option>
-              ))}
-            </select>
+          <Field label="Match key" hint="exact or suffixN">
+            <input
+              value={form.match_key}
+              onChange={(e) => set("match_key", e.target.value)}
+              placeholder="exact"
+            />
           </Field>
         </FieldRow>
-        {!nodes.loading && usableNodes.length === 0 && (
-          <p className={s.advancedSummary}>
-            No nodes with a number pool yet — <Link to="/nodes">add one on the Nodes page</Link>.
-          </p>
-        )}
 
-        {/* ---- Destination (MADA switch) ---- */}
         <div className={s.formSection}>Destination (MADA switch)</div>
         <FieldRow>
           <Field label="Destination host">
             <input
               value={form.dest_host}
               onChange={(e) => set("dest_host", e.target.value)}
-              placeholder="10.20.8.40"
+              placeholder="208.87.169.100"
             />
           </Field>
           <Field label="Destination port">
@@ -279,6 +313,7 @@ export function Loops() {
             </select>
           </Field>
         </FieldRow>
+
         <FieldRow>
           <Field label="Call rate (cps)">
             <input
@@ -295,27 +330,24 @@ export function Loops() {
               onChange={(e) => set("max_concurrent", Number(e.target.value))}
             />
           </Field>
-          <Field label="Match key" hint="exact or suffixN">
-            <input
-              value={form.match_key}
-              onChange={(e) => set("match_key", e.target.value)}
-              placeholder="exact"
-            />
-          </Field>
-        </FieldRow>
-        <FieldRow>
           <Field label="Duration mode">
             <select
               value={form.duration_mode}
               onChange={(e) =>
-                set("duration_mode", e.target.value as StartLoopRequest["duration_mode"])
+                set("duration_mode", e.target.value as LoopPresetRequest["duration_mode"])
               }
             >
               <option value="fixed">Fixed</option>
               <option value="range">Range</option>
             </select>
           </Field>
-          <Field label={form.duration_mode === "range" ? "Min duration (s)" : "Duration (s)"}>
+        </FieldRow>
+
+        <FieldRow>
+          <Field
+            label={form.duration_mode === "range" ? "Min duration (s)" : "Duration (s) · ACD"}
+            hint="ACD in seconds (1.90 min = 114)."
+          >
             <input
               type="number"
               value={form.duration_s}
@@ -332,6 +364,7 @@ export function Loops() {
             </Field>
           )}
         </FieldRow>
+
         <FieldRow>
           <Field label="Target calls" hint="0 = until stopped">
             <input
@@ -349,11 +382,215 @@ export function Loops() {
           </Field>
         </FieldRow>
       </Modal>
+
+      {/* ---- Run modal (pick node or group) ---- */}
+      {runFor && (
+        <RunModal
+          preset={runFor}
+          onClose={() => setRunFor(null)}
+          onRan={() => {
+            setRunFor(null);
+            loops.refetch();
+          }}
+        />
+      )}
     </>
   );
 }
 
-/* ---- Per-campaign live card ---------------------------------------------- */
+/* ---- Run modal: choose where to fire the preset --------------------------- */
+
+function RunModal({
+  preset,
+  onClose,
+  onRan,
+}: {
+  preset: LoopPreset;
+  onClose: () => void;
+  onRan: () => void;
+}) {
+  const nodes = useAsync(() => api.listServers(), []);
+  const groups = useAsync(() => api.listNodeGroups(), []);
+  const toast = useToast();
+  const [mode, setMode] = useState<"node" | "group">("node");
+  const [nodeId, setNodeId] = useState<number | undefined>(undefined);
+  const [groupId, setGroupId] = useState<number | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+
+  const usableNodes = useMemo(
+    () => (nodes.data?.servers ?? []).filter((n) => n.enabled && n.has_pool),
+    [nodes.data],
+  );
+  const groupRows = groups.data?.groups ?? [];
+
+  const run = async () => {
+    const target: RunPresetRequest =
+      mode === "node" ? { node_id: nodeId } : { group_id: groupId };
+    if (mode === "node" && !nodeId) {
+      toast.error("Pick a node.");
+      return;
+    }
+    if (mode === "group" && !groupId) {
+      toast.error("Pick a group.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.runLoopPreset(preset.id, target);
+      const failed = res.results.filter((r) => !r.ok);
+      if (res.started > 0) {
+        toast.ok(`Started ${res.started}/${res.total} · ${preset.name}`);
+      }
+      if (failed.length) {
+        toast.warn(
+          `${failed.length} not started: ${failed
+            .map((r) => `${r.ip} ${r.skipped ?? r.error ?? ""}`)
+            .join("; ")}`,
+        );
+      }
+      onRan();
+    } catch (e) {
+      toast.error(`Run failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title={<><IconPlay /> Run · {preset.name}</>}
+      onClose={onClose}
+      footer={
+        <ModalActions onCancel={onClose} onConfirm={run} confirmLabel="Run" disabled={busy} />
+      }
+    >
+      <p className={s.advancedSummary}>
+        {preset.dest_host}:{preset.dest_port} · ACD {duration(preset.duration_s)} · {preset.rate} cps
+      </p>
+
+      <div className={s.seg} style={{ marginBottom: "var(--space-3)" }}>
+        <button
+          className={`${s.segBtn} ${mode === "node" ? s.segActive : ""}`}
+          onClick={() => setMode("node")}
+        >
+          One node
+        </button>
+        <button
+          className={`${s.segBtn} ${mode === "group" ? s.segActive : ""}`}
+          onClick={() => setMode("group")}
+        >
+          A group
+        </button>
+      </div>
+
+      {mode === "node" ? (
+        <Field
+          label="Source-IP node"
+          hint={usableNodes.length ? "One loop per IP." : "No nodes with a pool yet."}
+        >
+          <select
+            value={nodeId ?? ""}
+            onChange={(e) => setNodeId(e.target.value ? Number(e.target.value) : undefined)}
+          >
+            <option value="">Select node</option>
+            {usableNodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name} — {n.ip} · {n.origin_zone} → {n.dest_zone}
+              </option>
+            ))}
+          </select>
+        </Field>
+      ) : (
+        <Field
+          label="Group"
+          hint={groupRows.length ? "Fans out to every member node." : "No groups yet."}
+        >
+          <select
+            value={groupId ?? ""}
+            onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : undefined)}
+          >
+            <option value="">Select group</option>
+            {groupRows.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} — {g.node_count ?? 0} nodes
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {mode === "node" && usableNodes.length === 0 && (
+        <p className={s.advancedSummary}>
+          No nodes with a number pool — <Link to="/nodes">add one on the Nodes page</Link>.
+        </p>
+      )}
+    </Modal>
+  );
+}
+
+/* ---- Saved-preset card ---------------------------------------------------- */
+
+function PresetCard({
+  preset,
+  onRun,
+  onEdit,
+  onDelete,
+}: {
+  preset: LoopPreset;
+  onRun: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const target =
+    preset.target_calls > 0
+      ? `${int(preset.target_calls)} calls`
+      : preset.target_minutes > 0
+        ? `${int(preset.target_minutes)} min`
+        : "until stopped";
+  return (
+    <div className={s.card}>
+      <div className={s.cardTop}>
+        <div>
+          <div className={s.cardName}>{preset.name}</div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-faint)" }}>
+            {preset.dest_host}:{preset.dest_port}
+            <span style={{ marginLeft: 6, textTransform: "uppercase" }}>{preset.transport}</span>
+          </div>
+        </div>
+        <Badge tone="muted">preset</Badge>
+      </div>
+
+      <dl className={s.kv}>
+        <dt>ACD · duration</dt>
+        <dd>{duration(preset.duration_s)}</dd>
+        <dt>Rate / concurrent</dt>
+        <dd>
+          {preset.rate} cps / {int(preset.max_concurrent)}
+        </dd>
+        <dt>Match key</dt>
+        <dd>{preset.match_key}</dd>
+        <dt>Target</dt>
+        <dd>{target}</dd>
+      </dl>
+
+      <div className={s.cardActions}>
+        <Button size="sm" variant="ghost" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button size="sm" variant="ghost" icon title="Delete" onClick={onDelete}>
+          <IconTrash />
+        </Button>
+        <div style={{ flex: 1 }} />
+        <Button size="sm" variant="primary" onClick={onRun}>
+          <IconPlay /> Run
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Per-campaign live card (running loops) ------------------------------- */
 
 function LoopCard({
   campaign,

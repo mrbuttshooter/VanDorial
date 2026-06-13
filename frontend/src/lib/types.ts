@@ -299,6 +299,50 @@ export interface GeneratePoolRequest {
   length?: number;
 }
 
+/* A saved loop "recipe" (gencall/db/models.py · LoopPreset): destination + ACD/
+   rate/targets, with NO source. At run time you pick which node or group fires
+   it (RunPresetRequest), so one recipe is re-runnable from anywhere. */
+export interface LoopPreset {
+  id: number;
+  name: string;
+  description: string;
+  dest_host: string;
+  dest_port: number;
+  transport: string;
+  rate: number;
+  max_concurrent: number;
+  duration_mode: LoopDurationMode;
+  duration_s: number;
+  duration_max_s: number;
+  match_key: string;
+  target_calls: number;
+  target_minutes: number;
+  created_at: string | null;
+}
+
+export interface LoopPresetRequest {
+  name: string;
+  description?: string;
+  dest_host?: string;
+  dest_port?: number;
+  transport?: Transport;
+  rate?: number;
+  max_concurrent?: number;
+  duration_mode?: LoopDurationMode;
+  duration_s?: number;
+  duration_max_s?: number;
+  match_key?: string;
+  target_calls?: number;
+  target_minutes?: number;
+}
+
+/* Where to fire a preset: a single node, or a group (optionally a subset). */
+export interface RunPresetRequest {
+  node_id?: number;
+  group_id?: number;
+  node_ids?: number[];
+}
+
 /* A country with its sale zones (GET /api/sale-zones), for the cascading
    Country -> Sale Zone pickers on the Nodes page. */
 export interface SaleZoneCountry {

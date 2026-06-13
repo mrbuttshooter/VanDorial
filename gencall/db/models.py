@@ -95,6 +95,54 @@ class NodeGroup(Base):
         }
 
 
+class LoopPreset(Base):
+    """A saved, re-runnable loop "recipe" (design: presets + history).
+
+    A preset stores everything about a loop EXCEPT where it originates from: the
+    MADA destination, the ACD (duration), rate, concurrency, match key and
+    targets. At run time the operator picks WHICH source-IP node (or which group)
+    fires it — so one recipe ("Guinea-Orange @ 1.90 ACD") can be launched from any
+    node or fanned out across a group without re-typing the form. Each run spawns
+    a normal loop_campaign, which is what the History tab lists.
+    """
+    __tablename__ = "loop_presets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+    description = Column(Text, default="")
+    dest_host = Column(String(255), default="")
+    dest_port = Column(Integer, default=5060)
+    transport = Column(String(10), default="udp")
+    rate = Column(Float, default=1.0)
+    max_concurrent = Column(Integer, default=10)
+    duration_mode = Column(String(10), default="fixed")
+    duration_s = Column(Integer, default=180)
+    duration_max_s = Column(Integer, default=0)
+    match_key = Column(String(20), default="exact")
+    target_calls = Column(Integer, default=0)
+    target_minutes = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description or "",
+            "dest_host": self.dest_host or "",
+            "dest_port": self.dest_port or 5060,
+            "transport": self.transport or "udp",
+            "rate": self.rate or 1.0,
+            "max_concurrent": self.max_concurrent or 10,
+            "duration_mode": self.duration_mode or "fixed",
+            "duration_s": self.duration_s or 0,
+            "duration_max_s": self.duration_max_s or 0,
+            "match_key": self.match_key or "exact",
+            "target_calls": self.target_calls or 0,
+            "target_minutes": self.target_minutes or 0,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Server(Base):
     """A named origination server = a source IP a loop can run from.
 

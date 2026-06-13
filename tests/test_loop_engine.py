@@ -512,6 +512,98 @@ def test_node_group_start_stop_fans_out_over_http(stub_sipp, tmp_path, monkeypat
         Config.reset()
 
 
+def test_loop_preset_save_run_and_history_over_http(stub_sipp, tmp_path, monkeypatch):
+    """A saved loop preset (recipe only) runs on a chosen node AND fans out over a
+    group, and every run lands in the loop history — the 'preconfigured loop, click
+    run, see it in History' flow."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "preset.db"
+    cfg_path = tmp_path / "preset.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("preset")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        # Save a preset: the recipe (dest + ACD/rate/targets), NO source.
+        p = client.post("/api/loop-presets", json={
+            "name": "guinea-1m90", "dest_host": "1.2.3.4", "dest_port": 5060,
+            "rate": 5.0, "duration_s": 1, "target_calls": 3,
+        })
+        assert p.status_code == 200, p.text
+        pid = p.json()["preset"]["id"]
+        assert client.get("/api/loop-presets").json()["presets"][0]["name"] == "guinea-1m90"
+
+        # Running with neither a node nor a group is a 422.
+        assert client.post(f"/api/loop-presets/{pid}/run", json={}).status_code == 422
+
+        # A node with its own IP + generated pool.
+        node = client.post("/api/servers", json={
+            "name": "node-a", "ip": "10.0.0.71",
+            "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+            "count": 10,
+        })
+        assert node.status_code == 200, node.text
+        nid = node.json()["server"]["id"]
+
+        # Run the preset on that node → one loop on its IP.
+        run = client.post(f"/api/loop-presets/{pid}/run", json={"node_id": nid})
+        assert run.status_code == 200, run.text
+        assert run.json()["started"] == 1
+        cid = run.json()["results"][0]["campaign_id"]
+        _wait_running(le.engine, f"uac-{cid}")
+
+        # The run is in the loop history, newest first, carrying the preset's dest.
+        runs = client.get("/api/loops/history").json()["runs"]
+        assert any(r["id"] == cid for r in runs)
+        assert runs[0]["dest_host"] == "1.2.3.4"
+        client.post(f"/api/loops/{cid}/stop")
+
+        # Run the SAME preset on a group of two nodes → fans out to both IPs.
+        gid = client.post("/api/node-groups",
+                          json={"name": "grp-x", "dest_host": "1.2.3.4"}).json()["group"]["id"]
+        for ip in ("10.0.0.72", "10.0.0.73"):
+            client.post("/api/servers", json={
+                "name": f"node-{ip}", "ip": ip, "group_id": gid,
+                "origin_zone": "Nigeria-Lagos", "dest_zone": "Guinea-Mobile (Orange)",
+                "count": 10,
+            })
+        grun = client.post(f"/api/loop-presets/{pid}/run", json={"group_id": gid})
+        assert grun.status_code == 200, grun.text
+        assert grun.json()["started"] == 2, grun.text
+        for r in grun.json()["results"]:
+            if r["ok"]:
+                _wait_running(le.engine, f"uac-{r['campaign_id']}")
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and
