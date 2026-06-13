@@ -3,20 +3,34 @@
 <!--
   GenCall v2 - Loop Campaign UAC (outbound originate leg) - design §4.1/§4.2.
 
-  Built on SIPp's proven built-in 'uac' skeleton (validated on sipp 3.6.1) so the
-  INVITE/200/ACK/BYE transaction matching is exactly what SIPp expects. The A/B
-  number pair is injected from the campaign -inf CSV:
+  This INVITE is a FAITHFUL REPLICA of the proven-working Dory/VanDorial INVITE
+  captured on the wire toward the MADA SBC (208.87.169.100). Matching it removes
+  every avoidable variable when chasing a route miss (Q.850 cause=3 / 404):
+
+    * Request-URI, To and From carry NO port  (sip:<num>@<host>). Dory only
+      puts a port in Via and Contact. A port in the R-URI is harmless for the
+      dialed-number lookup but we mirror Dory exactly.
+    * User-Agent: teles, Expires: 15, Allow, Accept  (all present on Dory).
+    * SDP advertises PCMA + G729(annexb) + telephone-event, o=Dory, s=SIP Call,
+      no ptime/sendrecv, byte-for-byte the Dory offer.
+    * No Max-Forwards header; Dory omits it and the SBC accepts the call, so we
+      omit it too to keep the message identical.
+
+  The A/B number pair is injected from the campaign -inf CSV:
 
       [field0] = a_number (calling)   [field1] = b_number (called)
+
+  IMPORTANT: the numbers MUST match the live ranges the switch route expects.
+  A = a real origin (the working loop uses Qatar 974 30xxxxxx), B = a valid
+  E.164 dialed number (Guinea-Orange = 224 62 6xxxxxx, 12 digits). A wrong-origin
+  or wrong-length number is what the switch rejects with cause=3.
 
   Per-call <log> lines (-trace_logs) feed the CallRecord tail-parser
   (gencall/core/call_records.py). A-side duration = t_bye_sent - t_200ok_received.
 
-  IMPORTANT — all <log> actions live INSIDE <recv> elements. A standalone <nop>
-  between the INVITE <send> and its response <recv>s makes sipp 3.6 treat the
-  incoming 180 as "unexpected" (it races the nop) and abort the call, so there
-  are no nops here. t_bye_sent is logged when the 200-to-BYE arrives (one RTT
-  after the BYE leaves — sipp <send> cannot carry an action).
+  All <log> actions live INSIDE <recv> elements: a standalone <nop> between the
+  INVITE <send> and its response <recv>s makes sipp 3.6 treat the incoming 180 as
+  "unexpected" and abort the call, so there are no nops here.
 
   Hold duration: a bare <pause/> uses SIPp -d (set by the LoopEngine from the
   campaign duration_s); SIPp does not substitute -inf fields inside a pause
@@ -26,29 +40,31 @@
 
   <send retrans="500">
     <![CDATA[
-      INVITE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      INVITE sip:[field1]@[remote_ip] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      To: <sip:[field1]@[remote_ip]:[remote_port]>
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>
       Call-ID: [call_id]
-      CSeq: 1 INVITE
-      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
-      Max-Forwards: 70
+      CSeq: 102 INVITE
+      User-Agent: teles
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Expires: 15
+      Allow: CANCEL,BYE,INVITE, ACK
       Content-Type: application/sdp
       Content-Length: [len]
+      Accept: application/sdp
 
       v=0
-      o=GenCall 53655765 2353687637 IN IP[local_ip_type] [local_ip]
-      s=GenCall Loop
+      o=Dory 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=SIP Call
       c=IN IP[media_ip_type] [media_ip]
       t=0 0
-      m=audio [media_port] RTP/AVP 8 0 101
+      m=audio [media_port] RTP/AVP 8 18 101
+      a=rtpmap:18 G729/8000
+      a=fmtp:18 annexb=yes
       a=rtpmap:8 PCMA/8000
-      a=rtpmap:0 PCMU/8000
       a=rtpmap:101 telephone-event/8000
       a=fmtp:101 0-15
-      a=ptime:20
-      a=sendrecv
     ]]>
   </send>
 
@@ -67,14 +83,13 @@
   <!-- ACK the 2xx. To-tag echoed via [peer_tag_param] (the proven built-in form). -->
   <send>
     <![CDATA[
-      ACK sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      ACK sip:[field1]@[remote_ip] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      To: <sip:[field1]@[remote_ip]:[remote_port]>[peer_tag_param]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
       Call-ID: [call_id]
-      CSeq: 1 ACK
-      Contact: <sip:[field0]@[local_ip]:[local_port];transport=[transport]>
-      Max-Forwards: 70
+      CSeq: 102 ACK
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
       Content-Length: 0
     ]]>
   </send>
@@ -85,13 +100,12 @@
   <!-- BYE ends the call. -->
   <send retrans="500">
     <![CDATA[
-      BYE sip:[field1]@[remote_ip]:[remote_port] SIP/2.0
+      BYE sip:[field1]@[remote_ip] SIP/2.0
       Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
-      From: "[field0]" <sip:[field0]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
-      To: <sip:[field1]@[remote_ip]:[remote_port]>[peer_tag_param]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
       Call-ID: [call_id]
-      CSeq: 2 BYE
-      Max-Forwards: 70
+      CSeq: 103 BYE
       Content-Length: 0
     ]]>
   </send>
