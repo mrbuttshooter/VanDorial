@@ -336,14 +336,28 @@ export function Nodes() {
 
         <div className={s.formSection}>Numbers (Country → Sale zone → Code)</div>
         {editId != null && (
-          <Field label="Regenerate numbers" hint="Tick to rebuild the pool with the zones/codes below (e.g. pin 22462).">
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="checkbox" checked={form.regenerate} onChange={(e) => set("regenerate", e.target.checked)} />
-              <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
-                Rebuild this node's pool on save
-              </span>
-            </label>
-          </Field>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: "0 0 var(--space-3)",
+              cursor: "pointer",
+              fontSize: "var(--fs-sm)",
+              color: "var(--text-muted)",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={form.regenerate}
+              onChange={(e) => set("regenerate", e.target.checked)}
+              style={{ width: 18, height: 18, flex: "0 0 auto", margin: 0, accentColor: "var(--ember, #f26a21)" }}
+            />
+            <span>
+              <strong style={{ color: "var(--text-bright)" }}>Regenerate numbers</strong> — rebuild this
+              node's pool on save with the zones/codes below (e.g. pin <code>22462</code>).
+            </span>
+          </label>
         )}
         <FieldRow>
           <Field label="Origin country">
