@@ -112,12 +112,55 @@ def _is_success_code(code):
 
 
 def _start_ms(r):
-    """Best available start timestamp for windowing/matching.
+    """Best available SIPp [clock_tick] start (process-relative; fallback only).
 
     Outbound rows have no t_start_ms (the UAC logs at 200-OK and BYE, not at the
-    INVITE), so fall back to t_answer_ms — every answered call has one.
+    INVITE), so fall back to t_answer_ms — every answered call has one. NOTE these
+    are per-process ticks and are NOT comparable across SIPp processes; use
+    ``_event_ms`` for any cross-record windowing/matching.
     """
     return r["t_start_ms"] if r["t_start_ms"] is not None else r["t_answer_ms"]
+
+
+def _to_wall_ms(created_at):
+    """Parse an ISO-8601 ``created_at`` string into epoch milliseconds, or None.
+
+    ``created_at`` is stamped by the single tail-parser process on every record
+    (out and in alike), so it is the one timestamp comparable ACROSS the separate
+    SIPp processes that produced the legs.
+    """
+    if not created_at:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _ms_to_iso(ms):
+    """Epoch milliseconds -> UTC ISO-8601 string (for created_at range bounds)."""
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).isoformat()
+
+
+def _event_ms(r):
+    """Cross-process-comparable match/window key (epoch ms).
+
+    The SIPp [clock_tick] timestamps (t_start_ms/t_answer_ms) are RELATIVE to each
+    SIPp process's own start, so they cannot be compared across processes: every
+    per-campaign UAC starts near 0 while the long-lived answer UAS can be hours in
+    (ticks in the tens of millions). Windowing/matching on them paired a fresh
+    outbound (tick ~ seconds) against an inbound from a 40 h-old UAS (tick ~ tens
+    of millions) at a false distance of HOURS, rejecting every real pair — the
+    ``calls_in_matched == 0`` bug seen on cy214. ``created_at`` is one parser
+    clock, so it is the only comparable time. Fall back to the process tick only
+    when created_at is absent (legacy rows) so an all-tick test set still windows
+    internally.
+    """
+    w = _to_wall_ms(r.get("created_at"))
+    return w if w is not None else _start_ms(r)
 
 
 def _histogram(deltas_ms):
@@ -212,7 +255,7 @@ class LoopMatcher:
         cols = (
             "id", "campaign_id", "direction", "call_uuid", "a_number",
             "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
-            "duration_ms", "final_code",
+            "duration_ms", "final_code", "created_at",
         )
         sel = ", ".join(cols)
         keys = list(cols)
@@ -226,25 +269,32 @@ class LoopMatcher:
             ).fetchall()
             out_dicts = [dict(zip(keys, r)) for r in out_rows]
 
-            # Campaign window from the outbound starts. Outbound rows have no
-            # t_start_ms — the UAC logs only at 200-OK and BYE, not at INVITE — so
-            # fall back to t_answer_ms (every answered call has one). With no timed
-            # outbound at all there is nothing to attribute inbound minutes to.
-            out_starts = [s for s in (_start_ms(o) for o in out_dicts) if s is not None]
+            # Campaign window from the outbound rows' WALL-CLOCK time
+            # (created_at via _event_ms), NOT the SIPp [clock_tick] t_*_ms: those
+            # ticks are relative to each SIPp process's own start, so a fresh
+            # per-campaign UAC (tick ~ seconds) and the long-lived answer UAS
+            # (tick ~ tens of millions after hours up) are not comparable —
+            # comparing them rejected every real pair (calls_in_matched == 0).
+            # created_at is stamped by the single parser process, so it is the
+            # same clock on both legs.
+            out_starts = [s for s in (_event_ms(o) for o in out_dicts) if s is not None]
             if not out_starts:
                 return out_dicts, []
-            floor = min(out_starts) - window_ms
-            ceil = max(out_starts) + window_ms
+            floor_ms = min(out_starts) - window_ms
+            ceil_ms = max(out_starts) + window_ms
 
-            # COALESCE so an inbound row with only t_answer_ms still windows.
+            # Scope inbound to the campaign's wall-clock window (range scan on the
+            # ix_call_records_created_at index). created_at is a UTC ISO-8601
+            # string so a lexicographic BETWEEN matches the chronological window;
+            # the precise per-call window test is re-applied numerically in
+            # match_campaign via _event_ms.
             in_rows = conn.execute(
                 text(
                     f"SELECT {sel} FROM call_records "
                     "WHERE direction = 'in' "
-                    "AND COALESCE(t_start_ms, t_answer_ms) >= :floor "
-                    "AND COALESCE(t_start_ms, t_answer_ms) <= :ceil"
+                    "AND created_at >= :floor AND created_at <= :ceil"
                 ),
-                {"floor": floor, "ceil": ceil},
+                {"floor": _ms_to_iso(floor_ms), "ceil": _ms_to_iso(ceil_ms)},
             ).fetchall()
             in_dicts = [dict(zip(keys, r)) for r in in_rows]
         return out_dicts, in_dicts
@@ -285,7 +335,7 @@ class LoopMatcher:
                 continue
             in_by_key.setdefault(mv, []).append(r)
         for rows in in_by_key.values():
-            rows.sort(key=lambda r: (_start_ms(r) if _start_ms(r) is not None else 0))
+            rows.sort(key=lambda r: (_event_ms(r) if _event_ms(r) is not None else 0))
 
         consumed_in_ids = set()
         matched_pairs = []  # (out_row, in_row)
@@ -296,13 +346,13 @@ class LoopMatcher:
             candidates = in_by_key.get(mv)
             if not candidates:
                 continue
-            o_start = _start_ms(o)
+            o_start = _event_ms(o)
             best = None
             best_dist = None
             for cand in candidates:
                 if cand["id"] in consumed_in_ids:
                     continue
-                c_start = _start_ms(cand)
+                c_start = _event_ms(cand)
                 if o_start is not None and c_start is not None:
                     dist = abs(c_start - o_start)
                     if dist > window_ms:

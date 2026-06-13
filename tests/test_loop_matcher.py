@@ -43,13 +43,22 @@ def db(tmp_path):
 
 def _insert_record(db, *, campaign_id, direction, call_uuid, a_number,
                    b_number, t_start_ms, duration_ms, final_code=200,
-                   source_ip=None):
+                   source_ip=None, created_at=None):
     """Insert one synthetic call_record. t_answer/t_end are derived so the
-    neutral duration math (t_end - t_answer) reproduces ``duration_ms``."""
+    neutral duration math (t_end - t_answer) reproduces ``duration_ms``.
+
+    ``created_at`` (the wall-clock the matcher now windows/ranks on) defaults to a
+    UTC ISO string derived from t_start_ms, so a test that expresses call timing
+    via t_start_ms expresses the SAME timing on the matcher's wall-clock basis.
+    """
+    import datetime as _dt
     from sqlalchemy import text
 
     t_answer = t_start_ms + 50 if final_code and 200 <= final_code < 300 else None
     t_end = (t_answer + duration_ms) if t_answer is not None else None
+    if created_at is None:
+        created_at = _dt.datetime.fromtimestamp(
+            (t_start_ms or 0) / 1000, _dt.timezone.utc).isoformat()
     with db.engine.begin() as conn:
         conn.execute(
             text(
@@ -73,7 +82,7 @@ def _insert_record(db, *, campaign_id, direction, call_uuid, a_number,
                 "t_end_ms": t_end,
                 "duration_ms": duration_ms if final_code and 200 <= final_code < 300 else 0,
                 "final_code": final_code,
-                "created_at": "2026-06-10T00:00:00+00:00",
+                "created_at": created_at,
             },
         )
 
@@ -126,6 +135,44 @@ def test_matches_outbound_with_null_t_start_ms(db):
     assert stats["calls_in_matched"] == 1, "inbound must match even when out t_start_ms is NULL"
     assert stats["minutes_in_ms"] == 3000
     assert stats["completion_pct"] == 100.0
+
+
+def test_matches_across_process_clock_drift(db):
+    """Out leg (fresh per-campaign UAC) and return leg (long-lived answer UAS)
+    carry SIPp [clock_tick] timestamps from DIFFERENT process epochs: the UAC's
+    are ~seconds, the UAS's ~tens of millions after ~40 h up. Matching MUST key on
+    the wall-clock created_at, not the raw tick — otherwise the pair sits a false
+    ~40 h apart and is rejected by the join window. This is the calls_in_matched=0
+    bug observed on cy214 once the answer UAS had been running for a day (the loop
+    physically closed 16/16 but reported 0% completion)."""
+    from sqlalchemy import text
+    import datetime as _dt
+
+    wall = _dt.datetime(2026, 6, 13, 18, 0, 0, tzinfo=_dt.timezone.utc)
+    out_created = wall.isoformat()
+    in_created = (wall + _dt.timedelta(seconds=2)).isoformat()  # ~loop latency
+    with db.engine.begin() as conn:
+        # fresh UAC: tiny ticks (process up a few seconds), no t_start (logs at 200/BYE)
+        conn.execute(text(
+            "INSERT INTO call_records (campaign_id,direction,call_uuid,a_number,"
+            "b_number,source_ip,t_start_ms,t_answer_ms,t_end_ms,duration_ms,"
+            "final_code,created_at) VALUES (:c,'out','o1','97430500001','224626500001',"
+            "NULL,NULL,5000,65000,60000,200,:ca)"),
+            {"c": CID, "ca": out_created})
+        # long-lived UAS: huge ticks (~43 h up ≈ 156e6 ms)
+        conn.execute(text(
+            "INSERT INTO call_records (campaign_id,direction,call_uuid,a_number,"
+            "b_number,source_ip,t_start_ms,t_answer_ms,t_end_ms,duration_ms,"
+            "final_code,created_at) VALUES (NULL,'in','i1','97430500001','224626500001',"
+            "'10.0.0.1',156000000,156000050,156060100,60050,200,:ca)"),
+            {"ca": in_created})
+
+    stats = LoopMatcher(db=db).match_campaign(CID, match_key="exact")
+    assert stats["calls_out"] == 1
+    assert stats["answered_out"] == 1
+    assert stats["calls_in_matched"] == 1, "must pair on wall-clock, not the process tick"
+    assert stats["completion_pct"] == 100.0
+    assert stats["minutes_in_ms"] == 60050
 
 
 def test_percentile_nearest_rank():
