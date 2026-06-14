@@ -472,9 +472,9 @@ export function Nodes() {
               {zonesFor(form.destCountry).map((z) => <option key={z} value={z}>{z}</option>)}
             </select>
           </Field>
-          <Field label="Drop code (B)" hint="Pick the routable code (e.g. 22462).">
+          <Field label="Drop code (B)" hint="All = spread routable codes only (unroutable breakouts auto-skipped).">
             <select value={form.destCode} disabled={!form.destZone} onChange={(e) => set("destCode", e.target.value)}>
-              <option value="">All codes</option>
+              <option value="">All routable codes</option>
               {codesFor(form.destZone).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Field>

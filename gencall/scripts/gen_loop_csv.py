@@ -45,14 +45,17 @@ from __future__ import annotations
 
 import argparse
 import csv as _csv
+import logging
 import os
 import random
 import re
 import sys
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 Pair = Tuple[str, str]
+
+_log = logging.getLogger("gencall.gen_loop_csv")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DECK_FULL = os.path.join(_HERE, "data", "sale_codes.csv")
@@ -255,22 +258,100 @@ def gen_from_pattern(pattern: str, total_len: int, rng: random.Random) -> str:
     return head + token + tail
 
 
+# ── Routability guard ─────────────────────────────────────────────────────────
+# Some sale zones carry many dial codes of which only a FEW actually route on the
+# MADA chain — the rest are operator "breakouts" the switch rejects with
+# CAU_NO_RT_DST (a 404 "no route to destination"). Spreading a loop across the
+# WHOLE zone then dials mostly-dead numbers: observed live, zone "Guinea-Mobile
+# (Orange)" lists 28 codes but only ``22462`` routes — the 27 ``2247x`` breakouts
+# were 100% no-route on the wire and silently inflated the no-route rate.
+#
+# This map pins, per zone, the codes KNOWN to route. Generation is restricted to
+# them when a zone is spread, and pinning a non-routable code fails loudly. Keyed
+# by the EXACT deck zone name. We only constrain zones we have ground truth for,
+# so every other zone is left untouched (no risk of wrongly narrowing a zone
+# whose extra codes genuinely route). Shipped in CODE so the guard survives a
+# deck re-import on an air-gapped box (the deck may still list the dead codes).
+# Extend at runtime with ``$GENCALL_ROUTABLE_CODES`` ("Zone Name=22462|22463;
+# Other Zone=555").
+ROUTABLE_ALLOWLIST: Dict[str, Set[str]] = {
+    "Guinea-Mobile (Orange)": {"22462"},
+}
+
+
+def _env_routable_overrides() -> Dict[str, Set[str]]:
+    """Parse ``$GENCALL_ROUTABLE_CODES`` into ``{zone: {code, ...}}`` (empty when
+    unset/malformed). Format: ``Zone Name=code|code; Other Zone=code,code``."""
+    raw = os.environ.get("GENCALL_ROUTABLE_CODES", "") or ""
+    out: Dict[str, Set[str]] = {}
+    for chunk in raw.split(";"):
+        if "=" not in chunk:
+            continue
+        zone, codes = chunk.split("=", 1)
+        zone = zone.strip()
+        cs = {c.strip() for c in codes.replace(",", "|").split("|")
+              if c.strip().isdigit()}
+        if zone and cs:
+            out[zone] = cs
+    return out
+
+
+def allowlist_for(zone_name: str) -> Optional[Set[str]]:
+    """Routable-code allowlist for a resolved zone name, or ``None`` when the zone
+    has no known routability constraint (so all of its codes are usable)."""
+    merged = dict(ROUTABLE_ALLOWLIST)
+    merged.update(_env_routable_overrides())
+    return merged.get(zone_name)
+
+
+def routable_codes(zone_name: str, codes: List[str]) -> List[str]:
+    """Filter ``codes`` to those known-routable for ``zone_name``.
+
+    A zone with no allowlist entry is returned unchanged. If the allowlist would
+    remove EVERY code (deck drift / typo in an override), fall back to the full
+    list so generation never yields an empty pool — that case is a misconfig, not
+    a reason to crash a campaign."""
+    allow = allowlist_for(zone_name)
+    if not allow:
+        return codes
+    kept = [c for c in codes if c in allow]
+    return kept or codes
+
+
 # ── Pair generation ───────────────────────────────────────────────────────────
 
 def _side_codes(zones, zone_name, code_override, pattern):
     """Resolve the list of codes for one side, plus an optional validation regex.
 
     Returns ``(codes_or_None, regex_or_None, pattern_or_None)``. Exactly one of
-    (zone_name|code_override) or pattern is expected."""
+    (zone_name|code_override) or pattern is expected. When a zone is given, the
+    code list is restricted to the zone's routable codes (see ROUTABLE_ALLOWLIST);
+    pinning a code that the zone is known not to route fails loudly."""
     if pattern:
         return None, re.compile(translate_pattern(pattern)), pattern
     if code_override:
         if not code_override.isdigit():
             raise ValueError(f"--*-code must be digits, got {code_override!r}")
+        if zone_name:
+            z = find_zone(zones, zone_name)
+            allow = allowlist_for(z)
+            if allow and code_override not in allow:
+                raise ValueError(
+                    f"code {code_override!r} is not routable for zone {z!r} — "
+                    f"the switch returns no-route for it. Routable code(s): "
+                    f"{', '.join(sorted(allow))}."
+                )
         return [code_override], None, None
     if zone_name:
         z = find_zone(zones, zone_name)
-        return list(zones[z]), None, None
+        all_codes = list(zones[z])
+        codes = routable_codes(z, all_codes)
+        if len(codes) < len(all_codes):
+            dropped = ", ".join(c for c in all_codes if c not in codes)
+            _log.info("zone %r: spreading across %d routable code(s) of %d "
+                      "(excluded unroutable: %s)",
+                      z, len(codes), len(all_codes), dropped)
+        return codes, None, None
     raise ValueError("each side needs a zone (--*-zone), a code (--*-code) or a pattern (--oad/--dad)")
 
 

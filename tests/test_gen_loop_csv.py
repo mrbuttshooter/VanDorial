@@ -50,14 +50,52 @@ def test_zone_pairs_start_with_zone_codes(zones):
         zones, oad_zone="Nigeria-Lagos", dad_zone="Guinea-Mobile (Orange)",
         count=50, seed=1)
     assert len(pairs) == 50
-    orange = set(zones["Guinea-Mobile (Orange)"])
     for a, b in pairs:
         assert a.isdigit() and b.isdigit()
         # Valid E.164 lengths by country (Nigeria 234 -> 13, Guinea 224 -> 12),
         # NOT a flat length — a wrong-length dialed number is what MADA 404'd.
         assert len(a) == 13 and len(b) == 12
         assert a.startswith("2341")                       # oad zone code
-        assert any(b.startswith(c) for c in orange)       # one of the dad codes
+        # Spreading the Orange zone must NEVER draw the unroutable 2247x
+        # breakouts — only the routable 22462 (see ROUTABLE_ALLOWLIST).
+        assert b.startswith("22462")
+
+
+def test_spread_zone_excludes_unroutable_codes(zones):
+    """A blank-code (whole-zone) draw on Guinea-Orange yields ONLY routable
+    22462 numbers — never the 224720/224721 breakouts the switch no-routes."""
+    pairs = g.generate_pairs(
+        zones, oad_zone="Nigeria-Lagos", dad_zone="Guinea-Mobile (Orange)",
+        count=200, seed=11)
+    assert all(b.startswith("22462") for _, b in pairs)
+    assert not any(b.startswith(("224720", "224721")) for _, b in pairs)
+
+
+def test_pin_unroutable_code_with_zone_raises(zones):
+    """Pinning a known-dead code for its zone fails loudly instead of dialing
+    no-route numbers."""
+    with pytest.raises(ValueError, match="not routable"):
+        g.generate_pairs(
+            zones, oad_zone="Nigeria-Lagos",
+            dad_zone="Guinea-Mobile (Orange)", dad_code="224720", count=5)
+
+
+def test_routable_codes_helper(zones):
+    orange = list(zones["Guinea-Mobile (Orange)"])
+    assert g.routable_codes("Guinea-Mobile (Orange)", orange) == ["22462"]
+    # zones with no allowlist entry are passed through untouched
+    lagos = list(zones["Nigeria-Lagos"])
+    assert g.routable_codes("Nigeria-Lagos", lagos) == lagos
+
+
+def test_env_routable_override(zones, monkeypatch):
+    """An operator can constrain a zone at runtime without a code change."""
+    monkeypatch.setenv("GENCALL_ROUTABLE_CODES", "Nigeria-Lagos=2341")
+    assert g.allowlist_for("Nigeria-Lagos") == {"2341"}
+    # a code outside the override is rejected for that zone
+    with pytest.raises(ValueError, match="not routable"):
+        g.generate_pairs(zones, oad_zone="Nigeria-Lagos", oad_code="9999",
+                         dad_code="22462", count=3)
 
 
 def test_e164_length_by_country_and_override():
