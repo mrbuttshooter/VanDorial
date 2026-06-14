@@ -642,9 +642,17 @@ class LoopEngine:
             if _RTP_HOOK not in xml:
                 logger.warning("loop_uac.xml has no RTP_HOOK; media not injected")
                 return UAC_TEMPLATE
-            # XML-escape the path (it lands in an attribute value).
+            # XML-escape the path (it lands in an attribute value). Wrap in a
+            # <nop> placed AFTER the ACK (the canonical SIPp pcapplay spot — same
+            # as uac_pcap.xml): starting media inside the 200 <recv> action
+            # segfaulted SIPp (code -11) because the remote media wasn't set up
+            # yet. This nop sits before the <pause>, where no SIP message is
+            # expected, so it does not trip the 3.6 "unexpected message" abort.
             from xml.sax.saxutils import quoteattr
-            exec_el = f"<exec play_pcap_audio={quoteattr(pcap)} />"
+            exec_el = (
+                f"<nop><action><exec play_pcap_audio={quoteattr(pcap)} />"
+                f"</action></nop>"
+            )
             rendered = xml.replace(_RTP_HOOK, exec_el)
             fd, path = tempfile.mkstemp(prefix="gencall_uac_rtp_", suffix=".xml")
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:

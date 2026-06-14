@@ -100,7 +100,6 @@
   <recv response="200" rtd="true" crlf="true">
     <action>
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=answer t_200ok_received=[clock_tick] final_code=200" />
-      <!-- RTP_HOOK -->
     </action>
   </recv>
 
@@ -117,6 +116,13 @@
       Content-Length: 0
     ]]>
   </send>
+
+  <!-- Media (only when RTP is enabled): the engine replaces this marker with a
+       <nop> play_pcap_audio AFTER the ACK - the call is established and the
+       remote media address is known here, so SIPp's pcapplay won't segfault as
+       it did when the play ran inside the 200 <recv> action. For signaling-only
+       loops this stays a comment (no <nop>, so the nop-free flow is preserved). -->
+  <!-- RTP_HOOK -->
 
   <!-- Hold the call for -d milliseconds (LoopEngine sets -d from duration_s). -->
   <pause />
