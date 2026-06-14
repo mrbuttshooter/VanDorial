@@ -20,10 +20,11 @@ control, so every spawned PID is recorded in the managed-process registry (desig
 §4.5) for crash-orphan reconciliation — the LoopEngine adds no separate process
 plumbing.
 
-Caps (config, defaults for the 4 GB box, design §4.1):
+Caps (config, defaults for the 2-core/4 GB worker, design §4.1):
 
   * ``loops_max_concurrent``          max concurrently running campaigns (50),
-  * ``loops_max_answered``            max simultaneously-answered inbound calls (120),
+  * ``loops_max_channels``            per-campaign UAC concurrent cap (1000),
+  * ``loops_max_answered``            max simultaneously-answered inbound calls (1100),
   * ``loops_answered_max_duration_s`` per-answered-call ceiling (7200 s).
 
 Campaign rows live in the ``loop_campaigns`` table (migration 0002). Status

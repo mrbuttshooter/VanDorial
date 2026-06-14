@@ -1253,7 +1253,7 @@ def test_api_rejects_out_of_range_concurrency(api_client):
     r = api_client.post(
         "/api/loops", json={"dest_host": "9.9.9.9", "max_concurrent": -5})
     assert r.status_code == 422, r.text
-    # Above the per-campaign channel cap (default 100).
+    # Above the per-campaign channel cap (default 1000).
     r = api_client.post(
         "/api/loops", json={"dest_host": "9.9.9.9", "max_concurrent": 9999})
     assert r.status_code == 422, r.text

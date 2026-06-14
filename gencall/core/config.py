@@ -284,7 +284,11 @@ class Config:
 
     @property
     def loops_max_answered(self):
-        return self.getint("loops", "max_answered_calls", 120)
+        # UAS answer-side -l (simultaneous answered calls it will hold). Must stay
+        # >= loops_max_channels, else a high-concurrency UAC outruns the answer
+        # machine and calls past this never get answered/matched. Override with
+        # [loops] max_answered_calls.
+        return self.getint("loops", "max_answered_calls", 1100)
 
     @property
     def loops_answered_max_duration_s(self):
@@ -298,9 +302,10 @@ class Config:
 
     # ── Loop input bounds (security: keep unbounded inputs from OOMing the box) ──
     # Per-campaign caps applied at the API/engine boundary so a single start can
-    # never request more channels/rate than the 4 GB box can serve. The cap of
-    # 100 channels per campaign mirrors the loops_max_answered / 100-channel
-    # envelope in the design.
+    # never request an absurd channel/rate count that OOMs the box. The 1000-
+    # channel default is the realistic ceiling for a 2-core/4 GB worker (measured:
+    # ~0.85 MB + a sliver of a core per concurrent call with RTP echo); raise
+    # [loops] max_channels on bigger boxes, but keep loops_max_answered >= it.
     @property
     def loops_max_rate_cps(self):
         """Hard ceiling on a campaign's call rate (calls per second)."""
@@ -309,7 +314,7 @@ class Config:
     @property
     def loops_max_channels(self):
         """Hard ceiling on a campaign's max_concurrent (per-campaign channels)."""
-        return self.getint("loops", "max_channels", 100)
+        return self.getint("loops", "max_channels", 1000)
 
     @property
     def loops_max_duration_s(self):
