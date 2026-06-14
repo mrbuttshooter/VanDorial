@@ -54,9 +54,9 @@ function LoopHistory() {
 
   const runs: LoopCampaign[] = hist.data?.campaigns ?? [];
 
-  const download = async (id: string) => {
+  const download = async (id: string, box?: string) => {
     try {
-      await api.downloadLoopRecordsCsv(id);
+      await api.downloadLoopRecordsCsv(id, box);
     } catch (e) {
       toast.error(`Download failed: ${e instanceof Error ? e.message : e}`);
     }
@@ -123,7 +123,7 @@ function LoopHistory() {
                     </td>
                     <td style={{ color: "var(--text-muted)" }}>{datetime(r.started_at)}</td>
                     <td style={{ textAlign: "right" }}>
-                      <Button size="sm" variant="ghost" title="Download records CSV" onClick={() => download(r.id)}>
+                      <Button size="sm" variant="ghost" title="Download records CSV" onClick={() => download(r.id, r.box)}>
                         <IconDownload />
                       </Button>
                     </td>

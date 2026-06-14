@@ -185,9 +185,9 @@ export function Loops() {
     }
   };
 
-  const download = async (id: string) => {
+  const download = async (id: string, box?: string) => {
     try {
-      await api.downloadLoopRecordsCsv(id);
+      await api.downloadLoopRecordsCsv(id, box);
     } catch (e) {
       toast.error(`Download failed: ${e instanceof Error ? e.message : e}`);
     }
@@ -316,7 +316,7 @@ export function Loops() {
                                     campaign={c}
                                     stats={stats[c.id] ?? c.loop_stats ?? undefined}
                                     onStop={() => stop(c)}
-                                    onDownload={() => download(c.id)}
+                                    onDownload={() => download(c.id, c.box)}
                                   />
                                 ))}
                               </div>
@@ -343,7 +343,7 @@ export function Loops() {
                 campaign={c}
                 stats={stats[c.id] ?? c.loop_stats ?? undefined}
                 onStop={() => stop(c)}
-                onDownload={() => download(c.id)}
+                onDownload={() => download(c.id, c.box)}
               />
             ))}
           </div>

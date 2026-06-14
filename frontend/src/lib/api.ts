@@ -238,9 +238,10 @@ export const api = {
    *  browser download. A plain <a href> can't send the auth header, so it 401s
    *  whenever auth is on — this fetches the blob authenticated, then clicks a
    *  synthetic <a download>. */
-  downloadLoopRecordsCsv: (id: string) =>
+  downloadLoopRecordsCsv: (id: string, box?: string) =>
     downloadAuthed(
-      `/api/loops/${encodeURIComponent(id)}/records.csv`,
+      `/api/loops/${encodeURIComponent(id)}/records.csv` +
+        (box && box !== "local" ? `?box=${encodeURIComponent(box)}` : ""),
       `${id}_records.csv`,
     ),
 

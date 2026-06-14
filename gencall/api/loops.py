@@ -412,9 +412,36 @@ def get_loop(campaign_id: str):
     dependencies=[Depends(require_api_key)],
     response_class=PlainTextResponse,
 )
-def export_loop_records(campaign_id: str):
-    """Export this campaign's ``call_records`` as CSV (header + rows)."""
-    csv_text = _engine().records_csv(campaign_id)
+def export_loop_records(campaign_id: str, box: str = "local"):
+    """Export this campaign's ``call_records`` as CSV (header + rows).
+
+    For a REMOTE campaign (``box`` = the worker's api_url) the export is proxied
+    to that worker — otherwise a remote campaign's records live on its box, not
+    here, and a local lookup returns just the header (the "no records when
+    downloaded from the controller" bug)."""
+    if box and box != "local":
+        api_key = ""
+        try:
+            session = _db().get_session()
+            try:
+                from gencall.db.models import Server
+                s = session.query(Server).filter_by(api_url=box).first()
+                api_key = s.api_key if s else ""
+            finally:
+                session.close()
+        except HTTPException:
+            pass
+        import httpx
+        try:
+            with httpx.Client(verify=False, timeout=30.0) as cl:
+                r = cl.get(box.rstrip("/") + f"/api/loops/{campaign_id}/records.csv",
+                           headers={"X-API-Key": api_key} if api_key else {})
+            r.raise_for_status()
+            csv_text = r.text
+        except Exception as e:
+            raise HTTPException(502, f"worker {box} records export failed: {e}")
+    else:
+        csv_text = _engine().records_csv(campaign_id)
     return PlainTextResponse(
         content=csv_text,
         media_type="text/csv",

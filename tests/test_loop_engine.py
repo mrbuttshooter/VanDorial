@@ -803,6 +803,59 @@ def test_fleet_resources_local_and_remote(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
+def test_records_export_box_aware(stub_sipp, tmp_path, monkeypatch):
+    """records.csv export: a local campaign yields CSV here; a remote campaign
+    (box = a worker api_url) is proxied to that worker — pointed at an
+    unreachable box it returns 502 (the proxy path was taken), NOT a local
+    header-only CSV (the 'no records from the controller' bug)."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "rec.db"
+    cfg_path = tmp_path / "rec.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("rec")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        # Local (default box): valid CSV with at least the header row.
+        r = client.get("/api/loops/whatever/records.csv")
+        assert r.status_code == 200, r.text
+        assert r.text.splitlines()[0].startswith("id,campaign_id,direction")
+
+        # Remote box that is unreachable: proxied -> 502 (proxy path taken).
+        r2 = client.get("/api/loops/whatever/records.csv",
+                        params={"box": "http://127.0.0.1:9"})
+        assert r2.status_code == 502, r2.text
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and
