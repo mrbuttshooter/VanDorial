@@ -320,16 +320,24 @@ class Config:
     def loops_rtp_pcap(self):
         """PCMA pcap SIPp plays when a loop has RTP enabled (optional media).
 
-        Defaults to the bundled g711a.pcap (PT 8 = PCMA, matching loop_uac.xml's
-        SDP offer so the -rtp_echo UAS understands it). Override with
-        [loops] rtp_pcap to point at a different codec/sample or SIPp's own pcap.
+        An explicit ``[loops] rtp_pcap`` wins. Otherwise we use SIPp's OWN
+        bundled g711a.pcap — a hand-rolled pcap can trip SIPp's pcapplay parser
+        and SIGABRT the UAC (observed on cy213), whereas the file shipped with
+        the installed sipp is guaranteed-compatible. PT 8 = PCMA, matching
+        loop_uac.xml's SDP offer. Returns "" if none is found, in which case the
+        engine starts the loop signaling-only rather than crashing on media.
         """
+        explicit = self.get("loops", "rtp_pcap", "")
+        if explicit:
+            return explicit
         import os
-        default = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "scenarios", "media", "g711a.pcap",
-        )
-        return self.get("loops", "rtp_pcap", default)
+        for cand in (
+            "/usr/share/sip-tester/g711a.pcap",   # Debian/Ubuntu sip-tester pkg
+            "/usr/share/sipp/pcap/g711a.pcap",     # source / other installs
+        ):
+            if os.path.isfile(cand):
+                return cand
+        return ""
 
     @property
     def loops_max_duration_s(self):

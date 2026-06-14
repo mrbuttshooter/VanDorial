@@ -856,36 +856,47 @@ def test_records_export_box_aware(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
-def test_uac_scenario_rtp_rendering():
+def test_uac_scenario_rtp_rendering(tmp_path):
     """RTP toggle: signaling-only returns the shipped template unchanged; RTP on
     renders a per-campaign scenario that injects play_pcap_audio with the pcap
-    path (still well-formed, still has the failure branches). A missing pcap
-    falls back to signaling-only so a bad media config never blocks a loop."""
+    path (still well-formed, still has the failure branches). A missing/empty
+    pcap falls back to signaling-only so a bad media config never blocks a loop."""
     import xml.etree.ElementTree as ET
     from gencall.core.loop_engine import LoopEngine, UAC_TEMPLATE
-    from gencall.core.config import Config
 
-    le = LoopEngine(sipp_engine=None, db=None, config=Config())
+    # An existing pcap file (content irrelevant — the engine only checks it
+    # exists; SIPp validates the bytes at runtime).
+    pcap = tmp_path / "media.pcap"
+    pcap.write_bytes(b"\xa1\xb2\xc3\xd4")
+
+    class _CfgOn:
+        loops_rtp_pcap = str(pcap)
+    le = LoopEngine(sipp_engine=None, db=None, config=_CfgOn())
 
     # Off → the template as-is.
     assert le._uac_scenario(False) == UAC_TEMPLATE
 
-    # On → a rendered temp scenario with the media exec.
+    # On → a rendered temp scenario with the media exec pointing at the pcap.
     rendered = le._uac_scenario(True)
     assert rendered != UAC_TEMPLATE
     xml = open(rendered, encoding="utf-8").read()
-    assert "play_pcap_audio" in xml and "g711a.pcap" in xml
+    assert "play_pcap_audio" in xml and "media.pcap" in xml
     root = ET.parse(rendered).getroot()          # well-formed
     assert any(el.get("play_pcap_audio") for el in root.iter("exec"))
-    # The failure branches survive the render (real ASR still captured).
+    # The failure branches survive the render (real ASR/NER still captured).
     logs = " ".join(el.get("message", "") for el in root.iter("log"))
     assert "event=fail" in logs
 
-    # Missing pcap → graceful fallback to signaling-only.
-    class _Cfg:
+    # Missing/empty pcap → graceful fallback to signaling-only (no crash).
+    class _CfgMissing:
         loops_rtp_pcap = "/no/such/file.pcap"
-    le2 = LoopEngine(sipp_engine=None, db=None, config=_Cfg())
-    assert le2._uac_scenario(True) == UAC_TEMPLATE
+    assert LoopEngine(sipp_engine=None, db=None,
+                      config=_CfgMissing())._uac_scenario(True) == UAC_TEMPLATE
+
+    class _CfgEmpty:
+        loops_rtp_pcap = ""
+    assert LoopEngine(sipp_engine=None, db=None,
+                      config=_CfgEmpty())._uac_scenario(True) == UAC_TEMPLATE
 
 
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
