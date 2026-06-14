@@ -46,6 +46,7 @@ const PRESET_BLANK: LoopPresetRequest = {
   match_key: "exact",
   target_calls: 0,
   target_minutes: 0,
+  rtp: false,
 };
 
 /** ms → minutes, rounded to 1 decimal. */
@@ -134,6 +135,7 @@ export function Loops() {
       match_key: p.match_key,
       target_calls: p.target_calls,
       target_minutes: p.target_minutes,
+      rtp: p.rtp,
     });
     setShowPreset(true);
   };
@@ -276,7 +278,21 @@ export function Loops() {
                         <td style={{ color: "var(--text-faint)", textAlign: "center" }}>
                           {isOpen ? "▾" : "▸"}
                         </td>
-                        <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>{p.name}</td>
+                        <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>
+                          {p.name}
+                          {p.rtp && (
+                            <span
+                              title="Streams RTP media (PCMA)"
+                              style={{
+                                marginLeft: 8, fontSize: "0.7em", fontWeight: 600,
+                                color: "var(--cyan)", border: "1px solid var(--cyan)",
+                                borderRadius: 3, padding: "0 4px", verticalAlign: "middle",
+                              }}
+                            >
+                              RTP
+                            </span>
+                          )}
+                        </td>
                         <td style={{ color: "var(--text-muted)" }}>
                           {p.dest_host}:{p.dest_port}
                           <span style={{ marginLeft: 6, textTransform: "uppercase" }}>{p.transport}</span>
@@ -474,6 +490,23 @@ export function Loops() {
               value={form.target_minutes}
               onChange={(e) => set("target_minutes", Number(e.target.value))}
             />
+          </Field>
+        </FieldRow>
+
+        <FieldRow>
+          <Field
+            label="Media"
+            hint="On = stream real RTP audio (PCMA) every call (the UAS echoes it → two-way). Off = signaling only, no media on the wire (near-zero CPU)."
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!form.rtp}
+                onChange={(e) => set("rtp", e.target.checked)}
+                style={{ width: "auto" }}
+              />
+              <span>RTP media</span>
+            </label>
           </Field>
         </FieldRow>
       </Modal>

@@ -208,6 +208,8 @@ export interface StartLoopRequest {
   match_key?: string;
   target_calls?: number;
   target_minutes?: number;
+  /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
+  rtp?: boolean;
 }
 
 /* A node = a source IP a loop runs from, carrying its own number pool (origin +
@@ -333,6 +335,8 @@ export interface LoopPreset {
   match_key: string;
   target_calls: number;
   target_minutes: number;
+  /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
+  rtp: boolean;
   created_at: string | null;
 }
 
@@ -350,6 +354,8 @@ export interface LoopPresetRequest {
   match_key?: string;
   target_calls?: number;
   target_minutes?: number;
+  /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
+  rtp?: boolean;
 }
 
 /* Where to fire a preset: a single node, or a group (optionally a subset). */

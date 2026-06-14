@@ -121,6 +121,9 @@ class StartLoopRequest(BaseModel):
     # Targets are non-negative; 0 == "until stopped".
     target_calls: int = Field(default=0, ge=0)
     target_minutes: int = Field(default=0, ge=0)
+    # Stream real RTP media (PCMA) on each call when True; signaling-only (no
+    # media on the wire) when False — the default keeps existing loops cheap.
+    rtp: bool = False
 
     @field_validator("transport")
     @classmethod
@@ -175,6 +178,7 @@ def start_loop(req: StartLoopRequest):
                 "duration_mode": req.duration_mode, "duration_s": req.duration_s,
                 "duration_max_s": req.duration_max_s, "match_key": req.match_key,
                 "target_calls": req.target_calls, "target_minutes": req.target_minutes,
+                "rtp": req.rtp,
             }
             try:
                 res = _worker_post(node["api_url"], node.get("api_key", ""),
@@ -203,6 +207,7 @@ def start_loop(req: StartLoopRequest):
             target_minutes=req.target_minutes,
             local_ip=local_ip,
             node_id=req.node_id,
+            rtp=req.rtp,
         )
     except IPBusy as e:
         raise HTTPException(409, str(e))
@@ -703,6 +708,8 @@ class LoopPresetRequest(BaseModel):
     match_key: str = "exact"
     target_calls: int = Field(default=0, ge=0)
     target_minutes: int = Field(default=0, ge=0)
+    # Stream real RTP media (PCMA) on each call when True; signaling-only off.
+    rtp: bool = False
 
     @field_validator("transport")
     @classmethod
@@ -721,7 +728,7 @@ class RunPresetRequest(BaseModel):
 _PRESET_FIELDS = (
     "name", "description", "dest_host", "dest_port", "transport", "rate",
     "max_concurrent", "duration_mode", "duration_s", "duration_max_s",
-    "match_key", "target_calls", "target_minutes",
+    "match_key", "target_calls", "target_minutes", "rtp",
 )
 
 # The subset of preset fields passed straight to start_campaign (everything bar
@@ -729,7 +736,7 @@ _PRESET_FIELDS = (
 _PRESET_RUN_PARAMS = (
     "dest_host", "dest_port", "transport", "rate", "max_concurrent",
     "duration_mode", "duration_s", "duration_max_s", "match_key",
-    "target_calls", "target_minutes",
+    "target_calls", "target_minutes", "rtp",
 )
 
 

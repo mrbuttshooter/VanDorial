@@ -121,6 +121,9 @@ class LoopPreset(Base):
     match_key = Column(String(20), default="exact")
     target_calls = Column(Integer, default=0)
     target_minutes = Column(Integer, default=0)
+    # Stream real RTP media (PCMA pcap) on each call when True; signaling-only
+    # (no media on the wire) when False. Stored 0/1.
+    rtp = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self):
@@ -139,6 +142,7 @@ class LoopPreset(Base):
             "match_key": self.match_key or "exact",
             "target_calls": self.target_calls or 0,
             "target_minutes": self.target_minutes or 0,
+            "rtp": bool(self.rtp),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -353,6 +357,9 @@ class Database:
             ("group_id", "INTEGER"),
             ("api_url", "VARCHAR(512) DEFAULT ''"),
             ("api_key", "VARCHAR(255) DEFAULT ''"),
+        ],
+        "loop_presets": [
+            ("rtp", "INTEGER DEFAULT 0"),
         ],
     }
 

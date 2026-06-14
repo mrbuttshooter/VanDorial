@@ -64,6 +64,11 @@ _TEMPLATE_DIR = os.path.join(
 UAC_TEMPLATE = os.path.join(_TEMPLATE_DIR, "loop_uac.xml")
 UAS_TEMPLATE = os.path.join(_TEMPLATE_DIR, "loop_uas.xml")
 
+# Marker in loop_uac.xml (inside the 200-answer <recv> action) where the RTP
+# media action is injected when a campaign has RTP enabled. Replaced with a
+# play_pcap_audio exec; left as a harmless comment for signaling-only loops.
+_RTP_HOOK = "<!-- RTP_HOOK -->"
+
 # The single UAS instance always carries this fixed engine-internal id so the
 # answer side is addressable without a campaign.
 UAS_INSTANCE_ID = "loop-uas"
@@ -328,6 +333,7 @@ class LoopEngine:
         target_minutes=0,
         local_ip="",
         node_id=None,
+        rtp=False,
     ) -> dict:
         """Start a Loop Campaign: spawn one UAC and persist a 'running' row.
 
@@ -405,7 +411,7 @@ class LoopEngine:
             tr = _TRANSPORT_MAP.get((transport or "udp").lower(), SIPpTransport.UDP)
             instance = SIPpInstance(
                 id=instance_id,
-                scenario_file=UAC_TEMPLATE,
+                scenario_file=self._uac_scenario(bool(rtp)),
                 remote_host=dest_host,
                 remote_port=int(dest_port),
                 local_port=0,             # OS-assigned ephemeral source port
@@ -459,6 +465,7 @@ class LoopEngine:
                 "match_key": match_key,
                 "target_calls": int(target_calls or 0),
                 "target_minutes": int(target_minutes or 0),
+                "rtp": bool(rtp),
                 "created_at": now,
                 "started_at": now,
                 "stopped_at": None,
@@ -609,6 +616,43 @@ class LoopEngine:
             if inst is not None and inst.state == SIPpState.RUNNING:
                 return True
         return False
+
+    def _uac_scenario(self, rtp: bool) -> str:
+        """Return the UAC scenario path for this campaign.
+
+        Signaling-only (rtp=False): the shipped loop_uac.xml as-is. With media
+        (rtp=True): a per-campaign copy whose RTP_HOOK is replaced by a
+        ``play_pcap_audio`` exec so SIPp streams the configured PCMA pcap on
+        answer (the -rtp_echo UAS echoes it → two-way media). Falls back to the
+        signaling-only template if the pcap is missing or the template can't be
+        rendered, so a bad media config never blocks a loop from starting.
+        """
+        if not rtp:
+            return UAC_TEMPLATE
+        pcap = (self.config.loops_rtp_pcap or "").strip()
+        if not pcap or not os.path.isfile(pcap):
+            logger.warning(
+                "RTP requested but pcap not found (%s); starting loop WITHOUT "
+                "media. Set [loops] rtp_pcap to a readable PCMA pcap.", pcap,
+            )
+            return UAC_TEMPLATE
+        try:
+            with open(UAC_TEMPLATE, "r", encoding="utf-8") as fh:
+                xml = fh.read()
+            if _RTP_HOOK not in xml:
+                logger.warning("loop_uac.xml has no RTP_HOOK; media not injected")
+                return UAC_TEMPLATE
+            # XML-escape the path (it lands in an attribute value).
+            from xml.sax.saxutils import quoteattr
+            exec_el = f"<exec play_pcap_audio={quoteattr(pcap)} />"
+            rendered = xml.replace(_RTP_HOOK, exec_el)
+            fd, path = tempfile.mkstemp(prefix="gencall_uac_rtp_", suffix=".xml")
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                fh.write(rendered)
+            return path
+        except OSError as e:  # pragma: no cover - defensive
+            logger.warning("Could not render RTP UAC scenario: %s", e)
+            return UAC_TEMPLATE
 
     def _prepare_csv(self, csv_path, duration_mode, duration_s, duration_max_s):
         """Return a SIPp ``-inf`` path whose THIRD column ([field2]) is the

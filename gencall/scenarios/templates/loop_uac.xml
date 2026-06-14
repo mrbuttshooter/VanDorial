@@ -100,6 +100,7 @@
   <recv response="200" rtd="true" crlf="true">
     <action>
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=answer t_200ok_received=[clock_tick] final_code=200" />
+      <!-- RTP_HOOK -->
     </action>
   </recv>
 

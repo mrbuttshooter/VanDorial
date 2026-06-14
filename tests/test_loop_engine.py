@@ -856,6 +856,38 @@ def test_records_export_box_aware(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
+def test_uac_scenario_rtp_rendering():
+    """RTP toggle: signaling-only returns the shipped template unchanged; RTP on
+    renders a per-campaign scenario that injects play_pcap_audio with the pcap
+    path (still well-formed, still has the failure branches). A missing pcap
+    falls back to signaling-only so a bad media config never blocks a loop."""
+    import xml.etree.ElementTree as ET
+    from gencall.core.loop_engine import LoopEngine, UAC_TEMPLATE
+    from gencall.core.config import Config
+
+    le = LoopEngine(sipp_engine=None, db=None, config=Config())
+
+    # Off → the template as-is.
+    assert le._uac_scenario(False) == UAC_TEMPLATE
+
+    # On → a rendered temp scenario with the media exec.
+    rendered = le._uac_scenario(True)
+    assert rendered != UAC_TEMPLATE
+    xml = open(rendered, encoding="utf-8").read()
+    assert "play_pcap_audio" in xml and "g711a.pcap" in xml
+    root = ET.parse(rendered).getroot()          # well-formed
+    assert any(el.get("play_pcap_audio") for el in root.iter("exec"))
+    # The failure branches survive the render (real ASR still captured).
+    logs = " ".join(el.get("message", "") for el in root.iter("log"))
+    assert "event=fail" in logs
+
+    # Missing pcap → graceful fallback to signaling-only.
+    class _Cfg:
+        loops_rtp_pcap = "/no/such/file.pcap"
+    le2 = LoopEngine(sipp_engine=None, db=None, config=_Cfg())
+    assert le2._uac_scenario(True) == UAC_TEMPLATE
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and

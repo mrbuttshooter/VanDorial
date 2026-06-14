@@ -317,6 +317,21 @@ class Config:
         return self.getint("loops", "max_channels", 1000)
 
     @property
+    def loops_rtp_pcap(self):
+        """PCMA pcap SIPp plays when a loop has RTP enabled (optional media).
+
+        Defaults to the bundled g711a.pcap (PT 8 = PCMA, matching loop_uac.xml's
+        SDP offer so the -rtp_echo UAS understands it). Override with
+        [loops] rtp_pcap to point at a different codec/sample or SIPp's own pcap.
+        """
+        import os
+        default = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scenarios", "media", "g711a.pcap",
+        )
+        return self.get("loops", "rtp_pcap", default)
+
+    @property
     def loops_max_duration_s(self):
         """Hard ceiling on a single call's hold duration (seconds)."""
         return self.getint("loops", "max_call_duration_s", 86400)
