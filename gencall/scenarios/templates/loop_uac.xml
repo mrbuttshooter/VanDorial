@@ -74,27 +74,28 @@
   <recv response="183" optional="true" />
 
   <!-- FAILURE final responses (4xx/5xx/6xx): log the code so the no-route /
-       reject attempts land in call_records (event=fail), then jump to the end
-       (label 1). Without these branches a non-200 final response just aborts the
-       call with NO log line, so failures were invisible (every recorded call was
-       a 200 → survivorship-biased "100% ASR"). The switch's CAU_NO_RT_DST (Q.850
-       cause 3) arrives here as a 404. SIPp auto-ACKs 3xx-6xx, so no ACK is sent
-       on these branches. Each branch hard-codes its code (SIPp has no generic
-       "last status code" keyword), so we enumerate the realistic reject set. -->
-  <recv response="400" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=400" /></action></recv>
-  <recv response="403" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=403" /></action></recv>
-  <recv response="404" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=404" /></action></recv>
-  <recv response="408" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=408" /></action></recv>
-  <recv response="410" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=410" /></action></recv>
-  <recv response="480" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=480" /></action></recv>
-  <recv response="484" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=484" /></action></recv>
-  <recv response="486" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=486" /></action></recv>
-  <recv response="487" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=487" /></action></recv>
-  <recv response="488" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=488" /></action></recv>
-  <recv response="500" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=500" /></action></recv>
-  <recv response="503" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=503" /></action></recv>
-  <recv response="600" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=600" /></action></recv>
-  <recv response="603" optional="true" next="1"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=603" /></action></recv>
+       reject attempts land in call_records (event=fail), then jump to label 40,
+       which ACKs the failure and ends the call. We MUST ACK a non-2xx final
+       response (RFC 3261); when an explicit <recv> handles it, SIPp does NOT
+       auto-ACK, so without label 40 the switch retransmitted each 404 ~12x and
+       held the dead transaction ~32s (observed on the wire) — flooding the
+       switch. The switch's CAU_NO_RT_DST (Q.850 cause 3) arrives here as a 404.
+       Each branch hard-codes its code (SIPp has no generic "last status code"
+       keyword), so we enumerate the realistic reject set. -->
+  <recv response="400" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=400" /></action></recv>
+  <recv response="403" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=403" /></action></recv>
+  <recv response="404" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=404" /></action></recv>
+  <recv response="408" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=408" /></action></recv>
+  <recv response="410" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=410" /></action></recv>
+  <recv response="480" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=480" /></action></recv>
+  <recv response="484" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=484" /></action></recv>
+  <recv response="486" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=486" /></action></recv>
+  <recv response="487" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=487" /></action></recv>
+  <recv response="488" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=488" /></action></recv>
+  <recv response="500" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=500" /></action></recv>
+  <recv response="503" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=503" /></action></recv>
+  <recv response="600" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=600" /></action></recv>
+  <recv response="603" optional="true" next="40"><action><log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=fail final_code=603" /></action></recv>
 
   <!-- 200 OK received → A-side clock STARTS (t_200ok_received). -->
   <recv response="200" rtd="true" crlf="true">
@@ -141,15 +142,31 @@
     ]]>
   </send>
 
-  <!-- 200 to the BYE → A-side clock STOPS (t_bye_sent, +1 RTT). -->
-  <recv response="200" crlf="true">
+  <!-- 200 to the BYE → A-side clock STOPS (t_bye_sent, +1 RTT). The success path
+       jumps to label 1 (end), skipping the failure-ACK block at label 40. -->
+  <recv response="200" crlf="true" next="1">
     <action>
       <log message="loop_uac direction=out call_id=[call_id] a_number=[field0] b_number=[field1] event=bye t_bye_sent=[clock_tick]" />
     </action>
   </recv>
 
-  <!-- End of call. The failure branches above jump here (next="1"), skipping the
-       ACK/hold/BYE that only a 200 path runs. The success path reaches it too. -->
+  <!-- Failure-ACK: the failure branches jump here. ACK the non-2xx final response
+       (CSeq 102, To-tag echoed via [peer_tag_param]) so the switch stops
+       retransmitting it and releases the transaction, then fall through to end. -->
+  <label id="40" />
+  <send>
+    <![CDATA[
+      ACK sip:[field1]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 102 ACK
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- End of call. -->
   <label id="1" />
 
   <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200" />

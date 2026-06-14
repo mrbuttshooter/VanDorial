@@ -486,26 +486,34 @@ def test_loop_uac_logs_failures():
     """The UAC scenario captures failure final responses (4xx/5xx/6xx) as
     event=fail log lines so no-route/reject attempts land in call_records — else
     only answered (200) calls are recorded and ASR is survivorship-biased to
-    100%. Each failure branch jumps to the shared end label (next="1"). 404 (the
-    switch's CAU_NO_RT_DST / Q.850 cause 3) is the critical one. The lines must
-    parse into a failure record the way the parser expects."""
+    100%. Each failure branch jumps to the failure-ACK label (next="40"), which
+    ACKs the non-2xx (RFC 3261 — else the switch retransmits it ~12x and holds
+    the dead transaction). 404 (the switch's CAU_NO_RT_DST / Q.850 cause 3) is
+    the critical one. The lines must parse into a failure record as the parser
+    expects."""
     import xml.etree.ElementTree as ET
 
     root = ET.parse(_loop_uac_xml_path()).getroot()
-    # A shared end label exists for the failure branches to jump to.
-    assert any(el.get("id") == "1" for el in root.iter("label")), \
-        "loop_uac.xml needs <label id='1'/> as the failure-branch end target"
+    labels = {el.get("id") for el in root.iter("label")}
+    assert {"1", "40"} <= labels, "needs end label 1 + failure-ACK label 40"
 
     fail_recvs = [el for el in root.iter("recv")
                   if any("event=fail" in (lg.get("message", "")) for lg in el.iter("log"))]
     codes = set()
     for rv in fail_recvs:
         assert rv.get("optional") == "true", "failure recv must be optional"
-        assert rv.get("next") == "1", "failure recv must jump to the end label"
+        assert rv.get("next") == "40", "failure recv must jump to the failure-ACK label"
         codes.add(rv.get("response"))
     assert "404" in codes, "loop_uac.xml must log the 404 (no-route) failure"
     # A representative reject set is covered, not just one code.
     assert {"403", "486", "503"} <= codes
+
+    # There must be an ACK send for failures (CSeq 102 ACK) — the fix for the
+    # un-ACKed 404 retransmit storm seen on the wire.
+    sends = " ".join(
+        ("".join(s.itertext())) for s in root.iter("send"))
+    assert sends.count("CSeq: 102 ACK") >= 2, \
+        "need both the success ACK and the failure ACK (CSeq 102)"
 
     # The emitted fail line parses into a terminal failure record (final_code set,
     # no answer, duration 0) — the contract the parser relies on.
