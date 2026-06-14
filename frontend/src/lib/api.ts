@@ -6,6 +6,7 @@
 import type {
   Connector,
   ConnectorRequest,
+  FleetResourcesResponse,
   GeneratePoolRequest,
   GroupStartResult,
   Health,
@@ -220,6 +221,8 @@ export const api = {
   /** Fleet-wide loops: this box + every remote worker, each tagged with `box`
    *  and carrying loop_stats. Powers the Loops page so remote loops are visible. */
   listLoopsFleet: () => request<{ campaigns: LoopCampaign[] }>("/api/loops/fleet"),
+  /** Per-node CPU/RAM across the fleet (Fleet page). Polls each remote worker. */
+  listFleetResources: () => request<FleetResourcesResponse>("/api/fleet/resources"),
   /** Stop a campaign on whichever box runs it (box = "local" or a worker url). */
   stopLoopFleet: (campaign_id: string, box: string) =>
     request<{ status: string }>("/api/loops/fleet-stop", {

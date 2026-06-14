@@ -381,6 +381,31 @@ export interface WorkerCheck {
   error: string | null;
 }
 
+/* One row of GET /api/fleet/resources — a node plus the live CPU/RAM of the box
+   it runs on (the Fleet page). Remote nodes are polled at their api_url; numeric
+   fields are null when the box is offline or the metric is unobtainable. */
+export interface FleetNodeResource {
+  id: number | null;
+  ip: string | null;
+  name: string | null;
+  group_id: number | null;
+  remote: boolean;
+  box: string;               // "local" or the worker api_url
+  online: boolean;
+  error: string | null;
+  hostname: string | null;
+  cpu_percent: number | null;
+  cores: number | null;
+  load1: number | null;
+  mem_total_mb: number | null;
+  mem_used_mb: number | null;
+  mem_percent: number | null;
+}
+
+export interface FleetResourcesResponse {
+  nodes: FleetNodeResource[];
+}
+
 export interface StartTestRequest {
   name?: string;
   scenario: string;

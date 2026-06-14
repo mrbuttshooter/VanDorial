@@ -730,6 +730,79 @@ def test_remote_node_pool_gen_proxies_to_worker(stub_sipp, tmp_path, monkeypatch
         Config.reset()
 
 
+def test_fleet_resources_local_and_remote(stub_sipp, tmp_path, monkeypatch):
+    """The Fleet page data: /api/resources reports this box's CPU/RAM, and
+    /api/fleet/resources rolls up per node — a local node reports online with a
+    hostname, a node pointed at an unreachable worker reports online=False with
+    an error (it doesn't raise)."""
+    import textwrap
+    from fastapi.testclient import TestClient
+
+    from gencall.core.config import Config
+    from gencall.core.api_gateway import APIKeyManager
+
+    db_path = tmp_path / "res.db"
+    cfg_path = tmp_path / "res.cfg"
+    cfg_path.write_text(textwrap.dedent(f"""\
+        [sipp]
+        command = {stub_sipp.launcher}
+        stats_dir = {stub_sipp.stats_dir}
+        open_file_limit = 256
+        [database]
+        engine = sqlite
+        sqlite_path = {db_path}
+        """), encoding="utf-8")
+
+    Config.reset()
+    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
+    import gencall.main as gc_main
+    from gencall.api import loops as loops_api
+
+    app, _config = gc_main.create_app(str(cfg_path))
+    le = loops_api.loop_engine
+    raw_key, _ = APIKeyManager(db=le.db).create_key("res")
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": raw_key})
+    try:
+        # This box's own resources. cores is always derivable; the CPU/RAM fields
+        # exist even if a value is None (no psutil + non-Linux dev box).
+        rself = client.get("/api/resources")
+        assert rself.status_code == 200, rself.text
+        body = rself.json()
+        for k in ("hostname", "cpu_percent", "cores",
+                  "mem_total_mb", "mem_used_mb", "mem_percent"):
+            assert k in body, body
+
+        # A local node (this box) and a remote node (unreachable worker).
+        client.post("/api/servers", json={"name": "loc", "ip": "10.0.0.91"})
+        client.post("/api/servers", json={
+            "name": "rem", "ip": "10.0.0.92",
+            "api_url": "http://127.0.0.1:9", "api_key": "gc_x",
+        })
+
+        fleet = client.get("/api/fleet/resources")
+        assert fleet.status_code == 200, fleet.text
+        nodes = {n["ip"]: n for n in fleet.json()["nodes"]}
+        assert "10.0.0.91" in nodes and "10.0.0.92" in nodes, nodes
+
+        local = nodes["10.0.0.91"]
+        assert local["remote"] is False and local["box"] == "local"
+        assert local["online"] is True
+        assert local["hostname"]  # came from _box_resources()
+
+        remote = nodes["10.0.0.92"]
+        assert remote["remote"] is True
+        assert remote["online"] is False and remote["error"]  # probe failed, no raise
+    finally:
+        try:
+            le.stop_monitor()
+            le.engine.stop_all()
+            le.parser.stop()
+        except Exception:
+            pass
+        Config.reset()
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and

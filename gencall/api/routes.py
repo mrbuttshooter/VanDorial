@@ -462,6 +462,62 @@ def list_source_ips():
     return {"source_ips": _detect_source_ips()}
 
 
+def _box_resources() -> dict:
+    """This box's CPU + RAM right now (for the Fleet page). psutil when present,
+    else /proc + os.getloadavg fallbacks so it still works on the air-gapped
+    workers without the optional dep. All fields may be None if unobtainable."""
+    import socket
+
+    r = {
+        "hostname": socket.gethostname(),
+        "cpu_percent": None, "cores": None, "load1": None,
+        "mem_total_mb": None, "mem_used_mb": None, "mem_percent": None,
+    }
+    try:
+        import os
+        r["cores"] = os.cpu_count()
+    except Exception:
+        pass
+    try:
+        import os
+        r["load1"] = round(os.getloadavg()[0], 2)  # Unix only
+    except (OSError, AttributeError):
+        pass
+    try:
+        import psutil
+        # interval>0 gives a real instantaneous reading (sync endpoint → threadpool).
+        r["cpu_percent"] = round(psutil.cpu_percent(interval=0.2), 1)
+        vm = psutil.virtual_memory()
+        r["mem_total_mb"] = round(vm.total / 1048576, 1)
+        r["mem_used_mb"] = round((vm.total - vm.available) / 1048576, 1)
+        r["mem_percent"] = round(vm.percent, 1)
+    except Exception:
+        # No psutil: read memory from /proc, derive CPU% from load1 ÷ cores.
+        try:
+            mem = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, _, v = line.partition(":")
+                    mem[k.strip()] = v.strip()
+            total_kb = float(mem["MemTotal"].split()[0])
+            avail_kb = float(mem.get("MemAvailable", mem.get("MemFree", "0")).split()[0])
+            r["mem_total_mb"] = round(total_kb / 1024, 1)
+            r["mem_used_mb"] = round((total_kb - avail_kb) / 1024, 1)
+            r["mem_percent"] = round((total_kb - avail_kb) / total_kb * 100, 1)
+        except Exception:
+            pass
+        if r["cpu_percent"] is None and r["load1"] is not None and r["cores"]:
+            r["cpu_percent"] = round(min(100.0, r["load1"] / r["cores"] * 100), 1)
+    return r
+
+
+@app.get("/api/resources", dependencies=[Depends(require_api_key)])
+def box_resources():
+    """This box's live CPU/RAM. The controller's /api/fleet/resources polls this
+    on each remote worker to build the Fleet page; the local box calls it too."""
+    return _box_resources()
+
+
 @app.get("/api/servers", dependencies=[Depends(require_api_key)])
 def list_servers():
     """List origination servers (a server = a source IP a loop can run from)."""

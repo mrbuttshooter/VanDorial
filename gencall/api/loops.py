@@ -289,6 +289,75 @@ def list_loops_fleet():
     return {"campaigns": out}
 
 
+@router.get("/api/fleet/resources", dependencies=[Depends(require_api_key)])
+def fleet_resources():
+    """Per-node CPU/RAM across the fleet for the Fleet page. Each node (Server
+    row) reports its box: blank api_url = THIS box (local _box_resources()),
+    otherwise the remote worker's /api/resources is polled. Resources are cached
+    per box, so two IPs sharing one box don't poll it twice."""
+    from gencall.api.routes import _box_resources
+    import httpx
+
+    nodes = []
+    try:
+        from gencall.db.models import Server
+        session = _db().get_session()
+        try:
+            for s in session.query(Server).all():
+                d = s.to_dict()
+                d["api_key"] = s.api_key  # internal: proxy auth
+                nodes.append(d)
+        finally:
+            session.close()
+    except HTTPException:
+        pass
+
+    local: Optional[dict] = None        # this box, computed once on demand
+    cache: dict = {}                    # api_url -> resources dict (with online/error)
+
+    out = []
+    for n in nodes:
+        api_url = n.get("api_url") or ""
+        if not api_url:
+            if local is None:
+                local = _box_resources()
+                local["online"] = True
+            res = dict(local)
+        else:
+            if api_url not in cache:
+                try:
+                    headers = {"X-API-Key": n["api_key"]} if n.get("api_key") else {}
+                    with httpx.Client(verify=False, timeout=6.0) as cl:
+                        r = cl.get(api_url.rstrip("/") + "/api/resources", headers=headers)
+                    if r.status_code == 200:
+                        d = dict(r.json() or {})
+                        d["online"] = True
+                        cache[api_url] = d
+                    else:
+                        cache[api_url] = {"online": False, "error": f"HTTP {r.status_code}"}
+                except Exception as e:
+                    cache[api_url] = {"online": False, "error": str(e)}
+            res = dict(cache[api_url])
+        out.append({
+            "id": n.get("id"),
+            "ip": n.get("ip"),
+            "name": n.get("name"),
+            "group_id": n.get("group_id"),
+            "remote": bool(api_url),
+            "box": api_url or "local",
+            "online": res.pop("online", False),
+            "error": res.pop("error", None),
+            "hostname": res.get("hostname"),
+            "cpu_percent": res.get("cpu_percent"),
+            "cores": res.get("cores"),
+            "load1": res.get("load1"),
+            "mem_total_mb": res.get("mem_total_mb"),
+            "mem_used_mb": res.get("mem_used_mb"),
+            "mem_percent": res.get("mem_percent"),
+        })
+    return {"nodes": out}
+
+
 class FleetStopRequest(BaseModel):
     campaign_id: str
     box: str = "local"   # "local" = this box, else the worker's api_url

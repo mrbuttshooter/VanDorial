@@ -6,6 +6,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Campaigns } from "./pages/Campaigns";
 import { Scenarios } from "./pages/Scenarios";
 import { Connectors } from "./pages/Connectors";
+import { Fleet } from "./pages/Fleet";
 import { Loops } from "./pages/Loops";
 import { Performance } from "./pages/Performance";
 import { History } from "./pages/History";
@@ -26,6 +27,7 @@ export default function App() {
             <Route element={<Shell />}>
               <Route index element={<Dashboard />} />
               {/* Fleet control plane (design §7) */}
+              <Route path="fleet" element={<Fleet />} />
               <Route path="nodes" element={<Nodes />} />
               <Route path="groups" element={<Groups />} />
               <Route path="campaigns" element={<Campaigns />} />
