@@ -5,11 +5,11 @@ Covers, with no real SIPp/Docker/Linux (SQLite only — synthetic call_records
 inserted directly), the spec's required matcher behaviors:
 
   * correct completion_pct (matched inbound / answered outbound),
-  * minutes out (A-side) and minutes in (B-side, ALL inbound — never understated),
+  * minutes out (A-side) and minutes in (B-side, MATCHED inbound legs only),
   * per-call delta avg / p50 / p95 + the small histogram,
   * suffix matching when the chain rewrites leading digits,
   * window edge handling (just-inside vs just-outside the join window),
-  * unmatched-inbound counting (its minutes still count toward minutes_in),
+  * unmatched inbound is EXCLUDED from minutes_in (shared answer side, no cid),
   * failures by SIP code, outbound and inbound separately,
   * the latest_stats round-trip the GET /api/loops/{id} endpoint reads.
 
@@ -262,8 +262,8 @@ def test_suffix_matching_rewritten_leading_digits(db):
     exact = LoopMatcher(db=db).match_campaign(CID, match_key="exact")
     assert exact["calls_in_matched"] == 0
     assert exact["completion_pct"] == 0.0
-    # But minutes_in still counts the unmatched inbound call (never understated).
-    assert exact["minutes_in_ms"] == 45300
+    # The unmatched inbound is NOT attributed to this campaign (matched legs only).
+    assert exact["minutes_in_ms"] == 0
 
     # suffix6 keys on the shared trailing 001234 -> closes the loop.
     suff = LoopMatcher(db=db).match_campaign(CID, match_key="suffix6")
@@ -278,13 +278,10 @@ def test_suffix_matching_rewritten_leading_digits(db):
 def test_window_edge_inside_and_outside(db):
     """An inbound just inside the window matches; one just outside does not.
 
-    Inbound is now SCOPED to the campaign's join window (so concurrent
-    campaigns can't each sum the same global inbound minutes). An inbound that
-    starts outside the window therefore neither matches NOR contributes to
-    minutes_in for this campaign — its minutes belong to whatever campaign's
-    window it actually falls in. The in-window inbound still counts (matched or
-    not); see test_unmatched_inbound_minutes_counted for the unmatched-in-window
-    case."""
+    minutes_in is summed over MATCHED legs only — the answer side is shared
+    across campaigns and inbound carries no campaign id, so only the legs paired
+    to this campaign's outbound count. The inside inbound matches (and counts);
+    the outside one neither matches nor counts."""
     base = 1_700_000_000_000
     window_s = 60  # tight 60 s window for the test
     _insert_record(db, campaign_id=CID, direction="out", call_uuid="out-in",
@@ -306,8 +303,7 @@ def test_window_edge_inside_and_outside(db):
                                               window_s=window_s)
     assert stats["calls_in_matched"] == 1  # only the inside one
     assert stats["completion_pct"] == 50.0
-    # Only the in-window inbound counts toward minutes_in; the +61 s one is
-    # outside this campaign's window and is not attributed to it.
+    # minutes_in counts the matched leg only; the +61 s one never matched.
     assert stats["minutes_in_ms"] == 20100
 
 
@@ -316,12 +312,15 @@ def test_default_window_constant():
     assert DEFAULT_WINDOW_S == 3600
 
 
-# ── unmatched inbound counting (minutes never understated) ──────────────────
+# ── unmatched inbound is excluded from a campaign's minutes ─────────────────
 
 
-def test_unmatched_inbound_minutes_counted(db):
-    """An inbound call with NO matching outbound still adds to minutes_in but
-    not to calls_in_matched or completion."""
+def test_unmatched_inbound_not_counted(db):
+    """An inbound call with NO matching outbound is NOT added to minutes_in. The
+    answer side is shared across campaigns and inbound carries no campaign id, so
+    only matched legs are attributed to THIS campaign — otherwise every concurrent
+    campaign sums the same shared inbound (the cy213 ~3x per-campaign over-count,
+    where global in≈out but each campaign reported ~3x its outbound)."""
     base = 1_700_000_000_000
     _insert_record(db, campaign_id=CID, direction="out", call_uuid="out-0",
                    a_number="1000", b_number="800000001",
@@ -330,7 +329,8 @@ def test_unmatched_inbound_minutes_counted(db):
     _insert_record(db, campaign_id=None, direction="in", call_uuid="in-0",
                    a_number="800000001", b_number="800000001",
                    t_start_ms=base + 300, duration_ms=10200)
-    # ... plus a stray inbound for a number we never dialed.
+    # ... plus a stray inbound for a number we never dialed (e.g. another
+    # campaign's returning leg landing on the shared answer port).
     _insert_record(db, campaign_id=None, direction="in", call_uuid="in-stray",
                    a_number="999999999", b_number="999999999",
                    t_start_ms=base + 300, duration_ms=5000)
@@ -338,8 +338,8 @@ def test_unmatched_inbound_minutes_counted(db):
     stats = LoopMatcher(db=db).match_campaign(CID, match_key="exact")
     assert stats["calls_in_matched"] == 1
     assert stats["completion_pct"] == 100.0
-    # minutes_in includes BOTH the matched and the stray inbound call.
-    assert stats["minutes_in_ms"] == 10200 + 5000
+    # minutes_in counts ONLY the matched leg; the stray inbound is excluded.
+    assert stats["minutes_in_ms"] == 10200
 
 
 # ── failures by SIP code (out & in separately) + histogram ──────────────────

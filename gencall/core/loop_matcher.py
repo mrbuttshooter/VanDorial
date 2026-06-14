@@ -15,9 +15,15 @@ on the last N digits of b_number). The two structural rules from the spec:
   * **Completion %** is matched inbound / answered outbound. An outbound call
     that never answered (failure) is not part of the loop that should return, so
     the denominator is answered_out, not calls_out.
-  * **Unmatched inbound minutes still count.** ``minutes_in_ms`` sums EVERY
-    inbound call's duration (matched + unmatched) so minutes-in is never
-    understated (§4.3). ``calls_in_matched`` is the matched count only.
+  * **Minutes-IN is matched inbound only.** ``minutes_in_ms`` sums the duration
+    of the inbound legs that PAIRED to this campaign's outbound calls. The answer
+    side (UAS) is shared across every campaign on the box and inbound records
+    carry no campaign id, so a time-windowed "all inbound" sum attributes the
+    same shared inbound minutes to every concurrent campaign at once (the 3x+
+    per-campaign over-count seen on cy213, where global in≈out but each campaign
+    reported ~3x its outbound). Matching is the only per-campaign attribution the
+    inbound side has, so minutes-in counts matched legs. ``calls_in_matched`` is
+    that pair count.
 
 This is control-plane only: a single throttled DB query per pass, no per-record
 loops in SQL, and the background scheduler sleeps >= ``MIN_INTERVAL_S`` between
@@ -321,9 +327,9 @@ class LoopMatcher:
         answered_out = len(answered_out_rows)
         minutes_out_ms = sum(r["duration_ms"] or 0 for r in answered_out_rows)
 
-        # ── inbound aggregates (ALL inbound minutes count — never understate) ─
-        # minutes_in_ms sums every inbound call's duration, matched or not.
-        minutes_in_ms = sum(r["duration_ms"] or 0 for r in in_rows)
+        # inbound minutes are summed AFTER the join (matched legs only) — see the
+        # module docstring on why a windowed "all inbound" sum over-counts when
+        # the answer side is shared across campaigns.
 
         # ── number-pair join, windowed, greedy nearest by start time ──────────
         # Index inbound by match value -> list of (t_start_ms, row), sorted by
@@ -369,6 +375,9 @@ class LoopMatcher:
                 matched_pairs.append((o, best))
 
         calls_in_matched = len(matched_pairs)
+
+        # ── inbound minutes: matched legs only (campaign-attributed) ──────────
+        minutes_in_ms = sum((i["duration_ms"] or 0) for _, i in matched_pairs)
 
         # ── per-call delta (in_ms - out_ms) over matched, answered pairs ──────
         deltas = []
