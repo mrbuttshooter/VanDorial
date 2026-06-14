@@ -864,10 +864,16 @@ def test_uac_scenario_rtp_rendering(tmp_path):
     import xml.etree.ElementTree as ET
     from gencall.core.loop_engine import LoopEngine, UAC_TEMPLATE
 
-    # An existing pcap file (content irrelevant — the engine only checks it
-    # exists; SIPp validates the bytes at runtime).
+    # A minimal but structurally-valid pcap: global header + two records 2 s
+    # apart, so _pcap_duration_ms reads a 2000 ms span (drives the loop count).
+    # SIPp validates the actual media bytes at runtime; the engine only needs the
+    # file to exist + be parseable for duration.
+    import struct
     pcap = tmp_path / "media.pcap"
-    pcap.write_bytes(b"\xa1\xb2\xc3\xd4")
+    gh = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+    rec0 = struct.pack("<IIII", 0, 0, 0, 0)   # ts 0.000 s, no payload
+    rec1 = struct.pack("<IIII", 2, 0, 0, 0)   # ts 2.000 s
+    pcap.write_bytes(gh + rec0 + rec1)
 
     class _CfgOn:
         loops_rtp_pcap = str(pcap)
@@ -876,16 +882,27 @@ def test_uac_scenario_rtp_rendering(tmp_path):
     # Off → the template as-is.
     assert le._uac_scenario(False) == UAC_TEMPLATE
 
-    # On → a rendered temp scenario with the media exec pointing at the pcap.
+    # On (play once) → a rendered scenario with ONE media exec, after the ACK.
     rendered = le._uac_scenario(True)
     assert rendered != UAC_TEMPLATE
     xml = open(rendered, encoding="utf-8").read()
     assert "play_pcap_audio" in xml and "media.pcap" in xml
     root = ET.parse(rendered).getroot()          # well-formed
-    assert any(el.get("play_pcap_audio") for el in root.iter("exec"))
+    execs = [el for el in root.iter("exec") if el.get("play_pcap_audio")]
+    assert len(execs) == 1
     # The failure branches survive the render (real ASR/NER still captured).
     logs = " ".join(el.get("message", "") for el in root.iter("log"))
     assert "event=fail" in logs
+
+    # Looped → many play blocks spanning the hold; the bare -d <pause/> is dropped
+    # (the unrolled attributed pauses ARE the hold now).
+    rendered_loop = le._uac_scenario(True, rtp_loop=True, duration_s=20)
+    root_l = ET.parse(rendered_loop).getroot()   # well-formed
+    plays = [el for el in root_l.iter("exec") if el.get("play_pcap_audio")]
+    assert len(plays) > 1, "looped RTP must unroll multiple plays"
+    pauses = list(root_l.iter("pause"))
+    assert pauses and all(p.get("milliseconds") for p in pauses), \
+        "looped pauses must be timed (no bare -d hold left)"
 
     # Missing/empty pcap → graceful fallback to signaling-only (no crash).
     class _CfgMissing:

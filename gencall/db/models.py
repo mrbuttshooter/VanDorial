@@ -124,6 +124,8 @@ class LoopPreset(Base):
     # Stream real RTP media (PCMA pcap) on each call when True; signaling-only
     # (no media on the wire) when False. Stored 0/1.
     rtp = Column(Integer, default=0)
+    # When rtp is on: loop the media for the whole call (1) vs play it once (0).
+    rtp_loop = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self):
@@ -143,6 +145,7 @@ class LoopPreset(Base):
             "target_calls": self.target_calls or 0,
             "target_minutes": self.target_minutes or 0,
             "rtp": bool(self.rtp),
+            "rtp_loop": bool(self.rtp_loop),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -360,6 +363,7 @@ class Database:
         ],
         "loop_presets": [
             ("rtp", "INTEGER DEFAULT 0"),
+            ("rtp_loop", "INTEGER DEFAULT 0"),
         ],
     }
 

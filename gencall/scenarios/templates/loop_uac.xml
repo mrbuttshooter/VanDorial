@@ -32,8 +32,8 @@
   INVITE <send> and its response <recv>s makes sipp 3.6 treat the incoming 180 as
   "unexpected" and abort the call, so there are no nops here.
 
-  Hold duration: a bare <pause/> uses SIPp -d (set by the LoopEngine from the
-  campaign duration_s); SIPp does not substitute -inf fields inside a pause
+  Hold duration: a bare pause element uses SIPp -d (set by the LoopEngine from
+  the campaign duration_s); SIPp does not substitute -inf fields inside a pause
   attribute, so [field2] cannot be used there.
 -->
 <scenario name="GenCall - Loop UAC">

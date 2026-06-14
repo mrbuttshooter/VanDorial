@@ -210,6 +210,8 @@ export interface StartLoopRequest {
   target_minutes?: number;
   /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
   rtp?: boolean;
+  /* When rtp: loop media for the whole call; false = play once. */
+  rtp_loop?: boolean;
 }
 
 /* A node = a source IP a loop runs from, carrying its own number pool (origin +
@@ -337,6 +339,8 @@ export interface LoopPreset {
   target_minutes: number;
   /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
   rtp: boolean;
+  /* When rtp: loop media for the whole call; false = play once. */
+  rtp_loop: boolean;
   created_at: string | null;
 }
 
@@ -356,6 +360,8 @@ export interface LoopPresetRequest {
   target_minutes?: number;
   /* Stream real RTP media (PCMA) on each call; false = signaling-only. */
   rtp?: boolean;
+  /* When rtp: loop media for the whole call; false = play once. */
+  rtp_loop?: boolean;
 }
 
 /* Where to fire a preset: a single node, or a group (optionally a subset). */

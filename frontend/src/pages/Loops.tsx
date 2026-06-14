@@ -47,6 +47,7 @@ const PRESET_BLANK: LoopPresetRequest = {
   target_calls: 0,
   target_minutes: 0,
   rtp: false,
+  rtp_loop: false,
 };
 
 /** ms → minutes, rounded to 1 decimal. */
@@ -158,6 +159,7 @@ export function Loops() {
       target_calls: p.target_calls,
       target_minutes: p.target_minutes,
       rtp: p.rtp,
+      rtp_loop: p.rtp_loop,
     });
     setShowPreset(true);
   };
@@ -304,14 +306,16 @@ export function Loops() {
                           {p.name}
                           {p.rtp && (
                             <span
-                              title="Streams RTP media (PCMA)"
+                              title={p.rtp_loop
+                                ? "Streams RTP media (PCMA), looped for the whole call"
+                                : "Streams RTP media (PCMA), played once per call"}
                               style={{
                                 marginLeft: 8, fontSize: "0.7em", fontWeight: 600,
                                 color: "var(--cyan)", border: "1px solid var(--cyan)",
                                 borderRadius: 3, padding: "0 4px", verticalAlign: "middle",
                               }}
                             >
-                              RTP
+                              {p.rtp_loop ? "RTP∞" : "RTP"}
                             </span>
                           )}
                         </td>
@@ -517,18 +521,21 @@ export function Loops() {
 
         <FieldRow>
           <Field
-            label="Media"
-            hint="On = stream real RTP audio (PCMA) every call (the UAS echoes it → two-way). Off = signaling only, no media on the wire (near-zero CPU)."
+            label="Media (RTP)"
+            hint="None = signaling only (near-zero CPU). Once = stream the PCMA sample at answer. Looped = stream media the whole call (real softswitch load). The UAS echoes it → two-way."
           >
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={!!form.rtp}
-                onChange={(e) => set("rtp", e.target.checked)}
-                style={{ width: "auto" }}
-              />
-              <span>RTP media</span>
-            </label>
+            <select
+              value={form.rtp ? (form.rtp_loop ? "loop" : "once") : "off"}
+              onChange={(e) => {
+                const v = e.target.value;
+                set("rtp", v !== "off");
+                set("rtp_loop", v === "loop");
+              }}
+            >
+              <option value="off">None — signaling only</option>
+              <option value="once">RTP — play once</option>
+              <option value="loop">RTP — looped (full call)</option>
+            </select>
           </Field>
         </FieldRow>
       </Modal>
