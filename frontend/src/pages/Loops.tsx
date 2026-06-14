@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import s from "./pages.module.css";
+import ui from "@/components/ui/ui.module.css";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -98,6 +99,16 @@ export function Loops() {
   // Run modal (pick node or group for a chosen preset).
   const [runFor, setRunFor] = useState<LoopPreset | null>(null);
 
+  // Which preset rows are expanded (to reveal the IPs/loops running from them).
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setOpen((o) => {
+      const n = new Set(o);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
   const set = <K extends keyof LoopPresetRequest>(k: K, v: LoopPresetRequest[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -191,6 +202,17 @@ export function Loops() {
     [campaigns],
   );
   const presetRows = presets.data?.presets ?? [];
+  // A running campaign belongs to a preset if its name matches "<preset>" or
+  // "<preset>-<node>" (how preset runs are named).
+  const runsForPreset = (p: LoopPreset) =>
+    running.filter((c) => c.name === p.name || c.name.startsWith(`${p.name}-`));
+  const orphanRunning = useMemo(
+    () =>
+      running.filter(
+        (c) => !presetRows.some((p) => c.name === p.name || c.name.startsWith(`${p.name}-`)),
+      ),
+    [running, presetRows],
+  );
 
   return (
     <>
@@ -207,11 +229,115 @@ export function Loops() {
         </Button>
       </div>
 
-      {/* ---- Running now ---- */}
-      {running.length > 0 && (
-        <Panel title="Running now" flush live>
+      {/* ---- Saved loops (presets) — expand a row to see the IPs running from it ---- */}
+      <Panel title="Loops (presets)" flush>
+        {presets.loading && !presets.data ? (
+          <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
+            <Spinner />
+          </div>
+        ) : presetRows.length === 0 ? (
+          <EmptyState
+            title="No saved loops yet"
+            hint="Save a loop recipe (destination + ACD + rate) once, then Run it on a node or group — expand a row to see which IPs are running it."
+            action={
+              <Button variant="primary" size="sm" onClick={openNew}>
+                New preset
+              </Button>
+            }
+          />
+        ) : (
+          <div className={ui.tableWrap}>
+            <table className={ui.table}>
+              <thead>
+                <tr>
+                  <th style={{ width: 28 }}></th>
+                  <th>Loop</th>
+                  <th>Destination</th>
+                  <th>ACD</th>
+                  <th className={ui.numCell}>Rate</th>
+                  <th>Target</th>
+                  <th>Running</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {presetRows.map((p) => {
+                  const runs = runsForPreset(p);
+                  const isOpen = open.has(p.id);
+                  const target =
+                    p.target_calls > 0
+                      ? `${int(p.target_calls)} calls`
+                      : p.target_minutes > 0
+                        ? `${int(p.target_minutes)} min`
+                        : "until stopped";
+                  return (
+                    <Fragment key={p.id}>
+                      <tr onClick={() => toggle(p.id)} style={{ cursor: "pointer" }}>
+                        <td style={{ color: "var(--text-faint)", textAlign: "center" }}>
+                          {isOpen ? "▾" : "▸"}
+                        </td>
+                        <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>{p.name}</td>
+                        <td style={{ color: "var(--text-muted)" }}>
+                          {p.dest_host}:{p.dest_port}
+                          <span style={{ marginLeft: 6, textTransform: "uppercase" }}>{p.transport}</span>
+                        </td>
+                        <td style={{ color: "var(--text-muted)" }}>{duration(p.duration_s)}</td>
+                        <td className={ui.numCell}>{p.rate} cps</td>
+                        <td style={{ color: "var(--text-muted)" }}>{target}</td>
+                        <td>
+                          {runs.length > 0 ? (
+                            <Badge tone="signal" pulse>{runs.length} running</Badge>
+                          ) : (
+                            <span style={{ color: "var(--text-faint)" }}>idle</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                          <Button size="sm" variant="primary" onClick={() => setRunFor(p)}>
+                            <IconPlay /> Run
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>Edit</Button>
+                          <Button size="sm" variant="ghost" icon title="Delete preset" onClick={() => delPreset(p)}>
+                            <IconTrash />
+                          </Button>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr>
+                          <td colSpan={8} style={{ background: "var(--bg-inset)", padding: "var(--space-3)" }}>
+                            {runs.length === 0 ? (
+                              <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+                                No loops running from this preset — hit <strong>Run</strong> to start one on a node or group.
+                              </div>
+                            ) : (
+                              <div className={s.cards}>
+                                {runs.map((c) => (
+                                  <LoopCard
+                                    key={c.id}
+                                    campaign={c}
+                                    stats={stats[c.id] ?? c.loop_stats ?? undefined}
+                                    onStop={() => stop(c)}
+                                    onDownload={() => download(c.id)}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      {/* ---- Running loops not tied to a preset ---- */}
+      {orphanRunning.length > 0 && (
+        <Panel title="Other running loops" flush live>
           <div className={s.cards}>
-            {running.map((c) => (
+            {orphanRunning.map((c) => (
               <LoopCard
                 key={c.id}
                 campaign={c}
@@ -223,37 +349,6 @@ export function Loops() {
           </div>
         </Panel>
       )}
-
-      {/* ---- Saved presets ---- */}
-      <Panel title="Saved loops (presets)" flush>
-        {presets.loading && !presets.data ? (
-          <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
-            <Spinner />
-          </div>
-        ) : presetRows.length === 0 ? (
-          <EmptyState
-            title="No saved loops yet"
-            hint="Save a loop recipe (destination + ACD + rate) once, then click Run to fire it on any node or group — no more rebuilding the form each time."
-            action={
-              <Button variant="primary" size="sm" onClick={openNew}>
-                New preset
-              </Button>
-            }
-          />
-        ) : (
-          <div className={s.cards}>
-            {presetRows.map((p) => (
-              <PresetCard
-                key={p.id}
-                preset={p}
-                onRun={() => setRunFor(p)}
-                onEdit={() => openEdit(p)}
-                onDelete={() => delPreset(p)}
-              />
-            ))}
-          </div>
-        )}
-      </Panel>
 
       {/* ---- Preset create/edit modal ---- */}
       <Modal
@@ -596,67 +691,6 @@ function RunModal({
         </p>
       )}
     </Modal>
-  );
-}
-
-/* ---- Saved-preset card ---------------------------------------------------- */
-
-function PresetCard({
-  preset,
-  onRun,
-  onEdit,
-  onDelete,
-}: {
-  preset: LoopPreset;
-  onRun: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const target =
-    preset.target_calls > 0
-      ? `${int(preset.target_calls)} calls`
-      : preset.target_minutes > 0
-        ? `${int(preset.target_minutes)} min`
-        : "until stopped";
-  return (
-    <div className={s.card}>
-      <div className={s.cardTop}>
-        <div>
-          <div className={s.cardName}>{preset.name}</div>
-          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-faint)" }}>
-            {preset.dest_host}:{preset.dest_port}
-            <span style={{ marginLeft: 6, textTransform: "uppercase" }}>{preset.transport}</span>
-          </div>
-        </div>
-        <Badge tone="muted">preset</Badge>
-      </div>
-
-      <dl className={s.kv}>
-        <dt>ACD · duration</dt>
-        <dd>{duration(preset.duration_s)}</dd>
-        <dt>Rate / concurrent</dt>
-        <dd>
-          {preset.rate} cps / {int(preset.max_concurrent)}
-        </dd>
-        <dt>Match key</dt>
-        <dd>{preset.match_key}</dd>
-        <dt>Target</dt>
-        <dd>{target}</dd>
-      </dl>
-
-      <div className={s.cardActions}>
-        <Button size="sm" variant="ghost" onClick={onEdit}>
-          Edit
-        </Button>
-        <Button size="sm" variant="ghost" icon title="Delete" onClick={onDelete}>
-          <IconTrash />
-        </Button>
-        <div style={{ flex: 1 }} />
-        <Button size="sm" variant="primary" onClick={onRun}>
-          <IconPlay /> Run
-        </Button>
-      </div>
-    </div>
   );
 }
 

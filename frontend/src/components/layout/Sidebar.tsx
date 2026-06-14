@@ -6,7 +6,6 @@ import {
   IconLayers,
   IconPlug,
   IconLoop,
-  IconTerminal,
   IconHistory,
   IconSettings,
   IconBolt,
@@ -40,7 +39,6 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Telemetry",
     items: [
-      { to: "/console", label: "Console", icon: IconTerminal },
       { to: "/performance", label: "Performance", icon: IconWave },
       { to: "/history", label: "History", icon: IconHistory },
     ],
