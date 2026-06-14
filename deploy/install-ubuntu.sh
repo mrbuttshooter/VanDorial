@@ -60,6 +60,14 @@ else
   rm -rf /tmp/sipp
   ok "SIPp installed: $(/usr/local/bin/sipp -v 2>/dev/null | head -1)"
 fi
+# RTP media (play_pcap_audio) sends via a RAW socket → needs CAP_NET_RAW, else
+# SIPp segfaults when an RTP loop runs as the non-root service user. Grant it.
+SIPP_PATH="$(command -v sipp || echo /usr/local/bin/sipp)"
+if command -v setcap >/dev/null 2>&1; then
+  setcap cap_net_raw+ep "$SIPP_PATH" 2>/dev/null \
+    && ok "granted cap_net_raw to $SIPP_PATH (RTP media)" \
+    || warn "could not setcap $SIPP_PATH — RTP-media loops need: sudo setcap cap_net_raw+ep $SIPP_PATH"
+fi
 
 # ── 3. Service user ───────────────────────────────────────────────────────────
 id "$GC_USER" >/dev/null 2>&1 || { useradd --system --create-home --shell /usr/sbin/nologin "$GC_USER"; ok "created system user '$GC_USER'"; }

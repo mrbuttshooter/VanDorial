@@ -82,6 +82,14 @@ PY
 set_cfg sipp command "$SIPP_BIN"
 set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
+# RTP media (play_pcap_audio) sends via a RAW socket → needs CAP_NET_RAW, else
+# SIPp segfaults when a loop has RTP enabled while running as the non-root
+# service user. Grant it to the binary (no-op for signaling-only loops).
+if command -v setcap >/dev/null 2>&1; then
+  setcap cap_net_raw+ep "$SIPP_BIN" 2>/dev/null \
+    && ok "granted cap_net_raw to $SIPP_BIN (RTP media)" \
+    || warn "could not setcap $SIPP_BIN — RTP-media loops need: sudo setcap cap_net_raw+ep $SIPP_BIN"
+fi
 MADA="${MADA_IPS:-}"
 if [ -z "$MADA" ]; then
   read -rp "   MADA signalling IP(s) for the inbound whitelist [blank = set later]: " MADA || true
