@@ -10,7 +10,6 @@ import { Loops } from "./pages/Loops";
 import { Performance } from "./pages/Performance";
 import { History } from "./pages/History";
 import { Config } from "./pages/Config";
-import { FleetOverview } from "./pages/FleetOverview";
 import { Nodes } from "./pages/Nodes";
 import { Groups } from "./pages/Groups";
 import { EmptyState } from "./components/ui/Misc";
@@ -27,7 +26,6 @@ export default function App() {
             <Route element={<Shell />}>
               <Route index element={<Dashboard />} />
               {/* Fleet control plane (design §7) */}
-              <Route path="fleet" element={<FleetOverview />} />
               <Route path="nodes" element={<Nodes />} />
               <Route path="groups" element={<Groups />} />
               <Route path="campaigns" element={<Campaigns />} />
