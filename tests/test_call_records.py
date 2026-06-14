@@ -482,6 +482,48 @@ def test_loop_scenarios_are_wellformed_and_nop_free():
         assert list(root.iter("nop")) == [], f"{path} must have no <nop> (sipp 3.6 flow safety)"
 
 
+def test_loop_uac_logs_failures():
+    """The UAC scenario captures failure final responses (4xx/5xx/6xx) as
+    event=fail log lines so no-route/reject attempts land in call_records — else
+    only answered (200) calls are recorded and ASR is survivorship-biased to
+    100%. Each failure branch jumps to the shared end label (next="1"). 404 (the
+    switch's CAU_NO_RT_DST / Q.850 cause 3) is the critical one. The lines must
+    parse into a failure record the way the parser expects."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(_loop_uac_xml_path()).getroot()
+    # A shared end label exists for the failure branches to jump to.
+    assert any(el.get("id") == "1" for el in root.iter("label")), \
+        "loop_uac.xml needs <label id='1'/> as the failure-branch end target"
+
+    fail_recvs = [el for el in root.iter("recv")
+                  if any("event=fail" in (lg.get("message", "")) for lg in el.iter("log"))]
+    codes = set()
+    for rv in fail_recvs:
+        assert rv.get("optional") == "true", "failure recv must be optional"
+        assert rv.get("next") == "1", "failure recv must jump to the end label"
+        codes.add(rv.get("response"))
+    assert "404" in codes, "loop_uac.xml must log the 404 (no-route) failure"
+    # A representative reject set is covered, not just one code.
+    assert {"403", "486", "503"} <= codes
+
+    # The emitted fail line parses into a terminal failure record (final_code set,
+    # no answer, duration 0) — the contract the parser relies on.
+    fail_log = next(
+        lg.get("message") for rv in fail_recvs for lg in rv.iter("log")
+        if "final_code=404" in lg.get("message", ""))
+    # Substitute the SIPp keywords with concrete values as SIPp would at runtime.
+    line = (fail_log.replace("[call_id]", "c1").replace("[field0]", "100")
+            .replace("[field1]", "224620000001"))
+    acc = _CallAccumulator()
+    acc.ingest(parse_log_line(line))
+    (row,) = dict(acc.pop_complete()).values()
+    assert row["final_code"] == 404
+    assert row["duration_ms"] == 0
+    assert row["t_answer_ms"] is None
+    assert row["b_number"] == "224620000001"
+
+
 def test_loop_uas_bye_guard_is_a_literal_timeout():
     """The answered-call max-duration guard is a positive integer literal on the
     recv-BYE timeout (sipp does not substitute keywords in a timeout attribute)."""
