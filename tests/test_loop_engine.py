@@ -858,60 +858,52 @@ def test_records_export_box_aware(stub_sipp, tmp_path, monkeypatch):
 
 def test_uac_scenario_rtp_rendering(tmp_path):
     """RTP toggle: signaling-only returns the shipped template unchanged; RTP on
-    renders a per-campaign scenario that injects play_pcap_audio with the pcap
-    path (still well-formed, still has the failure branches). A missing/empty
-    pcap falls back to signaling-only so a bad media config never blocks a loop."""
+    renders a per-campaign scenario that injects a single rtp_stream exec (after
+    the ACK, well-formed, failure branches intact). Loop count is -1 (looped)
+    vs 1 (once). A missing/empty audio file falls back to signaling-only so a bad
+    media config never blocks a loop."""
     import xml.etree.ElementTree as ET
     from gencall.core.loop_engine import LoopEngine, UAC_TEMPLATE
 
-    # A minimal but structurally-valid pcap: global header + two records 2 s
-    # apart, so _pcap_duration_ms reads a 2000 ms span (drives the loop count).
-    # SIPp validates the actual media bytes at runtime; the engine only needs the
-    # file to exist + be parseable for duration.
-    import struct
-    pcap = tmp_path / "media.pcap"
-    gh = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
-    rec0 = struct.pack("<IIII", 0, 0, 0, 0)   # ts 0.000 s, no payload
-    rec1 = struct.pack("<IIII", 2, 0, 0, 0)   # ts 2.000 s
-    pcap.write_bytes(gh + rec0 + rec1)
+    # rtp_stream needs a raw audio file; the engine only checks it exists (SIPp
+    # reads the bytes at runtime), so any file works for the render test.
+    audio = tmp_path / "g711a.raw"
+    audio.write_bytes(b"\xd5" * 160)
 
     class _CfgOn:
-        loops_rtp_pcap = str(pcap)
+        loops_rtp_audio = str(audio)
     le = LoopEngine(sipp_engine=None, db=None, config=_CfgOn())
 
-    # Off → the template as-is.
+    # Off → the template as-is (no <nop>/<exec> added; bare -d <pause> intact).
     assert le._uac_scenario(False) == UAC_TEMPLATE
 
-    # On (play once) → a rendered scenario with ONE media exec, after the ACK.
-    rendered = le._uac_scenario(True)
-    assert rendered != UAC_TEMPLATE
-    xml = open(rendered, encoding="utf-8").read()
-    assert "play_pcap_audio" in xml and "media.pcap" in xml
-    root = ET.parse(rendered).getroot()          # well-formed
-    execs = [el for el in root.iter("exec") if el.get("play_pcap_audio")]
-    assert len(execs) == 1
-    # The failure branches survive the render (real ASR/NER still captured).
-    logs = " ".join(el.get("message", "") for el in root.iter("log"))
+    # On, play once → one rtp_stream exec with loop count 1, pointing at the file.
+    once = le._uac_scenario(True, rtp_loop=False)
+    assert once != UAC_TEMPLATE
+    root1 = ET.parse(once).getroot()                      # well-formed
+    streams = [el.get("rtp_stream") for el in root1.iter("exec") if el.get("rtp_stream")]
+    assert len(streams) == 1, "exactly one rtp_stream exec"
+    assert "g711a.raw" in streams[0] and streams[0].endswith(",1,8,PCMA/8000")
+    # The bare -d hold pause survives (rtp_stream is non-blocking).
+    assert any(p.get("milliseconds") is None for p in root1.iter("pause"))
+    # Failure branches survive the render (real ASR/NER still captured).
+    logs = " ".join(el.get("message", "") for el in root1.iter("log"))
     assert "event=fail" in logs
 
-    # Looped → many play blocks spanning the hold; the bare -d <pause/> is dropped
-    # (the unrolled attributed pauses ARE the hold now).
-    rendered_loop = le._uac_scenario(True, rtp_loop=True, duration_s=20)
-    root_l = ET.parse(rendered_loop).getroot()   # well-formed
-    plays = [el for el in root_l.iter("exec") if el.get("play_pcap_audio")]
-    assert len(plays) > 1, "looped RTP must unroll multiple plays"
-    pauses = list(root_l.iter("pause"))
-    assert pauses and all(p.get("milliseconds") for p in pauses), \
-        "looped pauses must be timed (no bare -d hold left)"
+    # On, looped → loop count -1 (stream the whole call).
+    loop = le._uac_scenario(True, rtp_loop=True)
+    root2 = ET.parse(loop).getroot()
+    s2 = next(el.get("rtp_stream") for el in root2.iter("exec") if el.get("rtp_stream"))
+    assert s2.endswith(",-1,8,PCMA/8000"), "looped RTP must use loop count -1"
 
-    # Missing/empty pcap → graceful fallback to signaling-only (no crash).
+    # Missing / empty audio → graceful fallback to signaling-only (no crash).
     class _CfgMissing:
-        loops_rtp_pcap = "/no/such/file.pcap"
+        loops_rtp_audio = "/no/such/file.raw"
     assert LoopEngine(sipp_engine=None, db=None,
                       config=_CfgMissing())._uac_scenario(True) == UAC_TEMPLATE
 
     class _CfgEmpty:
-        loops_rtp_pcap = ""
+        loops_rtp_audio = ""
     assert LoopEngine(sipp_engine=None, db=None,
                       config=_CfgEmpty())._uac_scenario(True) == UAC_TEMPLATE
 

@@ -42,7 +42,6 @@ import io
 import logging
 import os
 import random
-import re
 import tempfile
 import threading
 import uuid
@@ -413,8 +412,7 @@ class LoopEngine:
             tr = _TRANSPORT_MAP.get((transport or "udp").lower(), SIPpTransport.UDP)
             instance = SIPpInstance(
                 id=instance_id,
-                scenario_file=self._uac_scenario(bool(rtp), bool(rtp_loop),
-                                                 int(duration_s or 0)),
+                scenario_file=self._uac_scenario(bool(rtp), bool(rtp_loop)),
                 remote_host=dest_host,
                 remote_port=int(dest_port),
                 local_port=0,             # OS-assigned ephemeral source port
@@ -621,71 +619,33 @@ class LoopEngine:
                 return True
         return False
 
-    @staticmethod
-    def _pcap_duration_ms(path: str) -> int:
-        """Wall-clock span of a pcap (last − first packet timestamp) in ms, or 0
-        if it can't be read. Used to size the RTP media loop. Handles both byte
-        orders and µs/ns timestamp resolution."""
-        import struct
-
-        try:
-            with open(path, "rb") as f:
-                gh = f.read(24)
-                if len(gh) < 24:
-                    return 0
-                magic = gh[:4]
-                if magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
-                    end = ">"
-                elif magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
-                    end = "<"
-                else:
-                    return 0
-                nano = magic in (b"\xa1\xb2\x3c\x4d", b"\x4d\x3c\xb2\xa1")
-                first = last = None
-                while True:
-                    rh = f.read(16)
-                    if len(rh) < 16:
-                        break
-                    ts_sec, ts_sub, incl, _orig = struct.unpack(end + "IIII", rh)
-                    t = ts_sec + ts_sub / (1e9 if nano else 1e6)
-                    if first is None:
-                        first = t
-                    last = t
-                    f.seek(incl, 1)
-                if first is None or last is None:
-                    return 0
-                return int(round((last - first) * 1000))
-        except OSError:
-            return 0
-
-    def _uac_scenario(self, rtp: bool, rtp_loop: bool = False,
-                      duration_s: int = 0) -> str:
+    def _uac_scenario(self, rtp: bool, rtp_loop: bool = False) -> str:
         """Return the UAC scenario path for this campaign.
 
         Signaling-only (rtp=False): the shipped loop_uac.xml as-is. With media
-        (rtp=True): a per-campaign copy whose RTP_HOOK is replaced by a
-        ``play_pcap_audio`` exec so SIPp streams the configured PCMA pcap, and the
-        -rtp_echo UAS echoes it → two-way media. The play is a ``<nop>`` AFTER the
-        ACK (the canonical SIPp pcapplay spot — playing inside the 200 <recv>
-        action segfaulted SIPp, code -11, since the remote media wasn't set up
-        yet); the nop sits before the <pause>, where no SIP message is expected,
-        so it does not trip the 3.6 "unexpected message" abort.
+        (rtp=True): a per-campaign copy whose RTP_HOOK is replaced by a single
+        ``rtp_stream`` exec (a ``<nop>`` after the ACK) that streams the
+        configured raw A-law file over the call's media socket; the -rtp_echo UAS
+        echoes it → two-way media. ``rtp_loop`` selects the loop count: -1
+        (stream continuously for the whole call) vs 1 (play once). rtp_stream is
+        non-blocking, so the bare -d ``<pause>`` still holds the call while the
+        media streams in the background.
 
-        ``rtp_loop`` (looped RTP): the sample is short, so play-once only covers
-        the start of a long call. When looped we read the pcap's own duration and
-        unroll enough ``play + pause`` blocks to span the whole hold (then BYE),
-        replacing the single -d hold — so every call streams media end to end.
+        rtp_stream replaced play_pcap_audio: pcapplay sent via a RAW socket
+        (needed CAP_NET_RAW, else SIGSEGV) and, looped via ~37 unrolled plays,
+        tore down ~30% of calls (proven by A/B on cy214). rtp_stream uses the
+        normal media socket (no cap) and loops natively, holding calls cleanly.
 
-        Falls back to the signaling-only template if the pcap is missing or the
-        template can't be rendered, so a bad media config never blocks a loop.
+        Falls back to signaling-only if the audio file is missing or the template
+        can't be rendered, so a bad media config never blocks a loop.
         """
         if not rtp:
             return UAC_TEMPLATE
-        pcap = (self.config.loops_rtp_pcap or "").strip()
-        if not pcap or not os.path.isfile(pcap):
+        audio = (self.config.loops_rtp_audio or "").strip()
+        if not audio or not os.path.isfile(audio):
             logger.warning(
-                "RTP requested but pcap not found (%s); starting loop WITHOUT "
-                "media. Set [loops] rtp_pcap to a readable PCMA pcap.", pcap,
+                "RTP requested but audio file not found (%s); starting loop "
+                "WITHOUT media. Set [loops] rtp_audio to a raw A-law file.", audio,
             )
             return UAC_TEMPLATE
         try:
@@ -695,33 +655,13 @@ class LoopEngine:
                 logger.warning("loop_uac.xml has no RTP_HOOK; media not injected")
                 return UAC_TEMPLATE
             from xml.sax.saxutils import quoteattr
-            play = (f"<nop><action><exec play_pcap_audio={quoteattr(pcap)} />"
-                    f"</action></nop>")
-
-            if rtp_loop:
-                # Step a touch longer than the sample so plays never overlap.
-                step_ms = self._pcap_duration_ms(pcap) + 40
-                hold_ms = int(duration_s) * 1000 if duration_s else 60000
-                if step_ms <= 40:
-                    # Couldn't read the pcap duration → degrade to play-once.
-                    logger.warning("RTP loop: unreadable pcap duration; play-once")
-                    rendered = xml.replace(_RTP_HOOK, play)
-                else:
-                    reps = max(1, min(600, round(hold_ms / step_ms)))
-                    block = "\n".join(
-                        f'{play}<pause milliseconds="{step_ms}" />'
-                        for _ in range(reps)
-                    )
-                    rendered = xml.replace(_RTP_HOOK, block)
-                    # The unrolled (attributed) pauses ARE the hold now; drop the
-                    # bare -d <pause/> so the call doesn't hold an extra
-                    # duration_s after the media. Remove ALL bare pauses (only the
-                    # -d hold is bare; the loop's are attributed) so a stray
-                    # <pause/> token in a comment can't shadow the real one.
-                    rendered = re.sub(r"<pause\s*/>", "", rendered)
-            else:
-                rendered = xml.replace(_RTP_HOOK, play)
-
+            # filename,loopcount,payloadtype,payloadparam — -1 loops for the whole
+            # call, 1 plays once; PT 8 = PCMA, matching the SDP offer.
+            loop = -1 if rtp_loop else 1
+            spec = f"{audio},{loop},8,PCMA/8000"
+            media = (f"<nop><action><exec rtp_stream={quoteattr(spec)} />"
+                     f"</action></nop>")
+            rendered = xml.replace(_RTP_HOOK, media)
             fd, path = tempfile.mkstemp(prefix="gencall_uac_rtp_", suffix=".xml")
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
                 fh.write(rendered)

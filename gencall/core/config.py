@@ -317,27 +317,26 @@ class Config:
         return self.getint("loops", "max_channels", 1000)
 
     @property
-    def loops_rtp_pcap(self):
-        """PCMA pcap SIPp plays when a loop has RTP enabled (optional media).
+    def loops_rtp_audio(self):
+        """Raw A-law (G.711 PCMA) sample file SIPp's rtp_stream plays as the
+        loop's media when RTP is enabled.
 
-        An explicit ``[loops] rtp_pcap`` wins. Otherwise we use SIPp's OWN
-        bundled g711a.pcap — a hand-rolled pcap can trip SIPp's pcapplay parser
-        and SIGABRT the UAC (observed on cy213), whereas the file shipped with
-        the installed sipp is guaranteed-compatible. PT 8 = PCMA, matching
-        loop_uac.xml's SDP offer. Returns "" if none is found, in which case the
-        engine starts the loop signaling-only rather than crashing on media.
+        rtp_stream streams over the normal media socket (no CAP_NET_RAW) and
+        loops natively, so it replaced play_pcap_audio — which used a raw socket
+        (needed setcap) and, looped via 37 unrolled plays, tore down ~30% of
+        calls. The file is HEADERLESS codec samples (PT 8). Defaults to the
+        bundled g711a.raw; override with ``[loops] rtp_audio``. Returns "" if
+        missing, so the engine runs the loop signaling-only rather than failing.
         """
-        explicit = self.get("loops", "rtp_pcap", "")
+        explicit = self.get("loops", "rtp_audio", "")
         if explicit:
             return explicit
         import os
-        for cand in (
-            "/usr/share/sip-tester/g711a.pcap",   # Debian/Ubuntu sip-tester pkg
-            "/usr/share/sipp/pcap/g711a.pcap",     # source / other installs
-        ):
-            if os.path.isfile(cand):
-                return cand
-        return ""
+        bundled = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scenarios", "media", "g711a.raw",
+        )
+        return bundled if os.path.isfile(bundled) else ""
 
     @property
     def loops_max_duration_s(self):

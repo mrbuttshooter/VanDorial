@@ -118,10 +118,11 @@
   </send>
 
   <!-- Media (only when RTP is enabled): the engine replaces this marker with a
-       <nop> play_pcap_audio AFTER the ACK - the call is established and the
-       remote media address is known here, so SIPp's pcapplay won't segfault as
-       it did when the play ran inside the 200 <recv> action. For signaling-only
-       loops this stays a comment (no <nop>, so the nop-free flow is preserved). -->
+       <nop> rtp_stream exec AFTER the ACK - the call is established and the
+       remote media address is known here. rtp_stream streams the raw A-law file
+       over the media socket (loop -1 = whole call, 1 = once) and is non-blocking,
+       so the <pause> below still holds the call. For signaling-only loops this
+       stays a comment (no <nop>, so the nop-free flow is preserved). -->
   <!-- RTP_HOOK -->
 
   <!-- Hold the call for -d milliseconds (LoopEngine sets -d from duration_s). -->
