@@ -148,6 +148,8 @@ export interface LoopCampaign {
   /* Folded in by GET /api/loops/{id} (the live SIPp instance + latest match). */
   sipp?: TestInstance | null;
   loop_stats?: LoopStats | null;
+  /* GET /api/loops/fleet tags which box ran it: "local" or a worker api_url. */
+  box?: string;
 }
 
 /* One bucket of the per-call delta histogram (gencall/core/loop_matcher.py). */

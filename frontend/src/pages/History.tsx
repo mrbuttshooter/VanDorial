@@ -49,10 +49,10 @@ export function History() {
 /* ---- Ran loops --------------------------------------------------------------
    Every loop campaign (a "run"), newest first, with its final accounting. */
 function LoopHistory() {
-  const hist = useAsync(() => api.loopHistory(), [], 5000);
+  const hist = useAsync(() => api.listLoopsFleet(), [], 5000);
   const toast = useToast();
 
-  const runs: LoopCampaign[] = hist.data?.runs ?? [];
+  const runs: LoopCampaign[] = hist.data?.campaigns ?? [];
 
   const download = async (id: string) => {
     try {
@@ -100,6 +100,9 @@ function LoopHistory() {
                     <td style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
                       {r.local_ip ? `${r.local_ip} → ` : ""}
                       {r.dest_host}:{r.dest_port}
+                      {r.box && r.box !== "local" ? (
+                        <span style={{ color: "var(--cyan)" }}> ⇄ {r.box.replace(/^https?:\/\//, "")}</span>
+                      ) : null}
                     </td>
                     <td className={ui.numCell}>
                       {int(callsOut)} / {int(answered)}

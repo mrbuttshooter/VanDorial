@@ -78,7 +78,7 @@ function targetProgress(c: LoopCampaign, st: LoopStats | undefined): number | nu
 }
 
 export function Loops() {
-  const loops = useAsync(() => api.listLoops(), [], 3000);
+  const loops = useAsync(() => api.listLoopsFleet(), [], 3000);
   const presets = useAsync(() => api.listLoopPresets(), []);
   const toast = useToast();
 
@@ -164,10 +164,10 @@ export function Loops() {
     }
   };
 
-  const stop = async (id: string) => {
+  const stop = async (c: LoopCampaign) => {
     try {
-      await api.stopLoop(id);
-      toast.warn(`Stopped ${id}`);
+      await api.stopLoopFleet(c.id, c.box ?? "local");
+      toast.warn(`Stopped ${c.id}`);
       loops.refetch();
     } catch (e) {
       toast.error(`${e instanceof Error ? e.message : e}`);
@@ -215,8 +215,8 @@ export function Loops() {
               <LoopCard
                 key={c.id}
                 campaign={c}
-                stats={stats[c.id]}
-                onStop={() => stop(c.id)}
+                stats={stats[c.id] ?? c.loop_stats ?? undefined}
+                onStop={() => stop(c)}
                 onDownload={() => download(c.id)}
               />
             ))}
@@ -693,6 +693,11 @@ function LoopCard({
             <span style={{ marginLeft: 6, textTransform: "uppercase" }}>
               {campaign.transport}
             </span>
+            {campaign.box && campaign.box !== "local" ? (
+              <span style={{ marginLeft: 6, color: "var(--cyan)" }} title="remote worker">
+                ⇄ {campaign.box.replace(/^https?:\/\//, "")}
+              </span>
+            ) : null}
           </div>
         </div>
         <Badge tone={statusTone(campaign.status)} pulse={isRunning}>

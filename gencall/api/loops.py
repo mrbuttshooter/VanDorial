@@ -244,6 +244,81 @@ def loop_history():
     return {"runs": runs}
 
 
+@router.get("/api/loops/fleet", dependencies=[Depends(require_api_key)])
+def list_loops_fleet():
+    """All loop runs across THIS box + every remote worker, each tagged with its
+    ``box`` and carrying loop_stats. Remote workers are the distinct ``api_url``
+    of the node (Server) rows; we pull each worker's /api/loops/history (which
+    already folds loop_stats). Declared before /api/loops/{id}."""
+    out = []
+    for c in _engine().list_campaigns():
+        c = dict(c)
+        c["box"] = "local"
+        c["loop_stats"] = (loop_matcher.latest_stats(c["id"])
+                           if loop_matcher is not None else None)
+        out.append(c)
+
+    workers: dict = {}
+    try:
+        from gencall.db.models import Server
+        session = _db().get_session()
+        try:
+            for s in session.query(Server).all():
+                if s.api_url:
+                    workers[s.api_url] = s.api_key
+        finally:
+            session.close()
+    except HTTPException:
+        pass
+
+    import httpx
+    for api_url, api_key in workers.items():
+        try:
+            with httpx.Client(verify=False, timeout=8.0) as cl:
+                r = cl.get(api_url.rstrip("/") + "/api/loops/history",
+                           headers={"X-API-Key": api_key} if api_key else {})
+            if r.status_code == 200:
+                for run in (r.json() or {}).get("runs", []):
+                    run = dict(run)
+                    run["box"] = api_url
+                    out.append(run)
+        except Exception:
+            logger.debug("fleet loops fetch failed for %s", api_url, exc_info=True)
+
+    out.sort(key=lambda c: (c.get("created_at") or ""), reverse=True)
+    return {"campaigns": out}
+
+
+class FleetStopRequest(BaseModel):
+    campaign_id: str
+    box: str = "local"   # "local" = this box, else the worker's api_url
+
+
+@router.post("/api/loops/fleet-stop", dependencies=[Depends(require_api_key)])
+def fleet_stop_loop(req: FleetStopRequest):
+    """Stop a campaign on whichever box it runs on (local or a remote worker)."""
+    if not req.box or req.box == "local":
+        try:
+            campaign = _engine().stop_campaign(req.campaign_id)
+        except KeyError:
+            raise HTTPException(404, f"Loop campaign '{req.campaign_id}' not found")
+        return {"status": "stopped", "campaign": campaign}
+
+    api_key = ""
+    session = _db().get_session()
+    try:
+        from gencall.db.models import Server
+        s = session.query(Server).filter_by(api_url=req.box).first()
+        api_key = s.api_key if s else ""
+    finally:
+        session.close()
+    try:
+        return _worker_post(req.box, api_key,
+                            f"/api/loops/{req.campaign_id}/stop", {})
+    except Exception as e:
+        raise HTTPException(502, f"worker {req.box} stop failed: {e}")
+
+
 @router.get("/api/loops/{campaign_id}", dependencies=[Depends(require_api_key)])
 def get_loop(campaign_id: str):
     """Live status for one campaign incl. its UAC's SIPp stats + latest loop_stats.

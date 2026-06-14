@@ -217,6 +217,15 @@ export const api = {
     }),
   /** Past + present loop runs with their final stats, newest first (History tab). */
   loopHistory: () => request<{ runs: LoopCampaign[] }>("/api/loops/history"),
+  /** Fleet-wide loops: this box + every remote worker, each tagged with `box`
+   *  and carrying loop_stats. Powers the Loops page so remote loops are visible. */
+  listLoopsFleet: () => request<{ campaigns: LoopCampaign[] }>("/api/loops/fleet"),
+  /** Stop a campaign on whichever box runs it (box = "local" or a worker url). */
+  stopLoopFleet: (campaign_id: string, box: string) =>
+    request<{ status: string }>("/api/loops/fleet-stop", {
+      method: "POST",
+      body: { campaign_id, box },
+    }),
   stopLoop: (id: string) =>
     request<{ status: string; campaign: LoopCampaign }>(
       `/api/loops/${encodeURIComponent(id)}/stop`,
