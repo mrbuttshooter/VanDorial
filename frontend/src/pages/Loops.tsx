@@ -65,6 +65,28 @@ function acd(st: LoopStats): number {
   return st.answered_out > 0 ? st.minutes_out_ms / st.answered_out / 1000 : 0;
 }
 
+/** SIP codes that count AGAINST NER — network/route/congestion failures
+ *  (no-route = CAU_NO_RT_DST = 404, plus 408/5xx). Every other non-2xx
+ *  (486 busy, 480/408 no-answer, 600/603 decline) is NER-neutral: the network
+ *  delivered the call, the callee just didn't answer. */
+export const NER_FAIL_CODES = new Set(["404", "408", "500", "502", "503", "504"]);
+
+/** Count of a campaign's outbound legs that failed for a network cause. */
+export function networkFails(failuresOut: Record<string, number>): number {
+  let n = 0;
+  for (const [code, c] of Object.entries(failuresOut || {})) {
+    if (NER_FAIL_CODES.has(code)) n += c;
+  }
+  return n;
+}
+
+/** NER: (originated − network failures) ÷ originated, 0–100. 100% = the network
+ *  routed every call; only no-route/congestion drags it down (not busy/no-ans). */
+function ner(st: LoopStats): number {
+  if (!st.calls_out) return 0;
+  return ((st.calls_out - networkFails(st.failures?.out ?? {})) / st.calls_out) * 100;
+}
+
 /** Loop completion as a fraction toward a calls/minutes target (0–100), or
  *  null when the campaign runs until stopped (no target). */
 function targetProgress(c: LoopCampaign, st: LoopStats | undefined): number | null {
@@ -772,8 +794,8 @@ function LoopCard({
         </Badge>
       </div>
 
-      {/* ASR / ACD */}
-      <div className={s.tiles} style={{ gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
+      {/* ASR / NER / ACD */}
+      <div className={s.tiles} style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-3)" }}>
         <div className={s.mini}>
           <span
             className={s.miniVal}
@@ -781,7 +803,20 @@ function LoopCard({
           >
             {st ? pct(asr(st)) : "—"}
           </span>
-          <span className={s.miniLabel}>ASR · success</span>
+          <span className={s.miniLabel}>ASR · answered</span>
+        </div>
+        <div className={s.mini}>
+          <span
+            className={s.miniVal}
+            style={{
+              color: st
+                ? ner(st) >= 99 ? "var(--signal)" : ner(st) >= 90 ? "var(--amber)" : "var(--crit)"
+                : undefined,
+            }}
+          >
+            {st ? pct(ner(st)) : "—"}
+          </span>
+          <span className={s.miniLabel}>NER · routed</span>
         </div>
         <div className={s.mini}>
           <span className={s.miniVal}>{st ? duration(acd(st)) : "—"}</span>

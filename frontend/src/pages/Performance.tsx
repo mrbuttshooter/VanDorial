@@ -9,6 +9,7 @@ import { EmptyState, Spinner } from "@/components/ui/Misc";
 import { useAsync } from "@/hooks/useAsync";
 import { api } from "@/lib/api";
 import { int, num, pct, duration } from "@/lib/format";
+import { networkFails } from "./Loops";
 import type { LoopCampaign } from "@/lib/types";
 
 /* Performance = a filterable rollup over every loop in the fleet (this box + all
@@ -20,11 +21,11 @@ function mins(ms: number | null | undefined): number {
 }
 
 interface Roll {
-  callsOut: number; answered: number; matched: number;
+  callsOut: number; answered: number; matched: number; netFail: number;
   minOut: number; minIn: number; running: number;
 }
 function rollup(camps: LoopCampaign[]): Roll {
-  const r: Roll = { callsOut: 0, answered: 0, matched: 0, minOut: 0, minIn: 0, running: 0 };
+  const r: Roll = { callsOut: 0, answered: 0, matched: 0, netFail: 0, minOut: 0, minIn: 0, running: 0 };
   for (const c of camps) {
     if (c.status === "running") r.running++;
     const ls = c.loop_stats;
@@ -32,6 +33,7 @@ function rollup(camps: LoopCampaign[]): Roll {
     r.callsOut += ls.calls_out;
     r.answered += ls.answered_out;
     r.matched += ls.calls_in_matched;
+    r.netFail += networkFails(ls.failures?.out ?? {});
     r.minOut += ls.minutes_out_ms;
     r.minIn += ls.minutes_in_ms;
   }
@@ -83,6 +85,7 @@ export function Performance() {
 
   const r = rollup(filtered);
   const asr = r.callsOut ? (r.answered / r.callsOut) * 100 : 0;
+  const nerPct = r.callsOut ? ((r.callsOut - r.netFail) / r.callsOut) * 100 : 0;
   const acd = r.answered ? r.minOut / r.answered / 1000 : 0;
   const comp = r.answered ? (r.matched / r.answered) * 100 : 0;
 
@@ -113,6 +116,8 @@ export function Performance() {
           sub={<span className="hud-label">{filtered.length} total</span>} />
         <StatTile label="ASR" value={num(asr, 1)} unit="%"
           tone={asr >= 95 ? "signal" : asr >= 50 ? "amber" : "crit"} />
+        <StatTile label="NER" value={num(nerPct, 1)} unit="%"
+          tone={nerPct >= 99 ? "signal" : nerPct >= 90 ? "amber" : "crit"} />
         <StatTile label="ACD" value={duration(acd)} tone="signal" />
         <StatTile label="Completion" value={num(comp, 1)} unit="%"
           tone={comp >= 95 ? "signal" : comp >= 80 ? "amber" : "crit"} />
@@ -138,6 +143,7 @@ export function Performance() {
                   <th>Group</th>
                   <th>Destination</th>
                   <th className={ui.numCell}>ASR</th>
+                  <th className={ui.numCell}>NER</th>
                   <th className={ui.numCell}>ACD</th>
                   <th className={ui.numCell}>Completion</th>
                   <th className={ui.numCell}>Min out/in</th>
@@ -148,6 +154,8 @@ export function Performance() {
                 {filtered.map((c) => {
                   const ls = c.loop_stats;
                   const cAsr = ls && ls.calls_out ? (ls.answered_out / ls.calls_out) * 100 : 0;
+                  const cNer = ls && ls.calls_out
+                    ? ((ls.calls_out - networkFails(ls.failures?.out ?? {})) / ls.calls_out) * 100 : 0;
                   const cAcd = ls && ls.answered_out ? ls.minutes_out_ms / ls.answered_out / 1000 : 0;
                   return (
                     <tr key={c.id}>
@@ -159,6 +167,10 @@ export function Performance() {
                       <td style={{ color: "var(--text-muted)" }}>{ipGroup[c.local_ip ?? ""] ?? "—"}</td>
                       <td style={{ color: "var(--text-muted)" }}>{c.dest_host}:{c.dest_port}</td>
                       <td className={ui.numCell}>{ls ? pct(cAsr) : "—"}</td>
+                      <td className={ui.numCell}
+                          style={{ color: ls ? (cNer >= 99 ? "var(--signal)" : cNer >= 90 ? "var(--amber)" : "var(--crit)") : undefined }}>
+                        {ls ? pct(cNer) : "—"}
+                      </td>
                       <td className={ui.numCell}>{ls ? duration(cAcd) : "—"}</td>
                       <td className={ui.numCell}>{ls ? pct(ls.completion_pct) : "—"}</td>
                       <td className={ui.numCell}>
