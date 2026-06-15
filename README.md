@@ -36,10 +36,18 @@ sudo ./deploy/install-ubuntu.sh
 #    MADA whitelist — rules in docs/deploy/loop-runner.md section 2 (nftables/ufw)
 ```
 
-It's interactive (asks for the MADA whitelist; generates a DB password) and idempotent.
-Then open the console + **Loops** page at `http://<box-ip>:8080/console/`.
-Logs: `journalctl -u gencall-worker -f`. The fleet controller is installed but optional
-(only for multi-box): `systemctl enable --now gencall-controller`.
+It's interactive and idempotent. It asks:
+
+- **Role — worker or controller.** A **worker** runs headless (REST API + loop engine, **no
+  dashboard / web app**) and is driven from a controller. A **controller** serves the full
+  console / web app on `:8080`. Set non-interactively with `ROLE=worker` / `ROLE=controller`.
+- the MADA whitelist (generates a DB password automatically).
+
+When it finishes it **prints the API key** (the `X-API-Key:` header value, also saved to
+`/opt/gencall/.api_key`) — use it to register a worker on the controller's **Nodes** page, or to
+call the API. Controller dashboard + **Loops** page: `http://<box-ip>:8080/console/`.
+Logs: `journalctl -u gencall-worker -f`. Air-gapped box? Use `sudo ./deploy/install-offline.sh`
+(same role prompt + key, system SIPp + SQLite + bundled wheelhouse, no internet).
 
 ### Docker install (alternative)
 

@@ -31,6 +31,24 @@ WHEELHOUSE="$REPO/vendor/wheelhouse"
 [ -d "$WHEELHOUSE" ] && ls "$WHEELHOUSE"/*.whl >/dev/null 2>&1 || die "Wheelhouse missing: $WHEELHOUSE (this must be the OFFLINE bundle, not the plain repo zip)."
 RTP_LO="${RTP_RANGE%-*}"; RTP_HI="${RTP_RANGE#*-}"
 
+# ── 0. Role: worker (headless) or controller (full console / web app) ─────────
+# Worker = REST API + loop engine ONLY (no dashboard), driven from a controller.
+# Controller = full console / web app on :8080. Override with ROLE=worker|controller.
+ROLE="${ROLE:-}"
+if [ -z "$ROLE" ]; then
+  printf '\n   How will this box be used?\n'
+  printf '     [w] worker     — headless: REST API + loop engine, NO dashboard / web app\n'
+  printf '     [c] controller — full console + dashboard / web app to drive the fleet\n'
+  read -rp "   Role [w/c] (default: w): " _role || true
+  case "${_role,,}" in c|controller) ROLE=controller;; *) ROLE=worker;; esac
+fi
+case "$ROLE" in
+  worker)     SERVE_CONSOLE=false; HEADLESS_FLAG=" --headless" ;;
+  controller) SERVE_CONSOLE=true;  HEADLESS_FLAG="" ;;
+  *) die "ROLE must be 'worker' or 'controller' (got: $ROLE)" ;;
+esac
+ok "role: $ROLE — dashboard/web app $([ "$SERVE_CONSOLE" = true ] && echo ENABLED || echo DISABLED)"
+
 # ── 1. Preconditions (everything must already be on the box) ───────────────────
 say "Checking prerequisites (offline — nothing is downloaded)"
 SIPP_BIN="${SIPP_BIN:-$(command -v sipp || true)}"
@@ -82,6 +100,8 @@ PY
 set_cfg sipp command "$SIPP_BIN"
 set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
+# Headless worker => no console/web app + no live-stats WebSocket; controller => full console.
+set_cfg web serve_console "$SERVE_CONSOLE"
 # RTP media (play_pcap_audio) sends via a RAW socket → needs CAP_NET_RAW, else
 # SIPp segfaults when a loop has RTP enabled while running as the non-root
 # service user. Grant it to the binary (no-op for signaling-only loops).
@@ -97,6 +117,23 @@ fi
 [ -n "$MADA" ] && { set_cfg trust whitelist "$MADA"; ok "[trust] whitelist = $MADA"; } \
                || warn "trust whitelist empty — inbound calls will be FLAGGED until you set it"
 ok "config: sipp=$SIPP_BIN, RTP $RTP_LO-$RTP_HI, DB=SQLite"
+
+# DB URL the worker uses (SQLite) — also used to mint the API key right now.
+DB_URL="sqlite:////${INSTALL_DIR#/}/data/gencall.db"
+
+# ── 5b. Mint the admin API key NOW ────────────────────────────────────────────
+# So it's printed for you at install time and the service won't auto-mint another.
+say "Minting API key"
+API_KEY="$(GENCALL_CONFIG="$CFG" GENCALL_DB_ENGINE=sqlite GENCALL_DATABASE_URL="$DB_URL" \
+  "$INSTALL_DIR/venv/bin/gencall" keys create --name "${ROLE}-admin" 2>/dev/null \
+  | sed -n 's/.*X-API-Key:[[:space:]]*//p' | tail -1)"
+if [ -n "$API_KEY" ]; then
+  printf '%s\n' "$API_KEY" > "$INSTALL_DIR/.api_key"; chmod 600 "$INSTALL_DIR/.api_key"
+  ok "API key minted (saved to $INSTALL_DIR/.api_key)"
+else
+  warn "could not mint a key now — the worker mints one on first boot: journalctl -u gencall-worker | grep X-API-Key"
+fi
+
 chown -R "$GC_USER":"$GC_USER" "$INSTALL_DIR"
 
 # ── 6. systemd service (SQLite — no DB server) ────────────────────────────────
@@ -113,9 +150,9 @@ User=${GC_USER}
 WorkingDirectory=${INSTALL_DIR}
 Environment=GENCALL_CONFIG=${CFG}
 Environment=GENCALL_DB_ENGINE=sqlite
-Environment=GENCALL_DATABASE_URL=sqlite:////${INSTALL_DIR#/}/data/gencall.db
+Environment=GENCALL_DATABASE_URL=${DB_URL}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${INSTALL_DIR}/venv/bin/gencall-server --host 0.0.0.0 --port 8080
+ExecStart=${INSTALL_DIR}/venv/bin/gencall-server --host 0.0.0.0 --port 8080${HEADLESS_FLAG}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65536
@@ -138,16 +175,31 @@ else
   warn "worker not healthy yet — check:  journalctl -u gencall-worker -n 50 --no-pager"
 fi
 
-say "Done — two things left for YOU"
-cat <<EOF
-   1) API KEY (shown once at first boot):
-        journalctl -u gencall-worker | grep -A1 'X-API-Key' | tail -2
-
-   2) FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to
-      the MADA whitelist (${MADA:-<set this>}). Rules: docs/deploy/loop-runner.md section 2.
-
-   Console + Loops page:   http://<box-ip>:8080/console/
-   Logs:                   journalctl -u gencall-worker -f
-   SIPp sanity:            $SIPP_BIN -v
-EOF
+say "Done"
+echo
+echo "   +-- API KEY (send as the  X-API-Key:  header) --------------------------"
+if [ -n "${API_KEY:-}" ]; then
+  echo "   |  ${API_KEY}"
+  echo "   |  (also saved to ${INSTALL_DIR}/.api_key)"
+else
+  echo "   |  mint one now:  ${INSTALL_DIR}/venv/bin/gencall keys create --name admin"
+fi
+echo "   +----------------------------------------------------------------------"
+echo
+if [ "$ROLE" = controller ]; then
+  echo "   Role: CONTROLLER — open the dashboard / web app at:"
+  echo "       http://<box-ip>:8080/console/"
+  echo "   Add your worker boxes on the Nodes page (their URL + their API key)."
+else
+  echo "   Role: WORKER (headless — no dashboard / web app on this box)."
+  echo "   Register it on the CONTROLLER: Nodes page -> Add node -> Runs on ="
+  echo "       http://<this-box-ip>:8080   + the API key above."
+fi
+echo
+echo "   FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to"
+echo "   the MADA whitelist (${MADA:-<set this>}).  Rules: docs/deploy/loop-runner.md section 2"
+echo
+echo "   Manage keys:  ${INSTALL_DIR}/venv/bin/gencall keys list"
+echo "   Logs:         journalctl -u gencall-worker -f"
+echo "   SIPp sanity:  $SIPP_BIN -v"
 ok "install-offline.sh finished"
