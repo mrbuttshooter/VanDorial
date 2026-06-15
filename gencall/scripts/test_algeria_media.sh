@@ -38,16 +38,18 @@ SCEN="$WORK/uac_rtp.xml"
 PCAP="$WORK/algeria_media_test.pcap"
 
 # ── 3 A/B pairs ──────────────────────────────────────────────────────────────
-# A = Nigeria-Lagos (2341 — the origin prefix your switch FUNCTION matches on).
-# DEFAULT = 13-digit-A / 12-digit-B, the format already routing + answering on
-# 169.100, so this run changes ONLY the media (cleanest test). 11-digit-A variant
-# (valid E.164, your loops' new default): swap in
-#   23410433218;213696001338  /  23418386379;213602654235  /  23411615594;213678161849
+# Numbers MUST match the switch route function TO_DORY_UK:
+#   oad (A) = "^....3536.*"  -> A must start 3536  (Irish origin — what Sigma uses)
+#   dad (B) = "^..2136.*"    -> B must start 2136  (Algeria mobile)
+# Earlier A=2341 (Nigeria-Lagos) did NOT match oad=3536, so calls fell through to
+# a default route and dropped (cause 47/31). These mirror Sigma's working format:
+# A=3536+8 (12-digit), B=2136+7 (11-digit). Regenerate with:
+#   gen_loop_csv --oad-code 3536 --dad-zone "Algeria-Mobile" --dad-length 11
 cat > "$NUMBERS" <<'CSV'
 SEQUENTIAL
-2341043321819;213600133890
-2341863794026;213642351161
-2341594078161;213695931034
+353604332181;21360013389
+353683863794;21362654235
+353616155940;21368161849
 CSV
 
 # ── locate (or build) the looped PCMA media sample ───────────────────────────
