@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
 #
 # test_algeria_media.sh — fire 3 test calls (A=Nigeria-Lagos, B=Algeria) at the
-# switch WITH real PCMA media, capture SIP (+RTP), and report the release cause.
+# switch WITH real PCMA media, capture SIP, and report the release cause.
+#
+# SELF-CONTAINED: the SIPp scenario, the 3 number pairs and the G.711 A-law media
+# sample are all embedded/auto-generated, so this runs from anywhere (e.g. /tmp)
+# with no gencall repo present. Needs only: sipp, python3, and tcpdump (capture).
 #
 # Purpose: isolate the cause-47 ("CAU-RENAU") drops. The failing loop toward
 # 208.87.169.100 answers (200 OK) then the far end BYEs ~200ms later with Q.850
 # cause=47, with NO media on our side (loops run signaling-only by default). This
 # sends the SAME number format that was routing + answering, but now streams a
-# looped G.711 A-law tone (rtp_stream, PT 8 PCMA) so the answered calls have real
-# audio. If they now hold and clear with cause 16 (normal), missing media was the
-# cause. If they STILL die cause 47 with media flowing, it's the switch route
-# function (switch-side), not us.
+# looped G.711 A-law tone (rtp_stream, PT 8 PCMA). If the calls now HOLD and clear
+# with cause 16 (normal), missing media was the cause. If they STILL die cause 47
+# with media flowing, it is the switch route function (switch-side), not us.
 #
-# Run ON THE LINUX WORKER (sipp + the gencall repo present). Usage:
-#   LOCAL_IP=10.35.21.3 sudo -E ./gencall/scripts/test_algeria_media.sh
+# Run ON THE LINUX WORKER:
+#   sudo -E bash test_algeria_media.sh          # or: chmod +x … ; sudo -E ./test_algeria_media.sh
 #
 set -euo pipefail
 
 # ── config (override via env) ────────────────────────────────────────────────
-SWITCH="${SWITCH:-208.87.169.100}"      # stay on 169.100 (per decision)
+SWITCH="${SWITCH:-208.87.169.100}"       # stay on 169.100 (per decision)
 SBC_MEDIA="${SBC_MEDIA:-208.87.169.179}" # SBC media IP seen anchoring RTP (for capture)
 SIPP="${SIPP:-sipp}"
-HOLD_S="${HOLD_S:-15}"                   # call hold seconds — long enough to prove media sustains
-RATE="${RATE:-1}"                        # calls/sec
-CAPTURE="${CAPTURE:-1}"                  # 1 = run tcpdump alongside
+HOLD_S="${HOLD_S:-15}"                    # call hold seconds — long enough to prove media sustains
+RATE="${RATE:-1}"                         # calls/sec
+CAPTURE="${CAPTURE:-1}"                   # 1 = run tcpdump alongside
 # local SIP + media (RTP) source IP that reaches the switch; auto-detect if unset
 LOCAL_IP="${LOCAL_IP:-$(ip -4 route get "$SWITCH" 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)}"
 LOCAL_IP="${LOCAL_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="$SCRIPT_DIR/../scenarios/templates/loop_uac.xml"
+command -v "$SIPP" >/dev/null 2>&1 || { echo "ERROR: '$SIPP' not found — set SIPP=/path/to/sipp"; exit 1; }
 WORK="$(mktemp -d /tmp/algeria_test.XXXXXX)"
 NUMBERS="$WORK/numbers.csv"
 SCEN="$WORK/uac_rtp.xml"
@@ -37,17 +39,10 @@ PCAP="$WORK/algeria_media_test.pcap"
 
 # ── 3 A/B pairs ──────────────────────────────────────────────────────────────
 # A = Nigeria-Lagos (2341 — the origin prefix your switch FUNCTION matches on).
-# DEFAULT below is the 13-digit-A / 12-digit-B format that was ALREADY routing and
-# getting answered on 169.100, so this run changes ONLY the media — the cleanest
-# test of "does media stop the cause-47 drop?".
-#
-# Your loops now generate 11-digit Nigeria-Lagos A + 12-digit Algeria B
-# (gen_loop_csv kept at valid E.164). Once media is confirmed, re-run with the
-# block below to prove that format still matches the function and routes:
-#   SEQUENTIAL
-#   23410433218;213696001338
-#   23418386379;213602654235
-#   23411615594;213678161849
+# DEFAULT = 13-digit-A / 12-digit-B, the format already routing + answering on
+# 169.100, so this run changes ONLY the media (cleanest test). 11-digit-A variant
+# (valid E.164, your loops' new default): swap in
+#   23410433218;213696001338  /  23418386379;213602654235  /  23411615594;213678161849
 cat > "$NUMBERS" <<'CSV'
 SEQUENTIAL
 2341043321819;213600133890
@@ -56,16 +51,12 @@ SEQUENTIAL
 CSV
 
 # ── locate (or build) the looped PCMA media sample ───────────────────────────
-AUDIO="${AUDIO:-}"
-if [[ -z "$AUDIO" ]]; then
-  AUDIO="$(find /opt/gencall "$SCRIPT_DIR/.." -name g711a.raw 2>/dev/null | head -1 || true)"
-fi
+AUDIO="${AUDIO:-$(find /opt -name g711a.raw 2>/dev/null | head -1 || true)}"
 if [[ -z "$AUDIO" || ! -f "$AUDIO" ]]; then
   AUDIO="$WORK/g711a.raw"
   echo "[*] g711a.raw not found — generating a 1s 400Hz A-law tone -> $AUDIO"
   python3 - "$AUDIO" <<'PY'
 import sys, math
-# 1s of 400Hz sine, 8kHz, encoded to G.711 A-law (PT 8). Headerless raw bytes.
 def alaw(s):
     s=max(-32768,min(32767,int(s)));sign=0x80 if s>=0 else 0x00
     if s<0:s=-s-1 if s>-32768 else 32767
@@ -84,18 +75,109 @@ open(sys.argv[1],'wb').write(bytes(buf))
 PY
 fi
 
-# ── render the proven UAC scenario with rtp_stream media injected ────────────
-[[ -f "$TEMPLATE" ]] || { echo "ERROR: loop_uac.xml not found at $TEMPLATE"; exit 1; }
-python3 - "$TEMPLATE" "$SCEN" "$AUDIO" <<'PY'
-import sys
-src,out,audio=sys.argv[1:4]
-xml=open(src,encoding='utf-8').read()
-# -1 = loop the sample for the whole call (continuous energy); PT 8 = PCMA.
-nop=f'<nop><action><exec rtp_stream="{audio},-1,8,PCMA/8000" /></action></nop>'
-if '<!-- RTP_HOOK -->' not in xml:
-    sys.exit("ERROR: RTP_HOOK marker missing in loop_uac.xml")
-open(out,'w',encoding='utf-8',newline='').write(xml.replace('<!-- RTP_HOOK -->',nop))
-PY
+# ── embedded UAC scenario (the proven Dory INVITE, 8 18 101, + rtp_stream) ───
+cat > "$SCEN" <<'XML'
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<scenario name="Algeria media test UAC">
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[field1]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>
+      Call-ID: [call_id]
+      CSeq: 102 INVITE
+      User-Agent: teles
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Expires: 15
+      Allow: CANCEL,BYE,INVITE, ACK
+      Content-Type: application/sdp
+      Content-Length: [len]
+      Accept: application/sdp
+
+      v=0
+      o=Dory 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=SIP Call
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [auto_media_port] RTP/AVP 8 18 101
+      a=rtpmap:18 G729/8000
+      a=fmtp:18 annexb=yes
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+    ]]>
+  </send>
+
+  <recv response="100" optional="true" />
+  <recv response="180" optional="true" />
+  <recv response="183" optional="true" />
+
+  <!-- non-2xx finals: jump to label 40 (ACK + end) so a 404/486/… doesn't hang -->
+  <recv response="400" optional="true" next="40" />
+  <recv response="403" optional="true" next="40" />
+  <recv response="404" optional="true" next="40" />
+  <recv response="408" optional="true" next="40" />
+  <recv response="480" optional="true" next="40" />
+  <recv response="484" optional="true" next="40" />
+  <recv response="486" optional="true" next="40" />
+  <recv response="487" optional="true" next="40" />
+  <recv response="488" optional="true" next="40" />
+  <recv response="500" optional="true" next="40" />
+  <recv response="503" optional="true" next="40" />
+  <recv response="603" optional="true" next="40" />
+
+  <recv response="200" rtd="true" crlf="true" />
+
+  <send>
+    <![CDATA[
+      ACK sip:[field1]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 102 ACK
+      Contact: <sip:[field0]@[local_ip]:[local_port]>
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- stream the looped A-law tone (PT 8 PCMA) for the whole call -->
+  <nop><action><exec rtp_stream="__AUDIO__,-1,8,PCMA/8000" /></action></nop>
+
+  <pause />
+
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[field1]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 103 BYE
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="200" crlf="true" next="1" />
+
+  <!-- failure-ACK for non-2xx finals -->
+  <label id="40" />
+  <send>
+    <![CDATA[
+      ACK sip:[field1]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[field1]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 102 ACK
+      Content-Length: 0
+    ]]>
+  </send>
+  <label id="1" />
+</scenario>
+XML
+sed -i "s|__AUDIO__|$AUDIO|" "$SCEN"
 
 echo "============================================================"
 echo " switch     : $SWITCH:5060   (media-anchor seen: $SBC_MEDIA)"
@@ -122,7 +204,7 @@ fi
 # ── fire 3 calls ─────────────────────────────────────────────────────────────
 set +e
 "$SIPP" "$SWITCH:5060" \
-  -sf "$SCEN" -inf "$NUMBERS" -inf_index 0 \
+  -sf "$SCEN" -inf "$NUMBERS" \
   -m 3 -l 3 -r "$RATE" -d "$((HOLD_S*1000))" \
   -i "$LOCAL_IP" -mi "$LOCAL_IP" \
   -trace_err -error_file "$WORK/sipp_err.log" \
