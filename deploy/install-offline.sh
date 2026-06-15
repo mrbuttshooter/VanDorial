@@ -2,16 +2,19 @@
 #
 # GenCall v2 "Loop Runner" — OFFLINE / AIR-GAPPED Ubuntu installer.
 #
-# NO internet, NO apt, NO SIPp build, NO PostgreSQL. It uses:
-#   - the system SIPp        (apt 'sip-tester', /usr/bin/sipp)
+# NO internet, NO apt, NO SIPp build, NO PostgreSQL. Fully self-contained — it ships:
+#   - SIPp                   (vendor/debs/ — sip-tester + libs, dpkg-installed if no sipp)
+#   - the venv builder       (vendor/virtualenv.pyz — so NO OS python3-venv needed)
+#   - all Python libs        (vendor/wheelhouse/ — installed offline with --no-index)
 #   - SQLite                 (built into Python — no DB server to install)
-#   - a bundled wheelhouse   (vendor/wheelhouse/ — all Python libs as offline files)
 #
 # Run as root from inside the unzipped offline bundle:
 #     sudo ./deploy/install-offline.sh
 #
-# Idempotent. Needs: python3 >= 3.10, python3-venv, and a sipp on PATH (all present
-# on this box). Needs UDP/5060 free.
+# Idempotent. The ONLY box prerequisite is python3 >= 3.10 (Ubuntu ships it by
+# default). Needs UDP/5060 free. The bundled SIPp/venv/lib artifacts are built for
+# Ubuntu 22.04 / Python 3.10 (cy213/cy214) — for a different OS/Python, refresh them
+# with deploy/build-debs.sh + deploy/build-wheelhouse.sh on a matching online box.
 #
 set -euo pipefail
 
@@ -49,14 +52,31 @@ case "$ROLE" in
 esac
 ok "role: $ROLE — dashboard/web app $([ "$SERVE_CONSOLE" = true ] && echo ENABLED || echo DISABLED)"
 
-# ── 1. Preconditions (everything must already be on the box) ───────────────────
+# ── 1. Preconditions + bundled OS packages ────────────────────────────────────
 say "Checking prerequisites (offline — nothing is downloaded)"
+
+# SIPp: if the box has no 'sipp' and the bundle carries vendor/debs/*.deb, install
+# them (sip-tester + libgsl/libsctp/libpcap). Two dpkg passes resolve inter-deps;
+# a failure is tolerated here and surfaces in the sipp check just below.
+DEBS="$REPO/vendor/debs"
+if ! command -v sipp >/dev/null 2>&1 && ls "$DEBS"/*.deb >/dev/null 2>&1; then
+  say "Installing bundled SIPp from vendor/debs (offline)"
+  dpkg -i "$DEBS"/*.deb >/dev/null 2>&1 || dpkg -i "$DEBS"/*.deb || warn "some bundled .debs failed (a base lib may be missing) — see the sipp check below"
+  ok "vendor/debs installed ($(ls "$DEBS"/*.deb | wc -l) packages)"
+fi
+
 SIPP_BIN="${SIPP_BIN:-$(command -v sipp || true)}"
-[ -n "$SIPP_BIN" ] || die "No 'sipp' on PATH. Install sip-tester or copy a sipp binary, then re-run (or set SIPP_BIN=/path/to/sipp)."
+[ -n "$SIPP_BIN" ] || die "No 'sipp' on PATH. The bundle ships sip-tester in vendor/debs (auto-installed) — if that failed, install sip-tester, copy a sipp binary (SIPP_BIN=/path/to/sipp), or run deploy/build-debs.sh on a matching online box."
 ok "SIPp: $SIPP_BIN ($("$SIPP_BIN" -v 2>/dev/null | head -1))"
-command -v python3 >/dev/null || die "python3 missing"
+command -v python3 >/dev/null || die "python3 missing (Ubuntu ships python3 by default)"
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' || die "Need Python >= 3.10 (have $(python3 -V))"
-python3 -c 'import venv' 2>/dev/null || die "python3-venv missing (apt install python3-venv)"
+# venv: the bundle ships virtualenv.pyz (a self-contained zipapp), so the OS
+# python3-venv package is NOT required. Only fall back to needing it if the pyz is
+# absent (e.g. a stripped bundle).
+VENV_PYZ="$REPO/vendor/virtualenv.pyz"
+if [ ! -f "$VENV_PYZ" ]; then
+  python3 -c 'import venv, ensurepip' 2>/dev/null || die "vendor/virtualenv.pyz absent AND python3-venv missing — add the pyz or 'apt install python3-venv'."
+fi
 ok "Python: $(python3 -V 2>&1)"
 # The wheelhouse's native wheels (uvloop, pydantic_core, psycopg2, …) are locked to
 # a Python ABI (cp3X). A box on a different Python would fail later with a cryptic
@@ -82,7 +102,13 @@ mkdir -p "$INSTALL_DIR/logs" "$INSTALL_DIR/data" "$INSTALL_DIR/gencall/media"
 
 # ── 4. venv + OFFLINE pip from the wheelhouse ─────────────────────────────────
 say "Building venv and installing Python libs from the wheelhouse (no network)"
-python3 -m venv "$INSTALL_DIR/venv"
+if [ -f "$VENV_PYZ" ]; then
+  # Self-contained zipapp: bundles pip/setuptools seed wheels, so the venv builds
+  # with NO OS python3-venv / python3-pip package on the box.
+  python3 "$VENV_PYZ" --no-periodic-update "$INSTALL_DIR/venv"
+else
+  python3 -m venv "$INSTALL_DIR/venv"
+fi
 PIP="$INSTALL_DIR/venv/bin/pip"
 # Upgrade pip/setuptools/wheel from the wheelhouse if present (tolerant — the
 # venv already ships a usable pip+setuptools, so failure here is non-fatal).

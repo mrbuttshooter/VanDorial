@@ -47,7 +47,11 @@ When it finishes it **prints the API key** (the `X-API-Key:` header value, also 
 `/opt/gencall/.api_key`) — use it to register a worker on the controller's **Nodes** page, or to
 call the API. Controller dashboard + **Loops** page: `http://<box-ip>:8080/console/`.
 Logs: `journalctl -u gencall-worker -f`. Air-gapped box? Use `sudo ./deploy/install-offline.sh`
-(same role prompt + key, system SIPp + SQLite + bundled wheelhouse, no internet).
+(same role prompt + key). It's **fully self-contained** — the bundle ships SIPp (`vendor/debs/`),
+the venv builder (`vendor/virtualenv.pyz`) and every Python lib (`vendor/wheelhouse/`), so the
+**only** box prerequisite is `python3` (present on Ubuntu by default). The bundled binaries target
+Ubuntu 22.04 / Python 3.10; for a different OS/Python, refresh them on a matching online box with
+`deploy/build-debs.sh` + `deploy/build-wheelhouse.sh`.
 
 ### Docker install (alternative)
 
