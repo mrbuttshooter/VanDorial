@@ -190,13 +190,31 @@ E164_TOTAL_LEN = {
     "966": 12, "967": 12, "968": 11, "971": 12, "972": 12, "973": 11,
     "974": 11, "975": 11, "976": 11, "977": 13, "992": 12, "993": 11,
     "994": 12, "995": 12, "996": 12, "998": 12,
+    # ── Sub-country overrides ────────────────────────────────────────────────
+    # Area/operator prefixes whose valid E.164 length differs from the bare
+    # country-code default above. Matched LONGEST-first by e164_total_length, so
+    # they win over the country entry. Without this, Nigeria-Lagos (2341, an
+    # 11-digit landline) was padded to the 13-digit Nigeria MOBILE length
+    # ("234" -> 13), producing invalid "234-1-XXXXXXXXX" A-numbers that the
+    # switch/far end answers then drops with Q.850 cause 47. Prefer a
+    # Nigeria-Mobile zone (234701/234802/...) for a mobile origin; this entry
+    # only ensures Nigeria-Lagos itself yields a well-formed landline. Extend as
+    # other short-area-code zones surface.
+    "2341": 11,   # Nigeria-Lagos landline: 234 + 1 + 7-digit subscriber
 }
 
 
 def e164_total_length(dialed_code: str, fallback: int) -> int:
     """Best-effort total E.164 length (CC + NSN) for a dialed code, by longest
-    country-code prefix match; ``fallback`` when the country is unknown."""
-    for n in (3, 2, 1):
+    prefix match; ``fallback`` when the country is unknown.
+
+    The scan runs LONGEST-first over the full code so a sub-country override
+    (e.g. the 11-digit Nigeria-Lagos landline "2341") wins over the bare
+    country-code entry (Nigeria mobile "234" -> 13). Previously it only tried
+    3/2/1-digit prefixes, so "2341" matched "234" and Lagos numbers were padded
+    to the 13-digit MOBILE length, emitting invalid "234-1-XXXXXXXXX" origins
+    the far end answers then drops (Q.850 cause 47)."""
+    for n in range(len(dialed_code), 0, -1):
         if dialed_code[:n] in E164_TOTAL_LEN:
             return E164_TOTAL_LEN[dialed_code[:n]]
     return fallback

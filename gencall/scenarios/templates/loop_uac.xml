@@ -12,7 +12,10 @@
       dialed-number lookup but we mirror Dory exactly.
     * User-Agent: teles, Expires: 15, Allow, Accept  (all present on Dory).
     * SDP advertises PCMA + G729(annexb) + telephone-event, o=Dory, s=SIP Call,
-      no ptime/sendrecv, byte-for-byte the Dory offer.
+      no ptime/sendrecv, byte-for-byte the Dory offer. (Confirmed on the wire:
+      the proven-working Sigma Algeria loop offers this exact "RTP/AVP 8 18 101"
+      with G729 and completes normally — so G729 in the offer is NOT the cause
+      of the cause-47 drops seen toward 208.87.169.100; do not strip it.)
     * No Max-Forwards header; Dory omits it and the SBC accepts the call, so we
       omit it too to keep the message identical.
 
@@ -59,7 +62,7 @@
       s=SIP Call
       c=IN IP[media_ip_type] [media_ip]
       t=0 0
-      m=audio [media_port] RTP/AVP 8 18 101
+      m=audio [auto_media_port] RTP/AVP 8 18 101
       a=rtpmap:18 G729/8000
       a=fmtp:18 annexb=yes
       a=rtpmap:8 PCMA/8000
