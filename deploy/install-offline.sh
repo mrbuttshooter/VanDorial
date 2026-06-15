@@ -21,6 +21,7 @@ set -euo pipefail
 INSTALL_DIR=/opt/gencall
 GC_USER=gencall
 RTP_RANGE="${RTP_RANGE:-16384-16584}"
+PORT="${PORT:-8080}"          # web/API port — override e.g. PORT=8000
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 ok()   { printf '   \033[1;32m✓\033[0m %s\n' "$*"; }
@@ -187,7 +188,7 @@ Environment=GENCALL_CONFIG=${CFG}
 Environment=GENCALL_DB_ENGINE=sqlite
 Environment=GENCALL_DATABASE_URL=${DB_URL}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${INSTALL_DIR}/venv/bin/gencall-server --host 0.0.0.0 --port 8080${HEADLESS_FLAG}
+ExecStart=${INSTALL_DIR}/venv/bin/gencall-server --host 0.0.0.0 --port ${PORT}${HEADLESS_FLAG}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65536
@@ -202,9 +203,9 @@ ok "gencall-worker enabled + started (SQLite DB at ${INSTALL_DIR}/data/gencall.d
 # ── 7. Health check + next steps ──────────────────────────────────────────────
 say "Health check"
 sleep 4
-if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
+if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:${PORT}/api/health >/dev/null 2>&1; then
   ok "worker /api/health OK"
-elif python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4).status==200 else 1)" 2>/dev/null; then
+elif python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:${PORT}/api/health',timeout=4).status==200 else 1)" 2>/dev/null; then
   ok "worker /api/health OK"
 else
   warn "worker not healthy yet — check:  journalctl -u gencall-worker -n 50 --no-pager"
@@ -223,12 +224,12 @@ echo "   +----------------------------------------------------------------------
 echo
 if [ "$ROLE" = controller ]; then
   echo "   Role: CONTROLLER — open the dashboard / web app at:"
-  echo "       http://<box-ip>:8080/console/"
+  echo "       http://<box-ip>:${PORT}/console/"
   echo "   Add your worker boxes on the Nodes page (their URL + their API key)."
 else
   echo "   Role: WORKER (headless — no dashboard / web app on this box)."
   echo "   Register it on the CONTROLLER: Nodes page -> Add node -> Runs on ="
-  echo "       http://<this-box-ip>:8080   + the API key above."
+  echo "       http://<this-box-ip>:${PORT}   + the API key above."
 fi
 echo
 echo "   FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to"

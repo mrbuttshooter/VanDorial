@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="gencall",
-    version="2.0.0",
+    version="2.0.1",
     description="GenCall - SIP Traffic Generator",
     packages=find_packages(),
     include_package_data=True,
