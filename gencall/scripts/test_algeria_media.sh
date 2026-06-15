@@ -38,18 +38,18 @@ SCEN="$WORK/uac_rtp.xml"
 PCAP="$WORK/algeria_media_test.pcap"
 
 # ── 3 A/B pairs ──────────────────────────────────────────────────────────────
-# Numbers MUST match the switch route function TO_DORY_UK:
-#   oad (A) = "^....3536.*"  -> A must start 3536  (Irish origin — what Sigma uses)
+# Numbers match OUR switch route TO_DORY_21_3 (routes to 10.35.21.3):
+#   oad (A) = "^....2341.*"  -> A must start 2341  (Nigeria-Lagos — OUR origin key)
 #   dad (B) = "^..2136.*"    -> B must start 2136  (Algeria mobile)
-# Earlier A=2341 (Nigeria-Lagos) did NOT match oad=3536, so calls fell through to
-# a default route and dropped (cause 47/31). These mirror Sigma's working format:
-# A=3536+8 (12-digit), B=2136+7 (11-digit). Regenerate with:
-#   gen_loop_csv --oad-code 3536 --dad-zone "Algeria-Mobile" --dad-length 11
+# (3536 is the Dory-UK box's key, not ours.) These DO match + route on 169.100,
+# but the call answers then drops cause 47/31 with no return media UNTIL the
+# switch route's mediain() is changed from the inline g711alaw-only block to the
+# shared mediain(DORY) profile (the working TO_DORY_UK route uses that).
 cat > "$NUMBERS" <<'CSV'
 SEQUENTIAL
-353604332181;21360013389
-353683863794;21362654235
-353616155940;21368161849
+2341043321819;213600133890
+2341863794026;213642351161
+2341594078161;213695931034
 CSV
 
 # ── locate (or build) the looped PCMA media sample ───────────────────────────
