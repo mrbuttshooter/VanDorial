@@ -28,7 +28,7 @@ die()  { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$REPO/setup.py" ] && [ -d "$REPO/gencall" ] || die "Run from inside the unzipped bundle (setup.py not found)."
 WHEELHOUSE="$REPO/vendor/wheelhouse"
-[ -d "$WHEELHOUSE" ] && ls "$WHEELHOUSE"/*.whl >/dev/null 2>&1 || die "Wheelhouse missing: $WHEELHOUSE (this must be the OFFLINE bundle, not the plain repo zip)."
+[ -d "$WHEELHOUSE" ] && ls "$WHEELHOUSE"/*.whl >/dev/null 2>&1 || die "Wheelhouse missing: $WHEELHOUSE — use the release bundle (it ships the wheels), or build one on an online box of the same Python: deploy/build-wheelhouse.sh."
 RTP_LO="${RTP_RANGE%-*}"; RTP_HI="${RTP_RANGE#*-}"
 
 # ── 0. Role: worker (headless) or controller (full console / web app) ─────────
@@ -58,6 +58,15 @@ command -v python3 >/dev/null || die "python3 missing"
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' || die "Need Python >= 3.10 (have $(python3 -V))"
 python3 -c 'import venv' 2>/dev/null || die "python3-venv missing (apt install python3-venv)"
 ok "Python: $(python3 -V 2>&1)"
+# The wheelhouse's native wheels (uvloop, pydantic_core, psycopg2, …) are locked to
+# a Python ABI (cp3X). A box on a different Python would fail later with a cryptic
+# pip error — catch it here with a clear fix.
+PYTAG="cp$(python3 -c 'import sys;print(f"{sys.version_info[0]}{sys.version_info[1]}")')"
+if ls "$WHEELHOUSE"/*-cp3*-*.whl >/dev/null 2>&1 && ! ls "$WHEELHOUSE"/*-"${PYTAG}"-*.whl >/dev/null 2>&1; then
+  HAVE="$(ls "$WHEELHOUSE"/*-cp3*-*.whl 2>/dev/null | sed -E 's/.*-(cp3[0-9]+)-.*/\1/' | sort -u | tr '\n' ' ')"
+  die "Wheelhouse built for [${HAVE}] but this box is ${PYTAG}. Rebuild it on a ${PYTAG} box: deploy/build-wheelhouse.sh (or install a matching Python)."
+fi
+ok "wheelhouse matches this box ($PYTAG)"
 
 # ── 2. Service user ───────────────────────────────────────────────────────────
 id "$GC_USER" >/dev/null 2>&1 || { useradd --system --create-home --shell /usr/sbin/nologin "$GC_USER"; ok "created system user '$GC_USER'"; }
