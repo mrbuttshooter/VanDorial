@@ -42,6 +42,7 @@ import io
 import logging
 import os
 import random
+import socket
 import tempfile
 import threading
 import uuid
@@ -68,6 +69,27 @@ UAS_TEMPLATE = os.path.join(_TEMPLATE_DIR, "loop_uas.xml")
 # media action is injected when a campaign has RTP enabled. Replaced with a
 # play_pcap_audio exec; left as a harmless comment for signaling-only loops.
 _RTP_HOOK = "<!-- RTP_HOOK -->"
+
+def _detect_primary_ip() -> str:
+    """Best-effort primary (default-route) IPv4 of this host, or "" if unknown.
+
+    Used as the UAS ``-i``/``-mi`` when ``[sip] local_ip`` is unset, so the answer
+    side never advertises ``127.0.0.1`` in its SDP. A loopback media address is a
+    silent one-way-audio trap: the switch loops the call back to the UAS, reads
+    ``c=IN IP4 127.0.0.1``, has nowhere to send return media, and tears the call
+    down (Q.850 cause 47/127). Opens an unconnected UDP socket toward a public
+    address (sends NO packets) and reads the local end the kernel would route
+    through. Override with ``[sip] local_ip`` on a multi-homed box.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
 
 # The single UAS instance always carries this fixed engine-internal id so the
 # answer side is addressable without a campaign.
@@ -212,12 +234,24 @@ class LoopEngine:
         # timeout (SIPp does not substitute -key keywords inside the timeout
         # attribute), so we no longer pass -key duration_max_s here.
         extra = "-rtp_echo"
+        # SIP-facing bind for -i/-mi. A pure answer scenario has no remote to
+        # auto-detect an egress IP from, so a blank local_ip makes SIPp advertise
+        # c=IN IP4 127.0.0.1 in the UAS SDP — the switch then can't return media
+        # and every looped call dies cause 47/127 (a day-long one-way-audio trap).
+        # Fall back to the host's primary IP so we never advertise loopback.
+        uas_ip = self.config.sip_local_ip or _detect_primary_ip()
+        if not self.config.sip_local_ip:
+            logger.info(
+                "[sip] local_ip unset; UAS binds/advertises auto-detected primary "
+                "IP %r (set [sip] local_ip explicitly on a multi-homed box).",
+                uas_ip or "(detect failed — SIPp default)",
+            )
         return SIPpInstance(
             id=UAS_INSTANCE_ID,
             scenario_file=UAS_TEMPLATE,
             remote_host="0.0.0.0",   # UAS does not originate; placeholder target
             remote_port=self.config.web_port,  # unused by a pure answer scenario
-            local_ip=self.config.sip_local_ip,  # SIP-facing bind (-i/-mi); "" = all ifaces
+            local_ip=uas_ip,  # SIP-facing bind (-i/-mi); never blank -> never 127.0.0.1
             local_port=5060,
             mode=SIPpMode.UAS,
             transport=transport,
