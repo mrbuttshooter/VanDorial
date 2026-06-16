@@ -11,11 +11,17 @@
       puts a port in Via and Contact. A port in the R-URI is harmless for the
       dialed-number lookup but we mirror Dory exactly.
     * User-Agent: teles, Expires: 15, Allow, Accept  (all present on Dory).
-    * SDP advertises PCMA + G729(annexb) + telephone-event, o=Dory, s=SIP Call,
-      no ptime/sendrecv, byte-for-byte the Dory offer. (Confirmed on the wire:
-      the proven-working Sigma Algeria loop offers this exact "RTP/AVP 8 18 101"
-      with G729 and completes normally — so G729 in the offer is NOT the cause
-      of the cause-47 drops seen toward 208.87.169.100; do not strip it.)
+    * SDP advertises PCMA (g711alaw) + telephone-event ONLY — NO G729. We MUST
+      offer only what rtp_stream can actually send: it streams g711a.raw as PCMA
+      (PT 8, hardcoded in loop_engine._uac_scenario), and there is no G729 media
+      file. On a manual-anchor / no-transcode route (ibcmac=manual, ibctrans=
+      never) the codec is negotiated end-to-end, so if we offer G729b the far end
+      (e.g. STC Morocco) picks it and answers G729b — then our PCMA RTP lands on a
+      G729b session and the call dies with Q.850 cause=47/127 ("Interworking").
+      Proven on the wire: with G729 in the offer, RTP-on = 0 normal-clears vs
+      RTP-off = a few; PCMA-only locks negotiation to the codec we really send.
+      (The working Sigma box offers 8 18 101 because it streams the *negotiated*
+      codec; GenCall can't, so it offers PCMA-only.)
     * No Max-Forwards header; Dory omits it and the SBC accepts the call, so we
       omit it too to keep the message identical.
 
@@ -62,9 +68,7 @@
       s=SIP Call
       c=IN IP[media_ip_type] [media_ip]
       t=0 0
-      m=audio [auto_media_port] RTP/AVP 8 18 101
-      a=rtpmap:18 G729/8000
-      a=fmtp:18 annexb=yes
+      m=audio [auto_media_port] RTP/AVP 8 101
       a=rtpmap:8 PCMA/8000
       a=rtpmap:101 telephone-event/8000
       a=fmtp:101 0-15
