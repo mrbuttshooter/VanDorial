@@ -43,20 +43,28 @@ UAC_XML="$($COMPOSE exec -T gencall sh -c 'find / -name loop_uac.xml 2>/dev/null
 [ -n "$UAS_XML" ] && [ -n "$UAC_XML" ] || { bad "could not locate the loop scenario templates in the image"; exit 1; }
 ok "templates: $UAS_XML / $UAC_XML"
 
-# A scenario that fails to load makes sipp exit FAST with a parse/keyword error.
-# A scenario that loads OK sits waiting and is killed by 'timeout' (rc 124). So:
-# rc 124  -> loaded fine;  any error text -> load failure.
+# A scenario that fails to load makes sipp exit FAST and non-zero (a parse/keyword
+# error, or a bad command line -> usage dump). A scenario that loads OK sits
+# waiting and is killed by 'timeout' (rc 124). So load_check treats ONLY rc 124 as
+# success; ANY other exit (with or without matching error/usage text) is a load
+# failure. The rc-124 requirement is what keeps the gate sound even if the
+# error-text regex below misses a particular sipp build's reject message.
 load_check() {  # load_check <label> <sipp args...>
   local label="$1"; shift
   local out rc
   out="$($COMPOSE exec -T gencall sh -c "timeout 4 sipp $* 2>&1; echo RC=\$?" || true)"
   rc="$(printf '%s' "$out" | sed -n 's/.*RC=\([0-9]*\)$/\1/p' | tail -1)"
-  if printf '%s' "$out" | grep -qiE 'unknown (keyword|command)|syntax error|aborting|unable to load|error opening|bad (scenario|message)'; then
+  if printf '%s' "$out" | grep -qiE 'unknown (keyword|command)|syntax error|aborting|unable to load|error opening|bad (scenario|message)|unrecognized( command line)? option|command-line option|usage:'; then
     bad "$label scenario FAILED to load on real sipp:"
-    printf '%s\n' "$out" | grep -iE 'unknown|syntax|abort|error|bad' | head -5 | sed 's/^/        /'
+    printf '%s\n' "$out" | grep -iE 'unknown|syntax|abort|error|bad|unrecognized|usage' | head -5 | sed 's/^/        /'
     return 1
   fi
-  # rc 124 = killed by timeout while running = loaded OK.
+  # rc 124 = killed by timeout while running = loaded OK. Anything else means
+  # sipp exited on its own (e.g. a bad command line) rather than running.
+  if [ "${rc:-0}" != "124" ]; then
+    bad "$label scenario did not load (sipp exited rc=${rc:-?} instead of running)"
+    return 1
+  fi
   ok "$label scenario loads on real sipp (rc=${rc:-?})"
   return 0
 }
@@ -66,9 +74,9 @@ $COMPOSE exec -T gencall sh -c 'printf "SEQUENTIAL\n1000;2000;2000\n" > /tmp/smo
 
 A_OK=0
 load_check "UAS (answer)" \
-  "-sf $UAS_XML -i 127.0.0.1 -p 5098 -mi 127.0.0.1 -min_rtp_port $RTP_LO -max_rtp_port $RTP_HI -rtp_echo -key duration_max_s 60 -m 1" || A_OK=1
+  "-sf $UAS_XML -i 127.0.0.1 -p 5098 -mi 127.0.0.1 -mp $RTP_LO -rtp_echo -key duration_max_s 60 -m 1" || A_OK=1
 load_check "UAC (originate)" \
-  "127.0.0.1:5098 -sf $UAC_XML -inf /tmp/smoke_pairs.inf -i 127.0.0.1 -p 5097 -min_rtp_port $((RTP_LO+2)) -max_rtp_port $RTP_HI -m 1 -l 1 -r 1" || A_OK=1
+  "127.0.0.1:5098 -sf $UAC_XML -inf /tmp/smoke_pairs.inf -i 127.0.0.1 -p 5097 -mp $((RTP_LO+2)) -m 1 -l 1 -r 1" || A_OK=1
 
 if [ "$A_OK" -ne 0 ]; then
   say "RESULT: Part A FAILED — a scenario does not load on real sipp. Do NOT run live traffic."
@@ -86,8 +94,6 @@ cat <<EOF
 
    1) Allow the box to call itself, then restart the worker:
         printf '\n[loops]\ndest_allowlist = 127.0.0.1\n' >> gencall/etc/gencall.cfg
-        # also trust the self-call's source so it isn't flagged:
-        #   add 127.0.0.1 to [trust] whitelist in gencall/etc/gencall.cfg
         $COMPOSE restart gencall
 
    2) Grab your API key (shown once at first boot):

@@ -120,7 +120,7 @@ PIP="$INSTALL_DIR/venv/bin/pip"
 "$PIP" install --no-index --no-build-isolation -e "$INSTALL_DIR"
 ok "Python libs + gencall installed offline"
 
-# ── 5. Configuration (system sipp, RTP window, MADA whitelist) ────────────────
+# ── 5. Configuration (system sipp, RTP window) ────────────────────────────────
 say "Writing configuration"
 CFG="$INSTALL_DIR/gencall/etc/gencall.cfg"
 set_cfg() { # section key value
@@ -146,12 +146,6 @@ if command -v setcap >/dev/null 2>&1; then
     && ok "granted cap_net_raw to $SIPP_BIN (RTP media)" \
     || warn "could not setcap $SIPP_BIN — RTP-media loops need: sudo setcap cap_net_raw+ep $SIPP_BIN"
 fi
-MADA="${MADA_IPS:-}"
-if [ -z "$MADA" ]; then
-  read -rp "   MADA signalling IP(s) for the inbound whitelist [blank = set later]: " MADA || true
-fi
-[ -n "$MADA" ] && { set_cfg trust whitelist "$MADA"; ok "[trust] whitelist = $MADA"; } \
-               || warn "trust whitelist empty — inbound calls will be FLAGGED until you set it"
 ok "config: sipp=$SIPP_BIN, RTP $RTP_LO-$RTP_HI, DB=SQLite"
 
 # DB URL the worker uses (SQLite) — also used to mint the API key right now.
@@ -233,7 +227,7 @@ else
 fi
 echo
 echo "   FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to"
-echo "   the MADA whitelist (${MADA:-<set this>}).  Rules: docs/deploy/loop-runner.md section 2"
+echo "   the MADA signalling IP(s).  Rules: docs/deploy/loop-runner.md section 2"
 echo
 echo "   Manage keys:  ${INSTALL_DIR}/venv/bin/gencall keys list"
 echo "   Logs:         journalctl -u gencall-worker -f"

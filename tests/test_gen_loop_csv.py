@@ -52,9 +52,9 @@ def test_zone_pairs_start_with_zone_codes(zones):
     assert len(pairs) == 50
     for a, b in pairs:
         assert a.isdigit() and b.isdigit()
-        # Valid E.164 lengths by country (Nigeria 234 -> 13, Guinea 224 -> 12),
+        # Valid E.164 lengths: Nigeria-Lagos is a LANDLINE (2341 -> 11 = 234+1+7),
         # NOT a flat length — a wrong-length dialed number is what MADA 404'd.
-        assert len(a) == 13 and len(b) == 12
+        assert len(a) == 11 and len(b) == 12
         assert a.startswith("2341")                       # oad zone code
         # Spreading the Orange zone must NEVER draw the unroutable 2247x
         # breakouts — only the routable 22462 (see ROUTABLE_ALLOWLIST).
@@ -100,8 +100,30 @@ def test_env_routable_override(zones, monkeypatch):
 
 def test_e164_length_by_country_and_override():
     assert g.e164_total_length("22462", 11) == 12        # Guinea
-    assert g.e164_total_length("2341", 11) == 13         # Nigeria
+    assert g.e164_total_length("2341", 11) == 11         # Nigeria-Lagos landline (sub-country override beats 234->13)
     assert g.e164_total_length("99999", 11) == 11        # unknown -> fallback
+
+
+def test_e164_backfill_codes_have_known_lengths():
+    # Codes backfilled so deck zones no longer silently pad to --length.
+    assert g.e164_total_length("855", 11) == 12          # Cambodia
+    assert g.e164_total_length("856", 11) == 13          # Laos
+    assert g.e164_total_length("673", 11) == 10          # Brunei
+    assert g.e164_total_length("679", 11) == 10          # Fiji
+    assert g._has_e164_entry("85512345")                 # 855 prefix known
+    assert not g._has_e164_entry("99988877")             # 999 unknown -> fallback
+
+
+def test_generate_pairs_warns_on_unknown_code(caplog):
+    # A dialed code with no E164_TOTAL_LEN entry pads to --length and WARNS, so a
+    # potential wrong-length (cause-3 'no route') number is visible, not silent.
+    import logging
+    with caplog.at_level(logging.WARNING, logger="gencall.gen_loop_csv"):
+        pairs = g.generate_pairs(
+            {}, oad_code="999", dad_code="999", count=3, length=11, seed=5)
+    assert len(pairs) == 3
+    assert all(len(a) == 11 and len(b) == 11 for a, b in pairs)
+    assert any("no E.164 length known" in r.message for r in caplog.records)
 
 
 def test_per_side_length_override(zones):

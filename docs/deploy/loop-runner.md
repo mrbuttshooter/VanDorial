@@ -11,11 +11,11 @@ published port, and publishing the RTP range (thousands of UDP ports) OOMs a
 small host. Host networking puts SIPp's signalling + media straight on the host
 NIC with no per-port proxy.
 
-Because the worker is on host networking, **the host firewall is the real trust
-boundary** (design §4.1). Docker does not gate inbound SIP/RTP here — nftables
-or ufw does. The app layer only *verifies* (it tags each inbound call with its
-`source_ip` and flags anything outside the whitelist, so a misconfigured
-firewall is visible), it does not enforce. Get the firewall right.
+Because the worker is on host networking, **the host firewall is the real (and
+only) trust boundary** (design §4.1). Docker does not gate inbound SIP/RTP here —
+nftables or ufw does, and the upstream switch only sends from its own IPs. The
+app layer records each inbound call's `source_ip` for visibility but does not
+verify or enforce it. Get the firewall right.
 
 ---
 
@@ -59,17 +59,13 @@ In `gencall/etc/gencall.cfg`:
 min_rtp_port = 16384
 max_rtp_port = 16584
 
-[trust]
-# MADA signalling IP(s) — the inbound whitelist. Comma/space separated.
-whitelist = 203.0.113.10, 203.0.113.11
-
 [retention]
 call_records_days = 30
 interval_hours = 24
 ```
 
-Keep `[trust] whitelist` and the firewall rules (below) in sync — they describe
-the same trust boundary from two layers.
+The host firewall (below) is the trust boundary — the switch only sends from its
+own IPs.
 
 ---
 
@@ -218,4 +214,5 @@ After a deploy, run a 50-loop campaign for ~1 h from the console and confirm:
   (startup reconciliation kills stale PIDs from `managed_processes`).
 - Completion % on the Loops page tracks MADA's own returned-call counters.
 - Every inbound `call_record` carries a `source_ip` inside the whitelist (if any
-  are flagged outside it, the firewall and `[trust] whitelist` are out of sync).
+  are flagged outside it, the firewall whitelist is letting through unexpected
+  sources — tighten the rules in §2).

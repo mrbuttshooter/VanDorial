@@ -359,35 +359,6 @@ class Config:
         raw = self.get("loops", "dest_allowlist", "") or ""
         return [tok for tok in raw.replace(",", " ").split() if tok]
 
-    # --- Trust filter / inbound whitelist (design §4.1) ---
-    # The REAL security boundary is the host firewall (the deploy docs ship the
-    # nftables/ufw rule set restricting UDP/5060 + the RTP range to these IPs).
-    # The app layer is verification-only: the parser tags each inbound record
-    # with its source_ip and flags/drops anything outside this list, so a
-    # misconfigured firewall is *visible* rather than silently trusted.
-    @property
-    def trust_whitelist(self):
-        """Allowed inbound SIP source IPs/CIDRs (MADA + any extras).
-
-        Comma- or whitespace-separated in the config; returned as a list of
-        non-empty tokens. Empty by default — an empty list means "nothing is
-        verified as trusted" so a forgotten whitelist surfaces in the records
-        (every inbound call flagged) rather than being silently accepted.
-        """
-        raw = self.get("trust", "whitelist", "") or ""
-        return [tok for tok in raw.replace(",", " ").split() if tok]
-
-    @property
-    def trust_drop_untrusted(self):
-        """Drop (vs. flag-and-keep) inbound records from outside the whitelist.
-
-        Default False: a non-whitelisted inbound record is KEPT but flagged
-        untrusted so a misconfigured firewall is visible in the records rather
-        than silently discarded. Set [trust] drop_untrusted = true to drop them
-        (the host firewall remains the real boundary either way, design §4.1).
-        """
-        return self.getbool("trust", "drop_untrusted", False)
-
     # --- Retention (design §5 retention, §7 stage 10) ---
     # The interval-gated pruner for the call_records growth table. Defaults tuned
     # for the 4 GB box; the interval gate (never per-iteration) is what keeps us

@@ -9,12 +9,15 @@ regression that re-introduces them fails CI on a plain box:
     real dialer).
   * RTP echo port — ``-mp`` is ALWAYS emitted with a UNIQUE base port per instance
     so media lands inside the firewalled range and no two SIPps collide (exit 254).
-    ``-min_rtp_port``/``-max_rtp_port`` are NOT valid SIPp options and must never appear.
+    The engine standardizes on ``-mp`` (the only RTP-port flag on SIPp 3.6.1, and a
+    valid alias for ``-min_rtp_port`` on 3.7.3), so the range flags never appear.
   * ``-i`` AND ``-mi`` when a local bind IP is set, so signalling and media share
     the SIP-facing interface (SDP matches the -rtp_echo socket).
   * stderr is discarded (DEVNULL) on launch — an unread stderr PIPE can deadlock
     a busy SIPp; SIPp's own -trace_err file carries the detail.
 """
+
+import pytest
 
 from gencall.core.config import Config
 from gencall.core.sipp_engine import (
@@ -23,6 +26,15 @@ from gencall.core.sipp_engine import (
     SIPpState,
     SIPpTransport,
 )
+
+
+class _WinCfg:
+    """Minimal config exposing just the RTP window + file limit (allocator tests)."""
+
+    def __init__(self, lo, hi):
+        self.min_rtp_port = lo
+        self.max_rtp_port = hi
+        self.sipp_file_limit = 256
 
 
 def _instance(**kw):
@@ -44,9 +56,9 @@ def test_build_command_has_no_bg_flag(stub_sipp):
 
 
 def test_build_command_pins_rtp_echo_port_with_mp(stub_sipp):
-    """RTP echo media port uses SIPp's real -mp flag, pinned inside the config
-    window. -min_rtp_port/-max_rtp_port are NOT valid SIPp options (they make
-    sipp reject the command line) and must never be emitted."""
+    """RTP echo media port uses SIPp's -mp flag, pinned inside the config window.
+    The engine standardizes on -mp (the only RTP-port flag on 3.6.1, an alias for
+    -min_rtp_port on 3.7.3), so the range flags must never be emitted."""
     inst = _instance()
     cmd = inst.build_command(stub_sipp.config)
     assert "-mp" in cmd
@@ -190,3 +202,31 @@ def test_double_start_of_same_id_is_refused(stub_sipp):
         assert engine.start_instance(again) is False
     finally:
         engine.stop_all()
+
+
+def test_alloc_media_port_raises_when_window_exhausted():
+    """When the RTP window is exhausted the allocator RAISES (a clean capacity
+    error) instead of returning a colliding base port — the old behaviour handed
+    back min_rtp_port, which the UAS already held, so the next SIPp exited 254."""
+    from gencall.core.sipp_engine import SIPpEngine
+
+    eng = SIPpEngine(config=_WinCfg(16384, 16394))  # exactly 3 base slots
+    assert [eng._alloc_media_port() for _ in range(3)] == [16384, 16388, 16392]
+    with pytest.raises(RuntimeError, match="exhausted"):
+        eng._alloc_media_port()
+
+
+def test_release_media_port_zeroes_and_frees():
+    """Releasing a port frees it for reuse AND zeroes the instance's media_port,
+    so a later release of the same stopped instance cannot discard a port that
+    has since been re-allocated to another instance."""
+    from gencall.core.sipp_engine import SIPpEngine
+
+    eng = SIPpEngine(config=_WinCfg(16384, 16394))
+    inst = _instance()
+    inst.media_port = eng._alloc_media_port()
+    assert inst.media_port == 16384
+    eng._release_media_port(inst)
+    assert inst.media_port == 0                  # zeroed -> re-release is a no-op
+    assert 16384 not in eng._media_ports_used    # freed
+    assert eng._alloc_media_port() == 16384       # reused

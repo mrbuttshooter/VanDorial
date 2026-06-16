@@ -67,7 +67,7 @@ USER 0
 # the -devel headers) is installed, used, and then REMOVED in the same layer so
 # none of it survives into the final image — only the runtime shared libs
 # (libpcap, openssl) and the sipp binary remain. This keeps the image lean.
-ARG SIPP_VERSION=v3.7.3
+ARG SIPP_VERSION=v3.7.7
 RUN set -eux; \
     dnf install -y --nodocs --setopt=install_weak_deps=False \
         libpcap-devel openssl-devel ncurses-devel \

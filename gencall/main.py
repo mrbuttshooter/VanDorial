@@ -193,16 +193,10 @@ def create_app(config_path: str = None):
     # <log> file into call_records — the table EVERY minutes/completion stat is
     # computed from. Without this wiring call_records stays empty and all loop
     # accounting reads 0. The LoopEngine registers each UAC/UAS instance's log
-    # path with this parser on start (and removes it on stop). The §4.1 trust
-    # filter (config [trust] whitelist / drop_untrusted) lives here too, so it is
-    # actually applied instead of being dead code.
+    # path with this parser on start (and removes it on stop).
     from gencall.core.call_records import CallRecordParser
 
-    call_parser = CallRecordParser(
-        db=db,
-        trust_whitelist=config.trust_whitelist,
-        drop_untrusted=config.trust_drop_untrusted,
-    )
+    call_parser = CallRecordParser(db=db)
     loop_engine.parser = call_parser
     loops_api.call_parser = call_parser
     call_parser.start()

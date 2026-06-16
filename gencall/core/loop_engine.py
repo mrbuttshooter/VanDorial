@@ -167,16 +167,9 @@ class LoopEngine:
         no-op. Returns True if the UAS is running on return.
         """
         with self._lock:
-            # Prominent boundary warning: with no trust whitelist the app layer
-            # verifies nothing, so the host firewall is the ONLY thing keeping a
-            # 0.0.0.0:5060 UAS from answering the open internet.
-            if not self.config.trust_whitelist:
-                logger.warning(
-                    "UAS answering 0.0.0.0:5060 with empty trust whitelist — "
-                    "firewall is the ONLY boundary. Set [trust] whitelist to the "
-                    "MADA source IPs/CIDRs so inbound calls are verified."
-                )
-
+            # The host firewall (and the upstream switch) are the trust boundary
+            # for the 0.0.0.0:5060 UAS — the app layer does not re-verify inbound
+            # source IPs.
             existing = self.engine.get_instance(UAS_INSTANCE_ID)
             if existing is not None and existing.state == SIPpState.RUNNING:
                 self._ensure_monitor()

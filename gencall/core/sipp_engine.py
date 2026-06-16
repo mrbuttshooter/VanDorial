@@ -201,12 +201,13 @@ class SIPpInstance:
             cmd.extend(["-mi", self.local_ip])
         cmd.extend(["-p", str(self.local_port)])
 
-        # RTP echo media port. SIPp's real option is -mp (the local RTP echo base
-        # port; it also echoes on +2) — there is NO -min_rtp_port/-max_rtp_port in
-        # SIPp, and passing them makes sipp reject the whole command line and dump
-        # usage. Pin -mp inside the firewalled range so return media is not dropped.
-        # The UAS and each UAC get distinct media_port values (set by the
-        # LoopEngine) so two sipp processes on one host never collide on a port.
+        # RTP base media port. We pin -mp (the local RTP base port; SIPp also
+        # echoes on +2). -mp works on every SIPp we target: on 3.6.1 it is the
+        # only RTP-port flag; 3.7.0 replaced it with -min_rtp_port/-max_rtp_port
+        # and 3.7.3 RESTORED -mp as an alias for -min_rtp_port, so a single -mp is
+        # correct on both. Pin it inside the firewalled range so return media is
+        # not dropped. The UAS and each UAC get a distinct media_port (assigned by
+        # _alloc_media_port) so two sipp processes on one host never collide.
         media_port = self.media_port if self.media_port > 0 else config.min_rtp_port
         cmd.extend(["-mp", str(media_port)])
 
@@ -322,8 +323,11 @@ class SIPpEngine:
         """Reserve a unique even RTP base port in [min_rtp_port, max_rtp_port].
 
         Stepped by 4 to leave room for RTP (p), RTCP (p+1) and the -rtp_echo
-        mirror (p+2). Caller must hold self._lock. Falls back to min_rtp_port if
-        the window is exhausted (logged) rather than failing the launch.
+        mirror (p+2). Caller must hold self._lock. Raises RuntimeError when the
+        window is exhausted: it previously returned min_rtp_port, which the UAS
+        already holds, so the colliding SIPp exited 254 ("Address already in
+        use") at launch — an opaque failure. Failing loudly surfaces it as a
+        clean capacity error the caller turns into a failed start instead.
         """
         lo = self.config.min_rtp_port
         hi = self.config.max_rtp_port
@@ -333,13 +337,19 @@ class SIPpEngine:
                 self._media_ports_used.add(p)
                 return p
             p += 4
-        logger.warning("RTP port window %d-%d exhausted; reusing %d", lo, hi, lo)
-        return lo
+        raise RuntimeError(
+            f"RTP port window {lo}-{hi} exhausted ({len(self._media_ports_used)} "
+            f"base ports in use); widen [sip] min_rtp_port/max_rtp_port (and the "
+            f"firewall) to run more concurrent SIPp instances"
+        )
 
     def _release_media_port(self, instance: "SIPpInstance") -> None:
         port = getattr(instance, "media_port", 0)
         if port:
             self._media_ports_used.discard(port)
+            # Zero it so a later release of the same (stopped) instance cannot
+            # discard a port that has since been re-allocated to another instance.
+            instance.media_port = 0
 
     def _set_file_limit(self):
         """Set the open file limit for SIPp."""
@@ -364,7 +374,13 @@ class SIPpEngine:
             # Assign a unique RTP base port (or register an explicitly-set one) so
             # no two SIPp instances bind the same -mp and collide (exit 254).
             if not getattr(instance, "media_port", 0):
-                instance.media_port = self._alloc_media_port()
+                try:
+                    instance.media_port = self._alloc_media_port()
+                except RuntimeError as e:
+                    instance.state = SIPpState.ERROR
+                    instance.error_message = str(e)
+                    logger.error("Cannot start instance %s: %s", instance.id, e)
+                    return False
             else:
                 self._media_ports_used.add(instance.media_port)
             # Set STARTING synchronously while we still hold the engine lock so a
@@ -411,6 +427,8 @@ class SIPpEngine:
                 )
                 logger.error("SIPp failed to start (exit %s): %s",
                              exit_code, instance.error_message)
+                with self._lock:
+                    self._release_media_port(instance)
                 return False
 
             instance.state = SIPpState.RUNNING
@@ -457,11 +475,15 @@ class SIPpEngine:
             instance.state = SIPpState.ERROR
             instance.error_message = f"SIPp binary not found: {self.config.sipp_command}"
             logger.error(instance.error_message)
+            with self._lock:
+                self._release_media_port(instance)
             return False
         except Exception as e:
             instance.state = SIPpState.ERROR
             instance.error_message = str(e)
             logger.exception("Failed to start SIPp instance %s", instance.id)
+            with self._lock:
+                self._release_media_port(instance)
             return False
 
     def stop_instance(self, instance_id: str) -> bool:
@@ -580,6 +602,13 @@ class SIPpEngine:
                             self.registry.clear(instance._process.pid)
                         except Exception:
                             pass
+                    # Release the RTP base port: a UAC that exits on its own
+                    # (target reached / crash) is reaped here, and without this
+                    # its -mp port would leak — the finite window would exhaust
+                    # after ~N cumulative campaigns, long before N run at once.
+                    # Idempotent with stop_instance/remove_instance (port zeroed).
+                    with self._lock:
+                        self._release_media_port(instance)
                     if exit_code == 0:
                         instance.state = SIPpState.STOPPED
                         logger.info("SIPp instance %s completed normally", instance.id)

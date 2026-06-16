@@ -339,9 +339,8 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
     started through the wired LoopEngine lands records in call_records.
 
     Proves the production wiring (not just isolated units): the parser is
-    instantiated in create_app, attached to the LoopEngine, started, and given
-    the trust whitelist. This is the BLOCKER the review flagged (parser never
-    instantiated in main.py).
+    instantiated in create_app, attached to the LoopEngine, and started. This
+    is the BLOCKER the review flagged (parser never instantiated in main.py).
     """
     import textwrap
 
@@ -362,9 +361,6 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
             [database]
             engine = sqlite
             sqlite_path = {db_path}
-
-            [trust]
-            whitelist = 10.0.0.0/24
             """
         ),
         encoding="utf-8",
@@ -383,10 +379,8 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
     try:
         le = loops_api.loop_engine
         parser = le.parser
-        # The parser was instantiated, wired to the engine, and carries the
-        # configured trust whitelist (proving config.trust_whitelist is passed).
+        # The parser was instantiated, wired to the engine, and started.
         assert parser is not None, "create_app must wire a CallRecordParser"
-        assert parser.trust_whitelist == ["10.0.0.0/24"]
 
         # Start a finite campaign through the wired engine.
         campaign = le.start_campaign(
@@ -929,8 +923,6 @@ def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
         [database]
         engine = sqlite
         sqlite_path = {db_path}
-        [trust]
-        whitelist = 10.0.0.0/24
         """), encoding="utf-8")
 
     Config.reset()

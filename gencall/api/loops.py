@@ -934,7 +934,7 @@ class GenerateNumbersRequest(BaseModel):
     dest_zone: str
     origin_code: str = ""          # optional: pin one code instead of spreading
     dest_code: str = ""
-    count: int = Field(default=500000, ge=1, le=5_000_000)
+    count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=11, ge=4, le=18)
     seed: Optional[int] = None
 

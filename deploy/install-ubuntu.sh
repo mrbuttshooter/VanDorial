@@ -8,7 +8,7 @@
 #     sudo ./deploy/install-ubuntu.sh
 #
 # It is idempotent (safe to re-run). Override prompts with env vars, e.g.:
-#     PG_PASSWORD=xxx RTP_RANGE=16384-16584 MADA_IPS="203.0.113.10" sudo -E ./deploy/install-ubuntu.sh
+#     PG_PASSWORD=xxx RTP_RANGE=16384-16584 sudo -E ./deploy/install-ubuntu.sh
 #
 # Target: Ubuntu 22.04 / 24.04, 4 vCPU / 4 GB. Needs UDP/5060 free (do NOT co-locate
 # with sigma on the same box unless you change GenCall's SIP port).
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 INSTALL_DIR=/opt/gencall
-SIPP_VERSION="${SIPP_VERSION:-v3.7.3}"
+SIPP_VERSION="${SIPP_VERSION:-v3.7.7}"
 GC_USER=gencall
 RTP_RANGE="${RTP_RANGE:-16384-16584}"
 PORT="${PORT:-8080}"          # web/API port — override e.g. PORT=8000
@@ -128,7 +128,7 @@ python3 -m venv "$INSTALL_DIR/venv"
 printf '%s' "$PG_PASSWORD" > "$INSTALL_DIR/.dbpass"; chmod 600 "$INSTALL_DIR/.dbpass"
 ok "venv built + package installed"
 
-# ── 6. Configure gencall.cfg (RTP window, SIPp path, MADA whitelist) ──────────
+# ── 6. Configure gencall.cfg (RTP window, SIPp path) ──────────────────────────
 say "Writing configuration"
 CFG="$INSTALL_DIR/gencall/etc/gencall.cfg"
 set_cfg() { # section key value
@@ -149,12 +149,6 @@ set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
 # Headless worker => no console/web app + no live-stats WebSocket; controller => full console.
 set_cfg web serve_console "$SERVE_CONSOLE"
-MADA="${MADA_IPS:-}"
-if [ -z "$MADA" ]; then
-  read -rp "   MADA signalling IP(s) for the inbound whitelist [blank = set later]: " MADA || true
-fi
-[ -n "$MADA" ] && { set_cfg trust whitelist "$MADA"; ok "[trust] whitelist = $MADA"; } \
-               || warn "trust whitelist empty — inbound calls will be FLAGGED until you set it"
 ok "config written ($CFG); RTP $RTP_LO-$RTP_HI, sipp=/usr/local/bin/sipp"
 
 # DB URL the worker uses — also used to mint the API key right now.
@@ -262,7 +256,7 @@ else
 fi
 echo
 echo "   FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to"
-echo "   the MADA whitelist (${MADA:-<set this>}).  Rules: docs/deploy/loop-runner.md section 2"
+echo "   the MADA signalling IP(s).  Rules: docs/deploy/loop-runner.md section 2"
 echo
 echo "   Manage keys:  ${INSTALL_DIR}/venv/bin/gencall keys list"
 echo "   Logs:         journalctl -u gencall-worker -f"

@@ -170,6 +170,10 @@ E164_TOTAL_LEN = {
     "60": 11, "61": 11, "62": 12, "63": 12, "64": 11, "65": 10, "66": 11,
     "81": 12, "82": 12, "84": 11, "86": 13, "90": 12, "91": 12, "92": 12,
     "93": 11, "94": 11, "95": 11, "98": 12,
+    # Backfill for deck zones the table previously padded to the --length
+    # fallback (Brunei/Fiji/Hong Kong/Macau/Cambodia/Laos). generate_pairs warns
+    # on any code that STILL has no entry so the remaining gaps stay visible.
+    "673": 10, "679": 10, "852": 11, "853": 11, "855": 12, "856": 13,
     "211": 12, "212": 12, "213": 12, "216": 11, "218": 12, "220": 10,
     "221": 12, "222": 11, "223": 11, "224": 12, "225": 13, "226": 11,
     "227": 11, "228": 11, "229": 11, "230": 10, "231": 12, "232": 11,
@@ -218,6 +222,13 @@ def e164_total_length(dialed_code: str, fallback: int) -> int:
         if dialed_code[:n] in E164_TOTAL_LEN:
             return E164_TOTAL_LEN[dialed_code[:n]]
     return fallback
+
+
+def _has_e164_entry(dialed_code: str) -> bool:
+    """True if any leading prefix of ``dialed_code`` has an E164_TOTAL_LEN entry
+    (i.e. its E.164 length is known, not the ``--length`` fallback)."""
+    return any(dialed_code[:n] in E164_TOTAL_LEN
+               for n in range(len(dialed_code), 0, -1))
 
 
 def gen_from_code(code: str, total_len: int, rng: random.Random,
@@ -389,12 +400,15 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
     rng = random.Random(seed)
     a_codes, a_re, a_pat = _side_codes(zones, oad_zone, oad_code, oad_pattern)
     b_codes, b_re, b_pat = _side_codes(zones, dad_zone, dad_code, dad_pattern)
+    fellback: Set[str] = set()  # dialed codes with no known E.164 length
 
     def make(codes, regex, pat, explicit_len) -> str:
         if pat:
             n = gen_from_pattern(pat, explicit_len or length, rng)
             return n if regex.match(n) else make(codes, regex, pat, explicit_len)
         code = rng.choice(codes)
+        if not explicit_len and not _has_e164_entry(code):
+            fellback.add(code)
         target = explicit_len or e164_total_length(code, length)
         return gen_from_code(code, target, rng)
 
@@ -414,6 +428,14 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
         raise RuntimeError(
             f"only generated {len(pairs)}/{count} unique pairs — raise --length "
             "or --allow-dupes (the chosen codes leave too few subscriber digits)")
+    if fellback:
+        _log.warning(
+            "no E.164 length known for dialed code(s) %s — padded to the fallback "
+            "length=%d; a wrong-length number is rejected with cause 3 ('no "
+            "route'). Add an E164_TOTAL_LEN entry or pass --oad-length/"
+            "--dad-length for these zones.",
+            ", ".join(sorted(fellback)), length,
+        )
     return pairs
 
 

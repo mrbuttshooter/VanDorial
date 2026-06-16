@@ -9,9 +9,8 @@
 
   Per-call <log> lines (-trace_logs) feed the CallRecord tail-parser. B-side
   duration = t_bye_received - t_200ok_sent. source_ip is captured from the top Via
-  host of the INVITE (SIPp has no [senderip] keyword) so the parser can flag any
-  call from outside the MADA whitelist (firewall is the real boundary; the app
-  layer is verification-only — design §4.1).
+  host of the INVITE (SIPp has no [senderip] keyword) and recorded for visibility
+  only; the host firewall (and the upstream switch) are the trust boundary.
 
   IMPORTANT — all <log> actions live INSIDE <recv> elements (a standalone <nop>
   between a <send> and the next message makes sipp 3.6 mis-handle the incoming
