@@ -103,9 +103,7 @@ cat > "$SCEN" <<'XML'
       s=SIP Call
       c=IN IP[media_ip_type] [media_ip]
       t=0 0
-      m=audio [auto_media_port] RTP/AVP 8 18 101
-      a=rtpmap:18 G729/8000
-      a=fmtp:18 annexb=yes
+      m=audio [auto_media_port] RTP/AVP 8 101
       a=rtpmap:8 PCMA/8000
       a=rtpmap:101 telephone-event/8000
       a=fmtp:101 0-15
