@@ -237,7 +237,7 @@ def test_health_ok(client, fake_engine):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "2.0.3"
+    assert body["version"] == "2.0.4"
     assert body["name"] == "GenCall"
     assert body["active_tests"] == 0  # nothing running yet
 

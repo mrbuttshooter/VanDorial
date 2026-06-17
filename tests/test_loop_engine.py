@@ -908,6 +908,29 @@ def test_uac_scenario_rtp_rendering(tmp_path):
                       config=_CfgEmpty())._uac_scenario(True) == UAC_TEMPLATE
 
 
+def test_failure_ack_reuses_invite_via_branch():
+    """The non-2xx (label 40) ACK must echo the received Via ([last_Via:]) so its
+    branch matches the INVITE transaction (RFC 3261 §17.1.1.3). A fresh
+    branch=[branch] there does NOT match, so the switch retransmits the 4xx
+    (the Chad 404-flood). The 2xx ACK is a new transaction and keeps [branch]."""
+    from gencall.core.loop_engine import UAC_TEMPLATE
+
+    with open(UAC_TEMPLATE) as fh:
+        template = fh.read()
+    # Isolate the failure-ACK block (from `<label id="40"` to its </send>).
+    after40 = template.split('<label id="40"', 1)[1]
+    fail_ack = after40.split("</send>", 1)[0]
+    assert "CSeq: 102 ACK" in fail_ack, "label-40 block must be the failure ACK"
+    assert "[last_Via:]" in fail_ack, "failure ACK must echo the INVITE's Via"
+    assert "branch=[branch]" not in fail_ack, (
+        "failure ACK must NOT mint a new branch — it would not match the "
+        "INVITE transaction and the switch would keep retransmitting the 4xx"
+    )
+    # The INVITE itself still mints its own branch.
+    invite = template.split("INVITE sip:", 1)[1].split("</send>", 1)[0]
+    assert "branch=[branch]" in invite
+
+
 def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     """FULL new flow through the REAL app + HTTP: add a node (pool generated from
     the sample deck) -> start a loop by node_id -> it runs on the node's IP and

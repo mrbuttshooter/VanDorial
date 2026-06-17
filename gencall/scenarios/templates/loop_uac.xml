@@ -159,12 +159,23 @@
 
   <!-- Failure-ACK: the failure branches jump here. ACK the non-2xx final response
        (CSeq 102, To-tag echoed via [peer_tag_param]) so the switch stops
-       retransmitting it and releases the transaction, then fall through to end. -->
+       retransmitting it and releases the transaction, then fall through to end.
+
+       The ACK for a non-2xx final response is part of the SAME client
+       transaction as the INVITE, so RFC 3261 §17.1.1.3 requires its top Via
+       branch to be IDENTICAL to the INVITE's. SIPp's [branch] is per-message
+       (it embeds the message index), so writing branch=[branch] here mints a
+       NEW branch — the server can't match the ACK to the INVITE transaction and
+       keeps retransmitting the 4xx (observed on the Chad wire: each 404 resent
+       ~10x, flooding the route). Echo the Via from the received failure response
+       instead ([last_Via:]): a server reflects the request's top Via unchanged,
+       so this carries the INVITE's original branch and the ACK matches. (The 2xx
+       ACK below is a NEW transaction and correctly keeps branch=[branch].) -->
   <label id="40" />
   <send>
     <![CDATA[
       ACK sip:[field1]@[remote_ip] SIP/2.0
-      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      [last_Via:]
       From: "[field0]" <sip:[field0]@[local_ip]>;tag=[pid]SIPpTag00[call_number]
       To: <sip:[field1]@[remote_ip]>[peer_tag_param]
       Call-ID: [call_id]
