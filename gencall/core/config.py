@@ -343,6 +343,35 @@ class Config:
         """Hard ceiling on a single call's hold duration (seconds)."""
         return self.getint("loops", "max_call_duration_s", 86400)
 
+    # ── Adaptive number pool (cut 404 "no route" by learning routable prefixes) ──
+    # When on, a monitor periodically scores each destination prefix's ASR from
+    # call_records, prunes the 404-heavy ones, rebuilds the pool from the routable
+    # prefixes, and restarts the loop's UAC to load it. Off by default (opt-in).
+    @property
+    def loops_adaptive_pool(self):
+        return self.getbool("loops", "adaptive_pool", False)
+
+    @property
+    def loops_adaptive_interval_s(self):
+        """How often the optimizer re-scores + (if needed) rebuilds a pool."""
+        return self.getint("loops", "adaptive_interval_s", 300)
+
+    @property
+    def loops_adaptive_min_attempts(self):
+        """A prefix is only judged (kept/dropped) once it has this many calls."""
+        return self.getint("loops", "adaptive_min_attempts", 30)
+
+    @property
+    def loops_adaptive_min_asr(self):
+        """Drop a prefix whose ASR falls below this (0..1) once it has the
+        minimum attempts; keep it otherwise."""
+        return self.getfloat("loops", "adaptive_min_asr", 0.5)
+
+    @property
+    def loops_adaptive_prefix_len(self):
+        """Leading B-number digits that define a 'prefix' (CC+operator, e.g. 224626)."""
+        return self.getint("loops", "adaptive_prefix_len", 6)
+
     # ── Loop destination allow-list (security: open SIP originator / SSRF) ──────
     # dest_host comes off the wire and flows to the SIPp target. Private,
     # loopback, multicast and 0.0.0.0 destinations are rejected by default so the

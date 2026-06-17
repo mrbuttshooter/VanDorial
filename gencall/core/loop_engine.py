@@ -155,6 +155,9 @@ class LoopEngine:
         self._monitor_stop = threading.Event()
         self._monitor_thread = None
         self._last_uas_start = 0.0
+        # Adaptive-pool optimizer thread machinery ([loops] adaptive_pool).
+        self._opt_stop = threading.Event()
+        self._opt_thread = None
 
     # ── Answer side (persistent UAS) ─────────────────────────────────────────
 
@@ -296,6 +299,9 @@ class LoopEngine:
             target=self._monitor_loop, daemon=True, name="loop-uas-monitor"
         )
         self._monitor_thread.start()
+        # Bring up the adaptive-pool optimizer alongside the answer side
+        # (idempotent; no-op unless [loops] adaptive_pool is enabled).
+        self.start_optimizer()
 
     def _monitor_loop(self):
         """Restart the UAS with throttled backoff if it dies (design §8).
@@ -346,6 +352,135 @@ class LoopEngine:
         if self._monitor_thread is not None:
             self._monitor_thread.join(timeout=timeout)
             self._monitor_thread = None
+        self.stop_optimizer(timeout=timeout)
+
+    # ── Adaptive-pool optimizer (cut 404 by learning routable prefixes) ──────
+
+    def start_optimizer(self):
+        """Start the adaptive-pool optimizer thread (idempotent; opt-in).
+
+        No-op unless ``[loops] adaptive_pool`` is on. Periodically scores each
+        running campaign's destination prefixes from call_records, prunes the
+        404-heavy ones, rebuilds the pool from the routable prefixes, and
+        restarts that campaign's UAC to load it."""
+        if not getattr(self.config, "loops_adaptive_pool", False):
+            return
+        if self._opt_thread is not None and self._opt_thread.is_alive():
+            return
+        self._opt_stop.clear()
+        self._opt_thread = threading.Thread(
+            target=self._optimizer_loop, daemon=True, name="loop-pool-optimizer"
+        )
+        self._opt_thread.start()
+        logger.info("Adaptive pool optimizer started (interval %ds)",
+                    self.config.loops_adaptive_interval_s)
+
+    def stop_optimizer(self, timeout=5.0):
+        self._opt_stop.set()
+        if self._opt_thread is not None:
+            self._opt_thread.join(timeout=timeout)
+            self._opt_thread = None
+
+    def _optimizer_loop(self):
+        """Event-driven sleep; on each tick, optimize every running campaign."""
+        from gencall.core import pool_optimizer
+        interval = max(30, int(self.config.loops_adaptive_interval_s))
+        # Wait one interval before the first pass so calls accumulate.
+        while not self._opt_stop.wait(interval):
+            try:
+                with self._lock:
+                    running = [dict(c) for c in self._campaigns.values()
+                               if c.get("status") == "running"]
+                for camp in running:
+                    if self._opt_stop.is_set():
+                        break
+                    try:
+                        report = pool_optimizer.optimize(
+                            self.db, camp, self._load_node(camp.get("node_id")),
+                            prefix_len=self.config.loops_adaptive_prefix_len,
+                            min_attempts=self.config.loops_adaptive_min_attempts,
+                            min_asr=self.config.loops_adaptive_min_asr,
+                        )
+                    except Exception as e:
+                        logger.warning("adaptive pool: optimize failed for %s: %s",
+                                       camp.get("id"), e)
+                        continue
+                    if not report:
+                        continue
+                    logger.info(
+                        "adaptive pool %s: dropped %s, kept %s -> rebuilt %d numbers; "
+                        "restarting UAC", camp["id"], report["dropped"],
+                        report["kept"], report["rows"])
+                    self._restart_uac_with_csv(camp["id"], report["csv_path"])
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("adaptive pool optimizer pass failed: %s", e)
+
+    def _load_node(self, node_id):
+        """Best-effort load a node (Server) row as a dict, or None."""
+        if node_id is None or self.db is None:
+            return None
+        try:
+            from sqlalchemy import text
+            with self.db.engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT origin_zone, origin_code, dest_zone, dest_code, "
+                         "pool_count, pool_length FROM servers WHERE id = :id"),
+                    {"id": node_id},
+                ).fetchone()
+            if not row:
+                return None
+            return {
+                "origin_zone": row[0] or "", "origin_code": row[1] or "",
+                "dest_zone": row[2] or "", "dest_code": row[3] or "",
+                "pool_count": row[4] or 0, "pool_length": row[5] or 12,
+            }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("adaptive pool: could not load node %s: %s", node_id, e)
+            return None
+
+    def _restart_uac_with_csv(self, campaign_id: str, new_csv: str):
+        """Swap a running campaign's UAC onto ``new_csv`` (stop → rebuild → start).
+
+        Reuses the campaign's stored parameters so only the number pool changes.
+        Brief blip while the UAC restarts; in-flight calls on the old dialer end.
+        """
+        with self._lock:
+            camp = self._campaigns.get(campaign_id)
+            if not camp or camp.get("status") != "running":
+                return False
+            old_id = camp["instance_id"]
+            self.engine.stop_instance(old_id)
+            self.engine.remove_instance(old_id)
+
+            tr = _TRANSPORT_MAP.get((camp.get("transport") or "udp").lower(),
+                                    SIPpTransport.UDP)
+            tc = int(camp.get("target_calls") or 0)
+            instance = SIPpInstance(
+                id=old_id,
+                scenario_file=self._uac_scenario(bool(camp.get("rtp")),
+                                                 bool(camp.get("rtp_loop"))),
+                remote_host=camp["dest_host"],
+                remote_port=int(camp["dest_port"]),
+                local_port=0,
+                local_ip=camp.get("local_ip", ""),
+                media_ip=_detect_primary_ip(),
+                mode=SIPpMode.UAC,
+                transport=tr,
+                call_rate=float(camp.get("rate") or 1.0),
+                max_calls=tc if tc > 0 else 0,
+                call_limit=int(camp.get("max_concurrent") or 10),
+                duration=int(camp.get("duration_s") or 0),
+                csv_file=new_csv,
+                campaign_id=campaign_id,
+            )
+            ok = self.engine.start_instance(instance)
+            if not ok:
+                logger.error("adaptive pool: UAC restart failed for %s", campaign_id)
+                return False
+            self._register_logs(instance, campaign_id=campaign_id)
+            camp["csv_path"] = new_csv
+            self._persist_campaign(camp)
+            return True
 
     # ── Loop Campaigns (per-campaign UAC) ────────────────────────────────────
 
