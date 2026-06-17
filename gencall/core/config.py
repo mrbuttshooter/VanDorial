@@ -344,12 +344,14 @@ class Config:
         return self.getint("loops", "max_call_duration_s", 86400)
 
     # ── Adaptive number pool (cut 404 "no route" by learning routable prefixes) ──
-    # When on, a monitor periodically scores each destination prefix's ASR from
+    # A monitor periodically scores each destination prefix's ASR from
     # call_records, prunes the 404-heavy ones, rebuilds the pool from the routable
-    # prefixes, and restarts the loop's UAC to load it. Off by default (opt-in).
+    # prefixes, and restarts the loop's UAC to load it. ON by default (proven to
+    # lift loop NER dramatically on partial-route destinations); set
+    # [loops] adaptive_pool = false to disable.
     @property
     def loops_adaptive_pool(self):
-        return self.getbool("loops", "adaptive_pool", False)
+        return self.getbool("loops", "adaptive_pool", True)
 
     @property
     def loops_adaptive_interval_s(self):
@@ -364,8 +366,9 @@ class Config:
     @property
     def loops_adaptive_min_asr(self):
         """Drop a prefix whose ASR falls below this (0..1) once it has the
-        minimum attempts; keep it otherwise."""
-        return self.getfloat("loops", "adaptive_min_asr", 0.5)
+        minimum attempts; keep it otherwise. 0.3 cleanly separates dead routes
+        (typically a few %) from routable ones while sparing marginal prefixes."""
+        return self.getfloat("loops", "adaptive_min_asr", 0.3)
 
     @property
     def loops_adaptive_prefix_len(self):
