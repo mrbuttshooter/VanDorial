@@ -96,6 +96,22 @@ def test_optimize_noop_when_nothing_proven_dead(db):
     assert report is None
 
 
+def test_optimize_noop_when_keep_unchanged(db):
+    cid = "camp-thrash"
+    for i in range(30):
+        _seed(db, cid, f"224626{i:06d}", 200, True)
+    for i in range(30):
+        _seed(db, cid, f"224620{i:06d}", 404, False)
+    # Same keep-set as last rebuild -> no rebuild/restart (anti-thrash).
+    r = po.optimize(db, {"id": cid, "node_id": None}, {"origin_code": "353"},
+                    min_attempts=10, min_asr=0.5, last_keep=["224626"])
+    assert r is None
+    # A different last_keep -> it DOES rebuild (decision changed).
+    r2 = po.optimize(db, {"id": cid, "node_id": None}, {"origin_code": "353"},
+                     min_attempts=10, min_asr=0.5, last_keep=["224620", "224626"])
+    assert r2 is not None and r2["kept"] == ["224626"]
+
+
 def test_optimize_noop_when_all_dead(db):
     cid = "camp-4"
     for i in range(30):

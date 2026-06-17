@@ -158,6 +158,9 @@ class LoopEngine:
         # Adaptive-pool optimizer thread machinery ([loops] adaptive_pool).
         self._opt_stop = threading.Event()
         self._opt_thread = None
+        # campaign_id -> keep-set last applied, so we only rebuild + restart when
+        # the routable-prefix decision actually changes (no per-interval thrash).
+        self._opt_last_keep: dict[str, list] = {}
 
     # ── Answer side (persistent UAS) ─────────────────────────────────────────
 
@@ -400,6 +403,7 @@ class LoopEngine:
                             prefix_len=self.config.loops_adaptive_prefix_len,
                             min_attempts=self.config.loops_adaptive_min_attempts,
                             min_asr=self.config.loops_adaptive_min_asr,
+                            last_keep=self._opt_last_keep.get(camp["id"]),
                         )
                     except Exception as e:
                         logger.warning("adaptive pool: optimize failed for %s: %s",
@@ -411,7 +415,10 @@ class LoopEngine:
                         "adaptive pool %s: dropped %s, kept %s -> rebuilt %d numbers; "
                         "restarting UAC", camp["id"], report["dropped"],
                         report["kept"], report["rows"])
-                    self._restart_uac_with_csv(camp["id"], report["csv_path"])
+                    if self._restart_uac_with_csv(camp["id"], report["csv_path"]):
+                        # Remember what we applied so we don't rebuild/restart
+                        # again next interval unless the decision changes.
+                        self._opt_last_keep[camp["id"]] = report["kept"]
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("adaptive pool optimizer pass failed: %s", e)
 
@@ -452,6 +459,15 @@ class LoopEngine:
             self.engine.stop_instance(old_id)
             self.engine.remove_instance(old_id)
 
+            # SIPp's -inf must be the PREPARED file (3-col, [field2] hold + the
+            # SIPp header), not the raw A;B pool — loop_uac.xml holds with
+            # <pause milliseconds="[field2]"/>. Passing the raw pool makes SIPp
+            # exit at startup ("field 2 not found") and the restart fails.
+            resolved_csv = self._prepare_csv(
+                new_csv, camp.get("duration_mode", "fixed"),
+                camp.get("duration_s") or 0, camp.get("duration_max_s") or 0,
+            )
+
             tr = _TRANSPORT_MAP.get((camp.get("transport") or "udp").lower(),
                                     SIPpTransport.UDP)
             tc = int(camp.get("target_calls") or 0)
@@ -470,12 +486,13 @@ class LoopEngine:
                 max_calls=tc if tc > 0 else 0,
                 call_limit=int(camp.get("max_concurrent") or 10),
                 duration=int(camp.get("duration_s") or 0),
-                csv_file=new_csv,
+                csv_file=resolved_csv,
                 campaign_id=campaign_id,
             )
             ok = self.engine.start_instance(instance)
             if not ok:
-                logger.error("adaptive pool: UAC restart failed for %s", campaign_id)
+                logger.error("adaptive pool: UAC restart failed for %s: %s",
+                             campaign_id, instance.error_message or "unknown")
                 return False
             self._register_logs(instance, campaign_id=campaign_id)
             camp["csv_path"] = new_csv

@@ -166,6 +166,7 @@ def optimize(
     prefix_len: int = 6,
     min_attempts: int = 30,
     min_asr: float = 0.5,
+    last_keep: Optional[List[str]] = None,
 ) -> Optional[dict]:
     """Analyze one campaign and, if there are dead prefixes to prune, rebuild its
     pool from the routable ones. Returns a report dict (or ``None`` = no change).
@@ -173,7 +174,9 @@ def optimize(
     Does NOT restart the loop — the caller (LoopEngine monitor) owns swapping the
     CSV onto the UAC. Returns ``None`` when there's nothing to prune (no dead
     prefixes yet, or pruning would leave no routable prefix), so the loop is left
-    alone until there's real evidence.
+    alone until there's real evidence. ``last_keep`` is the keep-set applied on
+    the previous rebuild; when the new keep-set is identical we return ``None``
+    so the loop is not restarted every interval for no change (anti-thrash).
     """
     stats = prefix_asr(db, campaign["id"], prefix_len)
     if not stats:
@@ -189,6 +192,8 @@ def optimize(
         logger.warning("adaptive pool %s: all prefixes dead, leaving pool unchanged",
                        campaign["id"])
         return None
+    if last_keep is not None and keep_set == sorted(last_keep):
+        return None  # keep-set unchanged since last rebuild — don't thrash
 
     node = node or {}
     dad_length = len(next(iter(stats)))  # observed B-number prefix len is a floor
