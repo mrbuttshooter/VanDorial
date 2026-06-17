@@ -136,6 +136,11 @@ class SIPpInstance:
     remote_port: int = 5060
     local_port: int = 5060
     local_ip: str = ""
+    # Media (RTP) source/advertised address (SIPp -mi → SDP [media_ip]). Empty
+    # means "same as local_ip". The loop engine sets this to the auto-detected
+    # LOCAL interface IP so the SDP c= advertises the on-box media address even
+    # when signalling sources from a different (e.g. whitelisted public) node IP.
+    media_ip: str = ""
     mode: SIPpMode = SIPpMode.UAC
     transport: SIPpTransport = SIPpTransport.UDP
     call_rate: float = 1.0
@@ -193,12 +198,20 @@ class SIPpInstance:
         cmd.append(f"{self.remote_host}:{self.remote_port}")
 
         # Local binding. -i sets the SIP signalling source address; -mi sets the
-        # media (RTP) source address. We bind both to local_ip when known so the
-        # SDP we advertise ([media_ip]) matches the socket SIPp actually echoes
-        # on — otherwise -rtp_echo and the SDP can land on the wrong interface.
+        # media (RTP) source address, which SIPp substitutes into the SDP as
+        # [media_ip]. These are SEPARATE on purpose: signalling sources from the
+        # node's configured IP (the whitelisted origination source MADA expects
+        # in Via/Contact/From), while media advertises media_ip — the auto-
+        # detected LOCAL interface IP the loop engine supplies. Chad/Algeria SBCs
+        # drop the call (one-way audio / cause 47) when the advertised media IP
+        # is a public/foreign address that doesn't match where their RTP arrives
+        # from; advertising the on-box local IP makes them match. media_ip falls
+        # back to local_ip when unset, preserving the single-homed MADA case.
         if self.local_ip:
             cmd.extend(["-i", self.local_ip])
-            cmd.extend(["-mi", self.local_ip])
+        media_ip = self.media_ip or self.local_ip
+        if media_ip:
+            cmd.extend(["-mi", media_ip])
         cmd.extend(["-p", str(self.local_port)])
 
         # RTP echo media port. SIPp's real option is -mp (the local RTP echo base

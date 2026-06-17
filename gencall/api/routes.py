@@ -39,6 +39,13 @@ db: Optional[Database] = None
 # main.py when a database is available; None means auth is not configured.
 gateway: Optional[APIGateway] = None
 
+# Raw API key handed to the served NOC console at load via /api/console/bootstrap
+# so any browser that opens /console is authenticated without pasting a key by
+# hand (the key used to live only in each browser's localStorage). Set in
+# main.py ONLY when this box serves the console; stays None on fleet workers and
+# in external-API-only deployments, where the bootstrap endpoint then 404s.
+console_api_key: Optional[str] = None
+
 
 # ─── Authentication ──────────────────────────────────────────────────────────
 
@@ -801,6 +808,21 @@ def get_test_history(limit: int = Query(default=50, ge=1, le=500)):
 
 
 # ─── System ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/console/bootstrap")
+def console_bootstrap():
+    """Hand the served console its API key so opening /console just works.
+
+    Deliberately UNAUTHENTICATED (like /api/health) — it is the one endpoint a
+    fresh browser can reach before it has a key. Only returns a key on a box
+    that serves the console (console_api_key set in main.py); otherwise 404, so
+    fleet workers and external-API deployments expose nothing. This is the
+    chosen trade-off: anyone who can open the console is authenticated; minting
+    of keys for programmatic callers is unchanged."""
+    if not console_api_key:
+        raise HTTPException(404, "Console auto-auth not configured")
+    return {"api_key": console_api_key}
+
 
 @app.get("/api/health")
 def health_check():

@@ -454,6 +454,14 @@ class LoopEngine:
                 # the OS picks per routing. Pinned to the chosen server's IP so
                 # MADA sees the whitelisted VanDorial origination source.
                 local_ip=effective_ip,
+                # Advertise the LOCAL interface IP for media (SDP c=), decoupled
+                # from the signalling IP above. When the node is configured with
+                # a public IP, sending that public IP in the SDP made Chad/Algeria
+                # SBCs drop the call (media-IP mismatch); the on-box local IP is
+                # what their RTP path matches. If the node IP already IS the local
+                # interface IP (single-homed MADA box), this resolves to the same
+                # address and nothing changes.
+                media_ip=_detect_primary_ip(),
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=float(rate),

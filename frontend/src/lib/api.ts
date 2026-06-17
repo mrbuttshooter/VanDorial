@@ -64,6 +64,24 @@ export function setApiKey(key: string | null): void {
   }
 }
 
+/* Console auto-auth: ask the controller for the console's API key at startup so
+   ANY browser that opens /console is authenticated — the key no longer has to
+   be pasted into each browser by hand. The backend serves it from
+   /api/console/bootstrap only when it serves the console; a 404 (fleet worker /
+   external-API box) just leaves any manually-set key in place. Always run this
+   before the first data fetch (see main.tsx). Skipped in mock mode. */
+export async function bootstrapApiKey(): Promise<void> {
+  if (MOCK_ENABLED) return;
+  try {
+    const res = await fetch(BASE + "/api/console/bootstrap");
+    if (!res.ok) return; // 404 => no auto-auth on this box; keep existing key
+    const body = (await res.json()) as { api_key?: string };
+    if (body.api_key) setApiKey(body.api_key);
+  } catch {
+    /* backend unreachable — fall back to whatever key is stored */
+  }
+}
+
 async function request<T>(
   path: string,
   init?: Omit<RequestInit, "body"> & { body?: unknown },

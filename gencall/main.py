@@ -157,6 +157,21 @@ def create_app(config_path: str = None):
             logger.warning("=" * 60)
         logger.info("API authentication enabled (%d key(s))",
                     gateway.keys.count_keys())
+
+        # Console auto-auth: when this box serves the NOC console, give the
+        # browser a key at load (/api/console/bootstrap) so opening /console
+        # just works — no per-browser key paste. A stable key from
+        # GENCALL_CONSOLE_API_KEY survives restarts; otherwise we mint one per
+        # boot (the console re-bootstraps on every load, so that is fine).
+        if config.serve_console:
+            env_console_key = os.environ.get("GENCALL_CONSOLE_API_KEY")
+            if env_console_key:
+                gateway.keys.register_raw_key(env_console_key, name="console")
+                routes.console_api_key = env_console_key
+            else:
+                raw_console, _ = gateway.keys.create_key("console")
+                routes.console_api_key = raw_console
+            logger.info("Console auto-auth enabled (GET /api/console/bootstrap)")
     else:
         routes.gateway = None
         logger.warning(

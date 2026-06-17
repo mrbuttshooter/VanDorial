@@ -129,6 +129,61 @@ class APIKeyManager:
         logger.info("API key created: %s (%s)", name, key_id)
         return raw_key, api_key
 
+    def register_raw_key(self, raw_key: str, name: str = "console",
+                         permissions: list[str] = None,
+                         rate_limit: int = 240) -> APIKey:
+        """Register a caller-supplied raw key so it validates like a minted one.
+
+        Idempotent: if the key's hash already exists in the store, the existing
+        record is returned unchanged. Used to pin a STABLE console key from
+        ``GENCALL_CONSOLE_API_KEY`` so the auto-auth key survives restarts (a
+        per-boot minted key would 401 every browser that cached the old one).
+        """
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        perms = permissions or ["read", "execute"]
+
+        if self.db is not None:
+            from gencall.db.models import APIKey as APIKeyRow
+            session = self.db.get_session()
+            try:
+                existing = session.query(APIKeyRow).filter_by(
+                    key_hash=key_hash).first()
+                if existing:
+                    return _row_to_apikey(existing)
+                key_id = f"key_{secrets.token_hex(8)}"
+                created = time.time()
+                session.add(APIKeyRow(
+                    key_id=key_id,
+                    key_hash=key_hash,
+                    name=name,
+                    permissions=",".join(perms),
+                    rate_limit=rate_limit,
+                    request_count=0,
+                    enabled=True,
+                    created_at=created,
+                    last_used=0.0,
+                ))
+                session.commit()
+                logger.info("API key registered: %s (%s)", name, key_id)
+                return APIKey(key_id=key_id, key_hash=key_hash, name=name,
+                              created_at=created, permissions=perms,
+                              rate_limit=rate_limit)
+            finally:
+                session.close()
+
+        with self._lock:
+            existing_id = self._key_lookup.get(key_hash)
+            if existing_id:
+                return self._keys[existing_id]
+            key_id = f"key_{secrets.token_hex(8)}"
+            api_key = APIKey(key_id=key_id, key_hash=key_hash, name=name,
+                             created_at=time.time(), permissions=perms,
+                             rate_limit=rate_limit)
+            self._keys[key_id] = api_key
+            self._key_lookup[key_hash] = key_id
+            logger.info("API key registered: %s (%s)", name, key_id)
+            return api_key
+
     def validate_key(self, raw_key: str) -> Optional[APIKey]:
         """Validate a raw API key. Returns the APIKey if valid and enabled."""
         if not raw_key:

@@ -310,6 +310,37 @@ def _():
     assert "GenCall" in CONSOLE_MISSING_HTML
     assert "/api/health" in CONSOLE_MISSING_HTML
 
+@test("Console bootstrap is unauthenticated and serves the key when set")
+def _():
+    # Any browser must reach /api/console/bootstrap WITHOUT a key (it is how a
+    # fresh browser gets one). Returns the console key when this box serves the
+    # console; 404 otherwise. We do NOT send an X-API-Key header here.
+    from fastapi.testclient import TestClient
+    from gencall.api import routes
+
+    prev = routes.console_api_key
+    try:
+        routes.console_api_key = None
+        client = TestClient(routes.app)
+        assert client.get("/api/console/bootstrap").status_code == 404
+
+        routes.console_api_key = "gc_test_console_key"
+        resp = client.get("/api/console/bootstrap")
+        assert resp.status_code == 200
+        assert resp.json()["api_key"] == "gc_test_console_key"
+    finally:
+        routes.console_api_key = prev
+
+@test("register_raw_key is idempotent and validates")
+def _():
+    from gencall.core.api_gateway import APIKeyManager
+    mgr = APIKeyManager(db=None)
+    k1 = mgr.register_raw_key("gc_fixed_console", name="console")
+    k2 = mgr.register_raw_key("gc_fixed_console", name="console")
+    assert k1.key_id == k2.key_id              # same hash => same record
+    assert mgr.validate_key("gc_fixed_console") is not None
+    assert mgr.validate_key("gc_wrong") is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  11. UTILITIES

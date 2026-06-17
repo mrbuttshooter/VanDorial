@@ -73,6 +73,25 @@ def test_build_command_omits_i_mi_when_no_local_ip(stub_sipp):
     assert "-mp" in cmd  # RTP echo port still pinned
 
 
+def test_build_command_media_ip_decouples_from_signalling(stub_sipp):
+    """A distinct media_ip advertises a different SDP media address than the
+    signalling IP: -i keeps the node IP, -mi carries the local interface IP.
+    This is the Chad/Algeria fix — public IP in SIP headers, local IP in SDP."""
+    inst = _instance(local_ip="203.0.113.7", media_ip="10.0.0.5")
+    cmd = inst.build_command(stub_sipp.config)
+    assert cmd[cmd.index("-i") + 1] == "203.0.113.7"   # signalling = node IP
+    assert cmd[cmd.index("-mi") + 1] == "10.0.0.5"     # media = local IP
+
+
+def test_build_command_media_ip_emitted_without_local_ip(stub_sipp):
+    """media_ip alone (no signalling bind) still yields -mi so the SDP media
+    address is advertised even when SIP binds all interfaces."""
+    inst = _instance(local_ip="", media_ip="10.0.0.5")
+    cmd = inst.build_command(stub_sipp.config)
+    assert "-i" not in cmd
+    assert cmd[cmd.index("-mi") + 1] == "10.0.0.5"
+
+
 def test_fixed_duration_does_not_pass_d_flag_via_engine(stub_sipp):
     """Engine no longer relies on -d for the hold (it travels in the CSV)."""
     # build_command still emits -d only when instance.duration > 0; the LoopEngine
