@@ -85,6 +85,7 @@ export async function bootstrapApiKey(): Promise<void> {
 async function request<T>(
   path: string,
   init?: Omit<RequestInit, "body"> & { body?: unknown },
+  _retry = false,
 ): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   const apiKey = getApiKey();
@@ -103,6 +104,16 @@ async function request<T>(
     // Backend unreachable. In mock mode we never get here (intercepted below),
     // so surface a clear, actionable error.
     throw new ApiError(0, `Network unreachable: ${String(networkErr)}`);
+  }
+
+  // Self-heal a rotated console key: on 401, re-fetch the controller's current
+  // key once (the worker mints a fresh one each boot) and retry. Without this a
+  // worker restart leaves every open tab polling with a stale key — 401 forever
+  // until the user manually clears localStorage. Skip for the bootstrap call
+  // itself and only retry once to avoid a loop.
+  if (res.status === 401 && !_retry && !path.includes("/api/console/bootstrap")) {
+    await bootstrapApiKey();
+    if (getApiKey()) return request<T>(path, init, true);
   }
 
   if (!res.ok) {
