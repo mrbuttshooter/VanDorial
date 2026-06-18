@@ -96,6 +96,79 @@ def test_start_campaign_spawns_uac_registers_pid_and_db_row(loop_engine, db):
     assert row[0] == "running"
 
 
+def test_resume_interrupted_relaunches_and_marks_old_terminal(loop_engine, db, tmp_path):
+    """After a restart, resume_interrupted re-launches a campaign left in the DB
+    as 'interrupted' and marks the OLD row terminal so it can't be resumed twice.
+
+    Simulates the "restart .4 and loops come back" path: a prior boot's campaign
+    row exists with status interrupted and a still-present pool CSV; on resume a
+    fresh running campaign starts with the same params and the old row goes
+    'stopped'.
+    """
+    from sqlalchemy import text
+
+    # A pool CSV that still exists (service restart keeps /tmp).
+    csv = tmp_path / "pool.csv"
+    csv.write_text("100,224600111111\n101,224600222222\n")
+
+    # Seed an 'interrupted' campaign row as a prior boot would have left it.
+    old_id = "loop-deadbeef0001"
+    loop_engine._persist_campaign({
+        "id": old_id, "name": "Guinea-22460", "status": "interrupted",
+        "node_id": None, "local_ip": "", "dest_host": "1.2.3.4",
+        "dest_port": 5060, "transport": "udp", "csv_path": str(csv),
+        "rate": 2.0, "max_concurrent": 3, "duration_mode": "fixed",
+        "duration_s": 1, "duration_max_s": 0, "match_key": "exact",
+        "target_calls": 0, "target_minutes": 0,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "started_at": "2026-01-01T00:00:00+00:00", "stopped_at": None,
+    })
+
+    report = loop_engine.resume_interrupted()
+    assert len(report["resumed"]) == 1
+    new_id = report["resumed"][0]
+    assert new_id != old_id
+
+    # The old row is now terminal (won't be resumed again next boot).
+    with db.engine.connect() as conn:
+        old_status = conn.execute(
+            text("SELECT status FROM loop_campaigns WHERE id = :id"), {"id": old_id}
+        ).fetchone()[0]
+        new_status = conn.execute(
+            text("SELECT status, name FROM loop_campaigns WHERE id = :id"), {"id": new_id}
+        ).fetchone()
+    assert old_status == "stopped"
+    assert new_status[0] == "running"
+    assert new_status[1] == "Guinea-22460"   # name carried over so grouping holds
+
+    # A second resume is a no-op — nothing left in a non-terminal state.
+    assert loop_engine.resume_interrupted() == {"resumed": [], "skipped": []}
+
+
+def test_resume_interrupted_skips_when_pool_missing(loop_engine, db):
+    """A campaign whose pool CSV is gone and has no node can't be resumed — it's
+    skipped (and still marked terminal), never crashing the resume of others."""
+    from sqlalchemy import text
+    old_id = "loop-deadbeef0002"
+    loop_engine._persist_campaign({
+        "id": old_id, "name": "Orphan", "status": "interrupted",
+        "node_id": None, "local_ip": "", "dest_host": "1.2.3.4",
+        "dest_port": 5060, "transport": "udp", "csv_path": "/tmp/gone_xyz.csv",
+        "rate": 1.0, "max_concurrent": 1, "duration_mode": "fixed",
+        "duration_s": 1, "duration_max_s": 0, "match_key": "exact",
+        "target_calls": 0, "target_minutes": 0,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "started_at": "2026-01-01T00:00:00+00:00", "stopped_at": None,
+    })
+    report = loop_engine.resume_interrupted()
+    assert old_id in report["skipped"]
+    with db.engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM loop_campaigns WHERE id = :id"), {"id": old_id}
+        ).fetchone()[0]
+    assert status == "stopped"
+
+
 def test_local_ip_binds_uac_and_persists(loop_engine, db):
     """A per-loop source IP binds the UAC and is recorded on the campaign + row."""
     campaign = loop_engine.start_campaign(

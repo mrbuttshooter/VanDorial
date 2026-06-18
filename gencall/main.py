@@ -239,6 +239,16 @@ def create_app(config_path: str = None):
     except Exception as e:
         logger.warning("Could not start loop answer side (UAS): %s", e)
 
+    # Auto-resume: re-launch loops that were running before this restart. A
+    # systemd restart/reboot kills the SIPp children and reconciliation marks
+    # their campaigns 'interrupted'; without this they stay down until restarted
+    # by hand. Runs AFTER the UAS so returning calls are answered immediately.
+    # Best-effort: never block API startup on it.
+    try:
+        loop_engine.resume_interrupted()
+    except Exception as e:
+        logger.warning("Auto-resume of interrupted loops failed: %s", e)
+
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.
     # Headless fleet workers skip this — the controller pulls /api/stats over the

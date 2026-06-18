@@ -737,6 +737,118 @@ class LoopEngine:
         with self._lock:
             return [self._public_campaign(c) for c in self._campaigns.values()]
 
+    # ── Auto-resume after a worker restart (design §4.5) ─────────────────────
+    def resume_interrupted(self) -> dict:
+        """Re-launch campaigns that were running before this process restarted.
+
+        A systemd restart / reboot kills every SIPp child and startup
+        reconciliation marks their campaigns ``interrupted`` — without this they
+        stayed down until an operator restarted each by hand (the "restart .4 and
+        all loops stop" problem). Here we read every non-terminal campaign row,
+        mark it terminal FIRST (so a crash mid-resume can't duplicate it on the
+        next boot), then start a fresh campaign with the same parameters.
+
+        Best-effort and isolated: one campaign that can't be resumed (e.g. its
+        number pool is gone and can't be regenerated) is skipped with a warning,
+        never aborting the rest. Returns ``{"resumed": [...], "skipped": [...]}``.
+        """
+        if self.db is None:
+            return {"resumed": [], "skipped": []}
+        from sqlalchemy import text
+        cols = ("id", "name", "status", "node_id", "local_ip", "dest_host",
+                "dest_port", "transport", "csv_path", "rate", "max_concurrent",
+                "duration_mode", "duration_s", "duration_max_s", "match_key",
+                "target_calls", "target_minutes")
+        try:
+            with self.db.engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT " + ", ".join(cols) + " FROM loop_campaigns "
+                    "WHERE status IN ('running', 'interrupted', 'starting')"
+                )).fetchall()
+        except Exception as e:
+            logger.warning("resume_interrupted: could not read campaigns: %s", e)
+            return {"resumed": [], "skipped": []}
+
+        resumed, skipped = [], []
+        for row in rows:
+            c = dict(zip(cols, row))
+            old_id = c["id"]
+            # Only resume rows from a PREVIOUS process. A campaign we already
+            # track in memory (e.g. one we just resumed) is live — skip it so a
+            # second pass can't relaunch/duplicate it.
+            if old_id in self._campaigns:
+                continue
+            # Mark terminal BEFORE attempting, so a persistent failure can't be
+            # re-resumed (and duplicated) every boot.
+            self._update_campaign_status(old_id, "stopped", stopped_at=_now_iso())
+            csv_path = self._resolve_resume_csv(c)
+            if not csv_path:
+                logger.warning("resume: skipping %s (%s) — no usable number pool",
+                               old_id, c.get("name"))
+                skipped.append(old_id)
+                continue
+            try:
+                new = self.start_campaign(
+                    name=c.get("name") or "",
+                    dest_host=c["dest_host"],
+                    dest_port=int(c.get("dest_port") or 5060),
+                    transport=c.get("transport") or "udp",
+                    csv_path=csv_path,
+                    rate=float(c.get("rate") or 1.0),
+                    max_concurrent=int(c.get("max_concurrent") or 10),
+                    duration_mode=c.get("duration_mode") or "fixed",
+                    duration_s=int(c.get("duration_s") or 0),
+                    duration_max_s=int(c.get("duration_max_s") or 0),
+                    match_key=c.get("match_key") or "exact",
+                    target_calls=int(c.get("target_calls") or 0),
+                    target_minutes=int(c.get("target_minutes") or 0),
+                    local_ip=c.get("local_ip") or "",
+                    node_id=c.get("node_id"),
+                )
+                resumed.append(new.get("id"))
+                logger.info("resume: %s (%s) -> %s", old_id, c.get("name"),
+                            new.get("id"))
+            except Exception as e:
+                logger.warning("resume: failed to restart %s (%s): %s",
+                               old_id, c.get("name"), e)
+                skipped.append(old_id)
+        if resumed or skipped:
+            logger.info("Auto-resume after restart: %d resumed, %d skipped",
+                        len(resumed), len(skipped))
+        return {"resumed": resumed, "skipped": skipped}
+
+    def _resolve_resume_csv(self, c: dict) -> str:
+        """Find a usable pool CSV for a resumed campaign.
+
+        Reuse the stored path if it still exists (a service restart keeps /tmp);
+        otherwise regenerate from the campaign's node zones (a full reboot clears
+        /tmp). Returns a path, or "" if none can be produced.
+        """
+        import os
+        p = (c.get("csv_path") or "").strip()
+        if p and os.path.isfile(p):
+            return p
+        node = self._load_node(c.get("node_id"))
+        if not node:
+            return ""
+        try:
+            from gencall.scripts import gen_loop_csv
+            path, n, _ = gen_loop_csv.generate_pool_file(
+                origin_zone=node.get("origin_zone", ""),
+                dest_zone=node.get("dest_zone", ""),
+                origin_code=node.get("origin_code", ""),
+                dest_code=node.get("dest_code", ""),
+                count=int(node.get("pool_count") or 100000),
+                length=int(node.get("pool_length") or 12),
+            )
+            logger.info("resume: regenerated %d-number pool for node %s",
+                        n, c.get("node_id"))
+            return path
+        except Exception as e:
+            logger.warning("resume: could not regenerate pool for node %s: %s",
+                           c.get("node_id"), e)
+            return ""
+
     def get_campaign(self, campaign_id: str) -> dict:
         """Live status for one campaign incl. its UAC's current SIPp stats.
 
