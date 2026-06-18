@@ -240,10 +240,19 @@ export function Loops() {
     [campaigns],
   );
   const presetRows = presets.data?.presets ?? [];
-  // A running campaign belongs to a preset if its name matches "<preset>" or
-  // "<preset>-<node>" (how preset runs are named).
+  // A running campaign is named "<preset>" or "<preset>-<node-ip>". A preset
+  // "matches" when the name equals it or starts with "<preset>-". When preset
+  // names share a prefix (e.g. "Guinea" and "Guinea-22460"), a campaign matches
+  // BOTH — so attribute each campaign to the LONGEST (most specific) matching
+  // preset only, otherwise "Guinea-22460-<ip>" wrongly shows under "Guinea" too.
+  const matchesPreset = (name: string, presetName: string) =>
+    name === presetName || name.startsWith(`${presetName}-`);
+  const bestPresetName = (name: string) =>
+    presetRows
+      .filter((q) => matchesPreset(name, q.name))
+      .reduce((best, q) => (q.name.length > best.length ? q.name : best), "");
   const runsForPreset = (p: LoopPreset) =>
-    running.filter((c) => c.name === p.name || c.name.startsWith(`${p.name}-`));
+    running.filter((c) => bestPresetName(c.name) === p.name);
   const orphanRunning = useMemo(
     () =>
       running.filter(
