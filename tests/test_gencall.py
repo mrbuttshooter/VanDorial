@@ -249,7 +249,7 @@ def _():
     data = resp.json()
     assert data["status"] == "ok"
     assert data["name"] == "GenCall"
-    assert data["version"] == "2.1.4"
+    assert data["version"] == "2.2.0"
     Config.reset()
 
 # Auth now fails CLOSED: protected endpoints need a wired gateway + a key. These

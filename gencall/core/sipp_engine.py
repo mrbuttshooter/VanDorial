@@ -273,15 +273,17 @@ class SIPpInstance:
         # not-yet-existent path is harmless (the parser skips missing files).
         self.log_file = os.path.splitext(self._stats_file)[0] + ".calllog"
 
-        # Screen output control. -trace_err writes SIPp's own error file, so we
-        # do NOT need (and must not keep) a stderr PIPE open — see start_instance,
-        # which routes stderr to DEVNULL to avoid a full-pipe deadlock on a busy
-        # run. We run SIPp in the FOREGROUND (no -bg): -bg daemonizes (forks and
-        # the parent exits immediately), which would leave Popen tracking a dead
-        # parent while the real dialer runs as an untracked orphan. Staying in the
-        # foreground under our os.setsid process group keeps the spawned PID the
-        # one we signal/reap and the one recorded for crash-orphan reconciliation.
-        cmd.extend(["-trace_err", "-trace_logs"])
+        # -trace_logs is REQUIRED (the CallRecordParser ingests its per-call
+        # <log> output). -trace_err writes SIPp's own error file, which balloons
+        # on a busy loop (retransmits/unexpected-msg noise — observed at 100+ MB)
+        # and is rarely consulted, so it's opt-in via [loops] sipp_trace_err
+        # (default off) to keep the disk from filling. Errors still go to stderr,
+        # which start_instance routes to DEVNULL. We run SIPp in the FOREGROUND
+        # (no -bg) under our os.setsid group so the spawned PID is the one we
+        # signal/reap and record for crash-orphan reconciliation.
+        cmd.append("-trace_logs")
+        if getattr(config, "loops_sipp_trace_err", False):
+            cmd.append("-trace_err")
 
         # Extra args
         if self.extra_args:
@@ -541,8 +543,35 @@ class SIPpEngine:
         for instance_id in list(self.instances.keys()):
             self.stop_instance(instance_id)
 
+    def _cleanup_instance_files(self, instance: "SIPpInstance") -> None:
+        """Delete every on-disk artifact SIPp produced for this instance: the
+        stat CSV, the .calllog, and the pid-named -trace_logs/-trace_err files.
+
+        Without this they orphan in the run dir on every stop — and the adaptive
+        pool restarts a loop's UAC repeatedly, so each restart leaked a fresh
+        ``<scenario>_<pid>_logs.log`` (+ _errors.log), filling the disk (observed
+        on a worker: hundreds of MB of stale /tmp logs)."""
+        paths: list[str] = []
+        if instance._stats_file:
+            paths.append(instance._stats_file)
+            paths.append(os.path.splitext(instance._stats_file)[0] + ".calllog")
+        if instance.log_file:
+            paths.append(instance.log_file)
+        pid = getattr(instance._process, "pid", None)
+        run_dir = getattr(instance, "_run_dir", "")
+        if pid is not None and run_dir and instance.scenario_file:
+            stem = os.path.splitext(os.path.basename(instance.scenario_file))[0]
+            paths.append(os.path.join(run_dir, f"{stem}_{pid}_logs.log"))
+            paths.append(os.path.join(run_dir, f"{stem}_{pid}_errors.log"))
+        for p in set(paths):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except OSError as e:  # pragma: no cover - best effort
+                logger.debug("cleanup: could not remove %s: %s", p, e)
+
     def remove_instance(self, instance_id: str) -> bool:
-        """Remove a stopped instance."""
+        """Remove a stopped instance and delete its on-disk SIPp artifacts."""
         with self._lock:
             instance = self.instances.get(instance_id)
             if not instance:
@@ -550,9 +579,7 @@ class SIPpEngine:
             if instance.state == SIPpState.RUNNING:
                 return False
             self._release_media_port(instance)
-            # Cleanup stats file
-            if instance._stats_file and os.path.exists(instance._stats_file):
-                os.remove(instance._stats_file)
+            self._cleanup_instance_files(instance)
             del self.instances[instance_id]
             return True
 

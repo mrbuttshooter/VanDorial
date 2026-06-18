@@ -382,6 +382,13 @@ class Config:
         dragged by pre-convergence history."""
         return self.getint("loops", "adaptive_window", 1000)
 
+    @property
+    def loops_sipp_trace_err(self):
+        """Write SIPp's -trace_err error file. Off by default: on a busy loop it
+        balloons to 100s of MB of retransmit/unexpected-msg noise and is rarely
+        read. Turn on ([loops] sipp_trace_err = true) only when debugging."""
+        return self.getbool("loops", "sipp_trace_err", False)
+
     # ── Loop destination allow-list (security: open SIP originator / SSRF) ──────
     # dest_host comes off the wire and flows to the SIPp target. Private,
     # loopback, multicast and 0.0.0.0 destinations are rejected by default so the
@@ -433,8 +440,13 @@ class Config:
     # from rebuilding sigma's DELETE storm.
     @property
     def retention_call_records_days(self):
-        """Delete call_records older than this many days (0 disables pruning)."""
-        return self.getint("retention", "call_records_days", 30)
+        """Delete call_records older than this many days (0 disables pruning).
+
+        Default 7 (was 30): a loop box writes ~400k rows/day, so 30 days grew the
+        SQLite DB to multiple GB and filled small disks. 7 days is plenty for
+        diagnostics; lower it further ([retention] call_records_days = 2) on a
+        high-volume worker, or raise it on a dedicated archive box."""
+        return self.getint("retention", "call_records_days", 7)
 
     @property
     def retention_interval_hours(self):

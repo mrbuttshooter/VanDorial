@@ -92,6 +92,40 @@ def test_build_command_media_ip_emitted_without_local_ip(stub_sipp):
     assert cmd[cmd.index("-mi") + 1] == "10.0.0.5"
 
 
+def test_build_command_omits_trace_err_by_default(stub_sipp):
+    """-trace_logs is always emitted (parser needs it); -trace_err is off by
+    default so SIPp's error file can't balloon and fill the disk."""
+    cmd = _instance().build_command(stub_sipp.config)
+    assert "-trace_logs" in cmd
+    assert "-trace_err" not in cmd
+
+
+def test_cleanup_instance_files_removes_all_artifacts(stub_sipp, tmp_path):
+    """remove_instance must delete the stat CSV, .calllog, and the pid-named
+    -trace_logs/-trace_err files — not just the CSV — so loop stops and adaptive
+    restarts don't orphan logs in /tmp and fill the disk."""
+    import types
+    from gencall.core.sipp_engine import SIPpEngine
+
+    eng = SIPpEngine(stub_sipp.config)
+    inst = _instance(scenario_file=str(tmp_path / "loop_uac.xml"))
+    inst._run_dir = str(tmp_path)
+    inst._stats_file = str(tmp_path / "gencall_sipp_t1.csv")
+    inst.log_file = str(tmp_path / "gencall_sipp_t1.calllog")
+    inst._process = types.SimpleNamespace(pid=4242)
+    artifacts = [
+        tmp_path / "gencall_sipp_t1.csv",
+        tmp_path / "gencall_sipp_t1.calllog",
+        tmp_path / "loop_uac_4242_logs.log",
+        tmp_path / "loop_uac_4242_errors.log",
+    ]
+    for p in artifacts:
+        p.write_text("x")
+    eng._cleanup_instance_files(inst)
+    for p in artifacts:
+        assert not p.exists(), f"{p.name} should have been removed"
+
+
 def test_fixed_duration_does_not_pass_d_flag_via_engine(stub_sipp):
     """Engine no longer relies on -d for the hold (it travels in the CSV)."""
     # build_command still emits -d only when instance.duration > 0; the LoopEngine
