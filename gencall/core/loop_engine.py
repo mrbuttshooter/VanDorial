@@ -403,6 +403,7 @@ class LoopEngine:
                             prefix_len=self.config.loops_adaptive_prefix_len,
                             min_attempts=self.config.loops_adaptive_min_attempts,
                             min_asr=self.config.loops_adaptive_min_asr,
+                            window=self.config.loops_adaptive_window,
                             last_keep=self._opt_last_keep.get(camp["id"]),
                         )
                     except Exception as e:

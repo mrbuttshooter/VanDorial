@@ -45,26 +45,31 @@ def _is_answered(final_code, duration_ms) -> bool:
         return False
 
 
-def prefix_asr(db, campaign_id: str, prefix_len: int = 6) -> Dict[str, List[int]]:
+def prefix_asr(db, campaign_id: str, prefix_len: int = 6,
+               recent_limit: int = 0) -> Dict[str, List[int]]:
     """Return ``{prefix: [answered, total]}`` for a campaign's B-numbers.
 
     ``prefix`` is the first ``prefix_len`` digits of ``b_number`` (country code +
     operator + a digit or two — e.g. ``224626``). Reads ``call_records`` directly;
     returns ``{}`` when there is no DB or no rows.
+
+    ``recent_limit`` > 0 scores only the most recent ``recent_limit`` calls
+    (newest by row id), so the score tracks CURRENT routability instead of being
+    dragged down forever by pre-convergence history. 0 = all-time.
     """
     stats: Dict[str, List[int]] = {}
     if db is None:
         return stats
     try:
         from sqlalchemy import text
+        q = ("SELECT b_number, final_code, duration_ms FROM call_records "
+             "WHERE campaign_id = :cid AND b_number IS NOT NULL")
+        params: dict = {"cid": campaign_id}
+        if recent_limit and recent_limit > 0:
+            q += " ORDER BY id DESC LIMIT :n"
+            params["n"] = int(recent_limit)
         with db.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT b_number, final_code, duration_ms FROM call_records "
-                    "WHERE campaign_id = :cid AND b_number IS NOT NULL"
-                ),
-                {"cid": campaign_id},
-            ).fetchall()
+            rows = conn.execute(text(q), params).fetchall()
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("prefix_asr read failed for %s: %s", campaign_id, e)
         return stats
@@ -158,6 +163,14 @@ def rebuild_pool_csv(
     return path, len(pairs)
 
 
+def best_prefix(stats: Dict[str, List[int]]) -> Optional[str]:
+    """The single best prefix by ASR (ties broken by call volume), or None."""
+    if not stats:
+        return None
+    return max(stats, key=lambda p: (stats[p][0] / stats[p][1] if stats[p][1] else 0.0,
+                                     stats[p][1]))
+
+
 def optimize(
     db,
     campaign: dict,
@@ -166,43 +179,50 @@ def optimize(
     prefix_len: int = 6,
     min_attempts: int = 30,
     min_asr: float = 0.5,
+    window: int = 0,
     last_keep: Optional[List[str]] = None,
 ) -> Optional[dict]:
     """Analyze one campaign and, if there are dead prefixes to prune, rebuild its
     pool from the routable ones. Returns a report dict (or ``None`` = no change).
 
     Does NOT restart the loop — the caller (LoopEngine monitor) owns swapping the
-    CSV onto the UAC. Returns ``None`` when there's nothing to prune (no dead
-    prefixes yet, or pruning would leave no routable prefix), so the loop is left
-    alone until there's real evidence. ``last_keep`` is the keep-set applied on
-    the previous rebuild; when the new keep-set is identical we return ``None``
-    so the loop is not restarted every interval for no change (anti-thrash).
+    CSV onto the UAC.
+
+    ``window`` scores only the most-recent N calls (see prefix_asr) so decisions
+    track current routability. ``last_keep`` is the keep-set applied on the
+    previous rebuild; an identical new keep-set returns ``None`` (anti-thrash).
+
+    Never freezes on "all dead": if no prefix clears the bar (and none is still
+    on trial) it keeps the single BEST prefix (least-bad) and prunes the rest, so
+    a poor route concentrates on its best option rather than dialing dead ranges.
+    Returns ``None`` only when there is genuinely nothing to prune (every prefix
+    kept) or the decision is unchanged.
     """
-    stats = prefix_asr(db, campaign["id"], prefix_len)
+    stats = prefix_asr(db, campaign["id"], prefix_len, recent_limit=window)
     if not stats:
         return None
     keep, drop, undecided = classify_prefixes(stats, min_attempts, min_asr)
-    if not drop:
-        return None  # nothing proven dead yet — leave the pool as-is
-    # Keep the routable prefixes AND the still-undecided ones (give them a trial);
-    # only the proven-dead ``drop`` set is excluded.
-    keep_set = sorted(set(keep) | set(undecided))
+    # Keep routable + still-on-trial prefixes. If that leaves nothing, fall back
+    # to the single best prefix so we never empty the pool or freeze.
+    keep_set = set(keep) | set(undecided)
     if not keep_set:
-        # Everything with enough data is dead — don't rebuild to an empty pool.
-        logger.warning("adaptive pool %s: all prefixes dead, leaving pool unchanged",
-                       campaign["id"])
-        return None
-    if last_keep is not None and keep_set == sorted(last_keep):
-        return None  # keep-set unchanged since last rebuild — don't thrash
+        bp = best_prefix(stats)
+        if bp is None:
+            return None
+        keep_set = {bp}
+    drop_set = sorted(p for p in stats if p not in keep_set)
+    keep_list = sorted(keep_set)
+    if not drop_set:
+        return None  # every prefix kept — nothing to prune
+    if last_keep is not None and keep_list == sorted(last_keep):
+        return None  # unchanged decision — don't thrash
 
     node = node or {}
-    dad_length = len(next(iter(stats)))  # observed B-number prefix len is a floor
-    # Use the node's configured pool length for the full number length.
     dad_length = int(node.get("pool_length") or 12)
     path, n = rebuild_pool_csv(
         origin_zone=node.get("origin_zone", ""),
         origin_code=node.get("origin_code", ""),
-        keep_prefixes=keep_set,
+        keep_prefixes=keep_list,
         dad_length=dad_length,
         count=int(node.get("pool_count") or campaign.get("pool_count") or 100000),
     )
@@ -210,8 +230,8 @@ def optimize(
         "campaign_id": campaign["id"],
         "csv_path": path,
         "rows": n,
-        "kept": keep_set,
-        "dropped": drop,
+        "kept": keep_list,
+        "dropped": drop_set,
         "stats": {p: {"answered": a, "total": t, "asr": round(a / t, 3) if t else 0}
                   for p, (a, t) in stats.items()},
     }

@@ -375,6 +375,13 @@ class Config:
         """Leading B-number digits that define a 'prefix' (CC+operator, e.g. 224626)."""
         return self.getint("loops", "adaptive_prefix_len", 6)
 
+    @property
+    def loops_adaptive_window(self):
+        """Score only the most-recent N calls per campaign (0 = all-time). A
+        window keeps the decision tracking CURRENT routability instead of being
+        dragged by pre-convergence history."""
+        return self.getint("loops", "adaptive_window", 1000)
+
     # ── Loop destination allow-list (security: open SIP originator / SSRF) ──────
     # dest_host comes off the wire and flows to the SIPp target. Private,
     # loopback, multicast and 0.0.0.0 destinations are rejected by default so the

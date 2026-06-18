@@ -44,7 +44,7 @@ body::before {
   background-image:
     radial-gradient(var(--grid-line) 1px, transparent 1.4px),
     radial-gradient(90% 55% at 50% -12%, rgba(255, 122, 41, 0.055), transparent 60%),
-    radial-gradient(130% 110% at 50% 115%, rgba(0, 0, 0, 0.6), transparent 58%);
+    radial-gradient(130% 110% at 50% 115%, rgba(0, 0, 0, 0.3), transparent 58%);
   background-size: 22px 22px, 100% 100%, 100% 100%;
 }
 

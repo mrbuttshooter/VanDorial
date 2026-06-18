@@ -112,11 +112,44 @@ def test_optimize_noop_when_keep_unchanged(db):
     assert r2 is not None and r2["kept"] == ["224626"]
 
 
-def test_optimize_noop_when_all_dead(db):
+def test_optimize_noop_when_single_dead_prefix(db):
     cid = "camp-4"
     for i in range(30):
         _seed(db, cid, f"224620{i:06d}", 404, False)
-    # Everything with enough data is dead -> don't rebuild to an empty pool.
+    # Only one prefix and it's dead: best-available keeps it, nothing else to
+    # prune -> no rebuild (don't churn for no change).
     report = po.optimize(db, {"id": cid, "node_id": None}, {"origin_code": "353"},
                          min_attempts=10, min_asr=0.5)
     assert report is None
+
+
+def test_optimize_keeps_best_when_all_below_threshold(db, tmp_path):
+    cid = "camp-best"
+    # All prefixes below min_asr, but 224626 (20%) clearly beats 224620 (0%).
+    # Instead of freezing on "all dead", keep the best and prune the rest.
+    for i in range(30):
+        _seed(db, cid, f"224626{i:06d}", 200, i < 6)   # 6/30 = 20%
+    for i in range(30):
+        _seed(db, cid, f"224620{i:06d}", 404, False)   # 0/30
+    report = po.optimize(db, {"id": cid, "node_id": None},
+                         {"origin_code": "353", "pool_length": 12},
+                         min_attempts=10, min_asr=0.5)
+    assert report is not None, "should concentrate on the least-bad prefix, not freeze"
+    assert report["kept"] == ["224626"]
+    assert "224620" in report["dropped"]
+    with open(report["csv_path"]) as fh:
+        bnums = [ln.split(";")[1] for ln in fh.read().splitlines() if ";" in ln]
+    assert bnums and all(b.startswith("224626") for b in bnums)
+
+
+def test_prefix_asr_recent_window_tracks_current(db):
+    cid = "camp-window"
+    # 50 old answered calls, then 50 newer failed calls, same prefix.
+    for i in range(50):
+        _seed(db, cid, f"224626{i:06d}", 200, True)
+    for i in range(50):
+        _seed(db, cid, f"224626{50 + i:06d}", 404, False)
+    all_time = po.prefix_asr(db, cid, prefix_len=6)
+    recent = po.prefix_asr(db, cid, prefix_len=6, recent_limit=50)
+    assert all_time["224626"] == [50, 100]   # half answered over all time
+    assert recent["224626"] == [0, 50]       # the recent 50 are all failures
