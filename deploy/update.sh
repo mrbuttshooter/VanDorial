@@ -81,6 +81,16 @@ rsync "${RSYNC_OPTS[@]}" \
 # clear stale bytecode so a removed/renamed module can't shadow the new code
 find "$INSTALL_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+# 5b) disk-hygiene hardening (idempotent) — BEFORE the restart so the worker
+# boots with the capped retention value. Caps journald + [retention], installs
+# the /tmp sweep cron. Sourced from the unpacked bundle (update.sh doesn't sync
+# deploy/ into the install dir).
+HARDEN="$(dirname "$SRC")/deploy/harden-disk.sh"
+if [ -f "$HARDEN" ]; then
+  say "applying disk-hygiene hardening"
+  GENCALL_CFG="$INSTALL_DIR/etc/gencall.cfg" bash "$HARDEN" || say "disk hardening had a problem (non-fatal)"
+fi
+
 # 6) restart the worker (auto-detect the unit name) ------------------------
 UNIT=""
 for u in gencall-worker gencall gencall-controller; do

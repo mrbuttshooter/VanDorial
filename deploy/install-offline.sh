@@ -200,6 +200,10 @@ systemctl daemon-reload
 systemctl enable --now gencall-worker >/dev/null 2>&1
 ok "gencall-worker enabled + started (SQLite DB at ${INSTALL_DIR}/data/gencall.db; migrations auto-apply)"
 
+# ── 6b. Disk-hygiene hardening (journald cap, retention cap, /tmp sweep) ───────
+say "Applying disk-hygiene hardening"
+GENCALL_CFG="$CFG" bash "$REPO/deploy/harden-disk.sh" || warn "disk hardening step had a problem (non-fatal)"
+
 # ── 7. Health check + next steps ──────────────────────────────────────────────
 say "Health check"
 sleep 4
