@@ -14,10 +14,15 @@
 #      knob [loops] sipp_trace_err exists (off).
 #   3. Installs a daily cron that sweeps ORPHANED SIPp temp logs + old release
 #      bundles from /tmp (only files >1 day old, so active logs are untouched).
+#   4. Grows the root LVM volume into any unused disk/VG space. The Ubuntu
+#      autoinstall image leaves the root LV at ~10G even on a bigger disk (and
+#      the partition short of the disk end), so boxes ship with GBs stranded.
+#      This is non-destructive (grow only) and idempotent — a no-op once full.
 #
 # Env:
-#   GENCALL_CFG   path to gencall.cfg (caller passes the live one)
-#   JOURNAL_MAX   journald SystemMaxUse (default 200M)
+#   GENCALL_CFG       path to gencall.cfg (caller passes the live one)
+#   JOURNAL_MAX       journald SystemMaxUse (default 200M)
+#   GENCALL_GROW_DISK 1=grow root LVM into free space (default), 0=skip
 # ============================================================================
 set -euo pipefail
 
@@ -83,3 +88,59 @@ find /tmp -maxdepth 1 -mtime +1 \( \
 EOF
 chmod 0755 /etc/cron.daily/gencall-tmp-sweep
 say "installed /etc/cron.daily/gencall-tmp-sweep"
+
+# 4) Grow the root LVM volume into unused disk / VG space ---------------------
+# The fleet ships from the Ubuntu autoinstall image, which leaves the root LV at
+# ~10G even on a 20-30G disk AND leaves the LVM partition short of the disk end
+# (observed: 30G disk -> 17.3G part -> 10G LV -> 9.8G "/"). Reclaim it all.
+# Non-destructive: every operation only GROWS. Idempotent: when the partition
+# already fills the disk and the LV already fills the VG, all three steps are
+# no-ops. Conservative: anything that isn't the expected single-LVM-root layout
+# is left untouched and skipped with a note.
+grow_root() {
+  [ "${GENCALL_GROW_DISK:-1}" = "1" ] || { say "disk grow disabled (GENCALL_GROW_DISK=0)"; return 0; }
+  command -v lvextend >/dev/null 2>&1 || { say "no LVM tools; skip root grow"; return 0; }
+  command -v findmnt  >/dev/null 2>&1 || { say "no findmnt; skip root grow"; return 0; }
+
+  local root_src vg lv pv disk partnum free
+  root_src=$(findmnt -no SOURCE / 2>/dev/null) || return 0
+  case "$root_src" in
+    /dev/mapper/*|/dev/dm-*) : ;;
+    *) say "root ($root_src) is not LVM; skip auto-grow"; return 0 ;;
+  esac
+
+  # Resolve the VG/LV behind "/". If lvs can't read it, this isn't a layout we
+  # understand — leave it alone.
+  read -r vg lv < <(lvs --noheadings -o vg_name,lv_name "$root_src" 2>/dev/null | awk '{$1=$1; print}')
+  [ -n "${vg:-}" ] && [ -n "${lv:-}" ] || { say "could not resolve root VG/LV; skip grow"; return 0; }
+
+  # Grow every partition that backs this VG up to its disk end, then pvresize so
+  # the new space lands in the VG. growpart needs cloud-guest-utils; if it's
+  # absent we still reclaim whatever is already free in the VG (the bigger win).
+  while read -r pv; do
+    [ -n "$pv" ] || continue
+    disk="/dev/$(lsblk -no PKNAME "$pv" 2>/dev/null | head -1)"
+    partnum=$(cat "/sys/class/block/$(basename "$pv")/partition" 2>/dev/null || true)
+    if command -v growpart >/dev/null 2>&1 && [ -b "$disk" ] && [ -n "$partnum" ]; then
+      # growpart exits non-zero on "NOCHANGE" (already at disk end) — that's fine.
+      if growpart "$disk" "$partnum" >/dev/null 2>&1; then
+        say "grew partition $pv to fill $disk"
+      fi
+    fi
+    pvresize "$pv" >/dev/null 2>&1 || true
+  done < <(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk -v v="$vg" '$2==v{print $1}')
+
+  # Extend the LV into all free VG space and resize the filesystem (-r handles
+  # ext4 and xfs). Only if there's actually free space, so this is a clean no-op
+  # on an already-full VG.
+  free=$(vgs --noheadings -o vg_free --units b --nosuffix "$vg" 2>/dev/null | tr -dc '0-9')
+  if [ "${free:-0}" -gt 1048576 ]; then    # >1 MiB free → worth extending
+    if lvextend -r -l +100%FREE "/dev/$vg/$lv" >/dev/null 2>&1; then
+      say "extended /dev/$vg/$lv into free VG space"
+    else
+      say "WARN: lvextend failed (left unchanged) — grow /dev/$vg/$lv manually"
+    fi
+  fi
+  say "root volume now: $(df -h / | awk 'NR==2{print $2" total, "$4" free"}')"
+}
+grow_root || say "root grow had a problem (non-fatal)"
