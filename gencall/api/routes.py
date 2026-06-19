@@ -154,7 +154,9 @@ class GeneratePoolRequest(BaseModel):
     dest_zone: str = ""
     origin_code: str = ""
     dest_code: str = ""
-    dest_fixed_only: bool = False
+    # None => keep the node's stored fixed-only setting (so a bare "regenerate"
+    # never silently clears it); True/False explicitly overrides it.
+    dest_fixed_only: Optional[bool] = None
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=0, ge=0, le=18)  # 0 => keep the node's stored length
 
