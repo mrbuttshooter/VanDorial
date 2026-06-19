@@ -484,16 +484,29 @@ export function Nodes() {
             </select>
           </Field>
         </FieldRow>
-        <Field label="Fixed only" hint="Dial FIXED: generate from the country code but exclude every mobile/operator breakout under it, so numbers can't land on a mobile range.">
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={form.destFixedOnly}
-              onChange={(e) => set("destFixedOnly", e.target.checked)}
-            />
-            <span>Exclude mobile/other breakouts (fixed-line only)</span>
-          </label>
-        </Field>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            margin: "0 0 var(--space-3)",
+            cursor: "pointer",
+            fontSize: "var(--fs-sm)",
+            color: "var(--text-muted)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={form.destFixedOnly}
+            onChange={(e) => set("destFixedOnly", e.target.checked)}
+            style={{ width: 18, height: 18, flex: "0 0 auto", margin: 0, accentColor: "var(--ember, #f26a21)" }}
+          />
+          <span>
+            <strong style={{ color: "var(--text-bright)" }}>Fixed only</strong> — dial fixed-line: generate
+            from the country code but exclude every mobile/operator breakout under it, so numbers can't land
+            on a mobile range.
+          </span>
+        </label>
         <Field label="How many" hint="Random draw pool (max 2,000,000).">
           <input
             type="number"
