@@ -217,6 +217,7 @@ def create_app(config_path: str = None):
         db=db,
         trust_whitelist=config.trust_whitelist,
         drop_untrusted=config.trust_drop_untrusted,
+        record_max_age_s=config.loops_record_max_age_s,
     )
     loop_engine.parser = call_parser
     loops_api.call_parser = call_parser

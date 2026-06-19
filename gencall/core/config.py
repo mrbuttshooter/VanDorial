@@ -294,6 +294,14 @@ class Config:
     def loops_answered_max_duration_s(self):
         return self.getint("loops", "answered_max_duration_s", 7200)
 
+    # Force-finalize a call record with no parsed BYE after this long, so the
+    # tail-parser's in-memory accumulator can't leak. Must be comfortably above
+    # the longest call hold (ACD) you run; default 1800 s (30 min) covers any
+    # normal loop. 0 disables the staleness sweep.
+    @property
+    def loops_record_max_age_s(self):
+        return self.getint("loops", "record_max_age_s", 1800)
+
     # Minimum seconds between UAS restart attempts — the throttled backoff floor
     # for the answer-side monitor (design §8). Never busy-restart a crash loop.
     @property
