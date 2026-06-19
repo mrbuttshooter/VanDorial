@@ -117,6 +117,31 @@ def test_accumulator_outbound_a_side_duration():
     assert row["final_code"] == 200
 
 
+def test_fixed_only_excludes_mobile_breakouts():
+    """FIXED-only generation: numbers come from the country code but never land on
+    a defined mobile/other breakout under it; without the flag, some do."""
+    from gencall.scripts import gen_loop_csv as g
+    zones = {
+        "Testland": ["1"],
+        "Testland-Mobile (A)": ["12", "13"],
+        "Testland-Mobile (B)": ["145"],
+    }
+    ex = g.breakouts_under(zones, "1")
+    assert ex == {"12", "13", "145"}
+
+    fixed = g.generate_pairs(
+        zones, oad_zone="Testland", oad_code="1",
+        dad_zone="Testland", dad_code="1",
+        count=400, length=8, seed=3, dad_fixed_only=True)
+    assert all(not any(b.startswith(p) for p in ex) for _a, b in fixed)
+
+    spread = g.generate_pairs(
+        zones, oad_zone="Testland", oad_code="1",
+        dad_zone="Testland", dad_code="1",
+        count=400, length=8, seed=3, dad_fixed_only=False)
+    assert any(any(b.startswith(p) for p in ex) for _a, b in spread)
+
+
 def test_accumulator_answered_no_bye_stays_until_stale_then_evicts():
     """An answered call with NO BYE parsed (switch tore it down at a media
     timeout, so the UAC never logged t_bye_sent) must NOT linger forever — it is

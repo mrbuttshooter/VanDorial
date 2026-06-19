@@ -970,6 +970,8 @@ class GenerateNumbersRequest(BaseModel):
     dest_zone: str
     origin_code: str = ""          # optional: pin one code instead of spreading
     dest_code: str = ""
+    # Dial FIXED only: exclude every mobile/other breakout under the dest code.
+    dest_fixed_only: bool = False
     count: int = Field(default=500000, ge=1, le=5_000_000)
     length: int = Field(default=11, ge=4, le=18)
     seed: Optional[int] = None
@@ -1005,6 +1007,7 @@ def generate_numbers(req: GenerateNumbersRequest):
             origin_zone=req.origin_zone, dest_zone=req.dest_zone,
             origin_code=req.origin_code, dest_code=req.dest_code,
             count=req.count, length=req.length, seed=req.seed,
+            dest_fixed_only=req.dest_fixed_only,
         )
     except (ValueError, RuntimeError) as e:
         raise HTTPException(422, str(e))
