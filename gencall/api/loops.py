@@ -233,6 +233,96 @@ def start_loop(req: StartLoopRequest):
     return {"status": "started", "campaign": campaign}
 
 
+# ─── Fleet capture (controller routes by box; download is STREAMED) ──────────
+# The console talks to the controller; these resolve ``box`` ("local" => this
+# box's manager, else a worker api_url => proxy with that worker's api_key) and
+# mirror the fleet_stop_loop box-resolution pattern. The download never buffers
+# the .pcap in the controller — it streams chunk-by-chunk straight through. They
+# delegate to the worker handlers (capture_start/stop/list/delete/download)
+# defined further below; module-level names resolve at call time. Declared
+# BEFORE the /api/loops/{campaign_id} routes (esp. {campaign_id}/stop) so a
+# 'fleet-capture/...' path is not swallowed as a campaign id — the same reason
+# fleet-stop / history sit ahead of the {campaign_id} catch-alls.
+
+
+class FleetCaptureReq(BaseModel):
+    campaign_id: str
+    box: str = "local"   # "local" = this box, else the worker's api_url
+    capture_id: str = ""
+
+
+def _worker_key(box: str) -> str:
+    """The api_key for the worker whose api_url == box (for proxying), or ""."""
+    from gencall.db.models import Server
+    session = _db().get_session()
+    try:
+        s = session.query(Server).filter_by(api_url=box).first()
+        return s.api_key if s else ""
+    finally:
+        session.close()
+
+
+@router.post("/api/loops/fleet-capture/start", dependencies=[Depends(require_api_key)])
+def fleet_capture_start(req: FleetCaptureReq):
+    if not req.box or req.box == "local":
+        return capture_start(req.campaign_id)              # reuse the worker handler
+    return _worker_post(req.box, _worker_key(req.box),
+                        f"/api/loops/{req.campaign_id}/capture/start", {})
+
+
+@router.post("/api/loops/fleet-capture/stop", dependencies=[Depends(require_api_key)])
+def fleet_capture_stop(req: FleetCaptureReq):
+    if not req.box or req.box == "local":
+        return capture_stop(req.campaign_id, req.capture_id)
+    return _worker_post(req.box, _worker_key(req.box),
+                        f"/api/loops/{req.campaign_id}/capture/{req.capture_id}/stop", {})
+
+
+@router.get("/api/loops/fleet-capture/list", dependencies=[Depends(require_api_key)])
+def fleet_capture_list(campaign_id: str, box: str = "local"):
+    if not box or box == "local":
+        return capture_list(campaign_id)
+    import httpx
+    with httpx.Client(verify=False, timeout=15.0) as c:
+        r = c.get(box.rstrip("/") + f"/api/loops/{campaign_id}/captures",
+                  headers={"X-API-Key": _worker_key(box)})
+    r.raise_for_status()
+    return r.json()
+
+
+@router.delete("/api/loops/fleet-capture/delete", dependencies=[Depends(require_api_key)])
+def fleet_capture_delete(req: FleetCaptureReq):
+    if not req.box or req.box == "local":
+        return capture_delete(req.campaign_id, req.capture_id)
+    import httpx
+    with httpx.Client(verify=False, timeout=15.0) as c:
+        r = c.request("DELETE", req.box.rstrip("/") +
+                      f"/api/loops/{req.campaign_id}/capture/{req.capture_id}",
+                      headers={"X-API-Key": _worker_key(req.box)})
+    r.raise_for_status()
+    return r.json() if r.content else {"status": "deleted"}
+
+
+@router.get("/api/loops/fleet-capture/download", dependencies=[Depends(require_api_key)])
+def fleet_capture_download(campaign_id: str, capture_id: str, box: str = "local"):
+    if not box or box == "local":
+        return capture_download(campaign_id, capture_id)
+    import httpx
+    fname = f"{campaign_id}_{capture_id}.pcap"
+
+    def _proxy():
+        with httpx.Client(verify=False, timeout=None) as c:
+            with c.stream("GET", box.rstrip("/") +
+                          f"/api/loops/{campaign_id}/capture/{capture_id}/download",
+                          headers={"X-API-Key": _worker_key(box)}) as r:
+                r.raise_for_status()
+                for chunk in r.iter_bytes(65536):
+                    yield chunk
+
+    return StreamingResponse(_proxy(), media_type="application/vnd.tcpdump.pcap",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/api/loops/{campaign_id}/stop", dependencies=[Depends(require_api_key)])
 def stop_loop(campaign_id: str):
     """Stop a running campaign."""

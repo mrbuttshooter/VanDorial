@@ -64,3 +64,15 @@ def test_capture_lifecycle(client):
 
 def test_capture_start_unknown_campaign_404(client):
     assert client.post("/api/loops/nope/capture/start").status_code == 404
+
+
+def test_fleet_capture_local(client):
+    r = client.post("/api/loops/fleet-capture/start", json={"campaign_id": "loop-x", "box": "local"})
+    assert r.status_code == 200, r.text
+    cid = r.json()["capture"]["id"]
+    lst = client.get("/api/loops/fleet-capture/list", params={"campaign_id": "loop-x", "box": "local"})
+    assert any(c["id"] == cid for c in lst.json()["captures"])
+    assert client.post("/api/loops/fleet-capture/stop",
+                       json={"campaign_id": "loop-x", "box": "local", "capture_id": cid}).status_code == 200
+    assert client.request("DELETE", "/api/loops/fleet-capture/delete",
+                          json={"campaign_id": "loop-x", "box": "local", "capture_id": cid}).status_code == 200
