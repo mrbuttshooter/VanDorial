@@ -83,7 +83,7 @@ RUN set -eux; \
     dnf remove -y --noautoremove \
         libpcap-devel openssl-devel ncurses-devel \
         gcc gcc-c++ make cmake git ; \
-    dnf install -y --nodocs libpcap openssl-libs ncurses-libs ; \
+    dnf install -y --nodocs libpcap openssl-libs ncurses-libs tcpdump ; \
     dnf clean all ; \
     rm -rf /var/cache/dnf
 

@@ -89,6 +89,16 @@ if command -v setcap >/dev/null 2>&1; then
     || warn "could not setcap $SIPP_PATH — RTP-media loops need: sudo setcap cap_net_raw+ep $SIPP_PATH"
 fi
 
+# tcpdump for on-demand pcap capture (Trace). It is installed with the base
+# packages above; grant it capture caps so the non-root gencall service user can
+# run it without sudo.
+command -v tcpdump >/dev/null 2>&1 || apt-get install -y -qq tcpdump >/dev/null || true
+if command -v setcap >/dev/null 2>&1 && command -v tcpdump >/dev/null 2>&1; then
+  setcap cap_net_raw,cap_net_admin+eip "$(command -v tcpdump)" 2>/dev/null \
+    && ok "granted capture caps to tcpdump (Trace)" \
+    || warn "could not setcap tcpdump — captures need: sudo setcap cap_net_raw,cap_net_admin+eip \$(command -v tcpdump)"
+fi
+
 # ── 3. Service user ───────────────────────────────────────────────────────────
 id "$GC_USER" >/dev/null 2>&1 || { useradd --system --create-home --shell /usr/sbin/nologin "$GC_USER"; ok "created system user '$GC_USER'"; }
 

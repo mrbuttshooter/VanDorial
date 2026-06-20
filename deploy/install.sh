@@ -120,6 +120,14 @@ if $COMPOSE exec -T gencall sipp -v >/dev/null 2>&1; then
 else
   warn "Could not run 'sipp -v' in the worker — check '$COMPOSE logs gencall'."
 fi
+# tcpdump for on-demand pcap capture (Trace). It is installed in the worker
+# image (gencall/Dockerfile); the container provides the capture capability, so
+# there is no host setcap here — just verify the binary is present in the image.
+if $COMPOSE exec -T gencall tcpdump --version >/dev/null 2>&1; then
+  ok "tcpdump present in the worker image (Trace capture available)"
+else
+  warn "tcpdump not found in the worker image — on-demand Trace capture will be unavailable; rebuild the image ('$COMPOSE build') or check '$COMPOSE logs gencall'."
+fi
 curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1 && ok "worker  /api/health OK" || warn "worker health not responding yet — check '$COMPOSE logs gencall'"
 curl -fsS http://127.0.0.1:8090/api/health >/dev/null 2>&1 && ok "controller /api/health OK" || warn "controller health not responding yet — check '$COMPOSE logs controller'"
 

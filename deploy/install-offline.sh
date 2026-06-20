@@ -146,6 +146,19 @@ if command -v setcap >/dev/null 2>&1; then
     && ok "granted cap_net_raw to $SIPP_BIN (RTP media)" \
     || warn "could not setcap $SIPP_BIN — RTP-media loops need: sudo setcap cap_net_raw+ep $SIPP_BIN"
 fi
+# tcpdump for on-demand pcap capture (Trace). This installer is AIR-GAPPED, so we
+# do NOT fetch tcpdump from the network — it should already be on the base image.
+# Grant it capture caps so the non-root gencall user can run it without sudo;
+# warn (not fail) if it is absent so a signaling-only deploy still completes.
+if command -v tcpdump >/dev/null 2>&1; then
+  if command -v setcap >/dev/null 2>&1; then
+    setcap cap_net_raw,cap_net_admin+eip "$(command -v tcpdump)" 2>/dev/null \
+      && ok "granted capture caps to tcpdump (Trace)" \
+      || warn "could not setcap tcpdump — captures need: sudo setcap cap_net_raw,cap_net_admin+eip \$(command -v tcpdump)"
+  fi
+else
+  warn "tcpdump not found — on-demand Trace capture is unavailable until you install it (air-gapped: add it to the base image / bundle)."
+fi
 # Inbound trust whitelist is no longer set here — configure it from the
 # controller console (Configuration → Inbound Trust), which pushes it to every
 # worker at runtime. The HOST FIREWALL remains the real boundary (see docs).
