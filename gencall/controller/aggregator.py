@@ -196,11 +196,18 @@ class FleetAggregator:
         health_interval: float = 5.0,
         history_size: int = 1000,
         verify_tls: bool = False,
+        fleet_trust_provider: Optional[Callable[[], dict]] = None,
     ):
         self._node_provider = node_provider
         self.stats_interval = stats_interval
         self.health_interval = health_interval
         self.verify_tls = verify_tls
+        # Zero-arg callable returning the EFFECTIVE fleet trust config
+        # ({"ips": [...], "drop_untrusted": bool}) to re-push to a worker that
+        # transitions offline→online (it may have restarted with an empty
+        # whitelist). None (default) disables re-push, keeping existing
+        # construction/tests unaffected.
+        self._fleet_trust_provider = fleet_trust_provider
 
         # node_id -> latest StatsSnapshot dict (None if offline)
         self._node_stats: dict[int, Optional[dict]] = {}
@@ -355,9 +362,13 @@ class FleetAggregator:
                        for n in nodes}
 
         changes = []
+        rejoined_ids = []          # nodes that transitioned offline→online this tick
         with self._lock:
             for nid, h, err in results:
                 prev = self._node_status.get(nid, {})
+                if h is not None and not prev.get("online"):
+                    # offline (or never-seen) → online: re-push trust below.
+                    rejoined_ids.append(nid)
                 if h is not None:
                     status = {
                         "node_id": nid,
@@ -394,6 +405,25 @@ class FleetAggregator:
                     cb(status)
                 except Exception:
                     logger.debug("node status listener error", exc_info=True)
+
+        # Re-push the fleet trust whitelist to any node that just (re)joined: a
+        # worker that restarted may have come back with an empty whitelist, so we
+        # re-assert the controller's source-of-truth config immediately rather
+        # than waiting for the next operator Apply. The provider returns the
+        # ALREADY-EFFECTIVE config (empty list when enforcement is off = allow-all).
+        if rejoined_ids and self._fleet_trust_provider is not None:
+            node_by_id = {self._node_attr(n, "id"): n for n in nodes}
+            for nid in rejoined_ids:
+                node = node_by_id.get(nid)
+                if node is None:
+                    continue
+                try:
+                    t = self._fleet_trust_provider()
+                    await self._client_for(node).set_trust_whitelist(
+                        t["ips"], t["drop_untrusted"])
+                except Exception as e:
+                    logger.debug("trust re-push to rejoining node %s failed: %s",
+                                 nid, e)
 
     # ─── snapshot accessors ─────────────────────────────────────────────────
 

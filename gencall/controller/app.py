@@ -120,12 +120,21 @@ def create_controller_app(config: Config = None):
         finally:
             session.close()
 
+    def _fleet_trust_provider():
+        """The EFFECTIVE fleet trust config re-pushed to a worker that rejoins
+        (empty ips when enforcement is off = allow-all). None DB → allow-all."""
+        if db is None:
+            return {"ips": [], "drop_untrusted": False}
+        return {"ips": db.effective_fleet_ips(),
+                "drop_untrusted": db.get_fleet_trust()["drop_untrusted"]}
+
     aggregator = FleetAggregator(
         _enabled_node_provider,
         stats_interval=1.0,
         health_interval=5.0,
         history_size=config.stats_history_size,
         verify_tls=False,
+        fleet_trust_provider=_fleet_trust_provider,
     )
     aggregator.add_stats_listener(controller_ws.on_fleet_stats)
     aggregator.add_status_listener(controller_ws.on_node_status)

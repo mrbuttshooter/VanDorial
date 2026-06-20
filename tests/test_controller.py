@@ -862,3 +862,80 @@ def test_fleet_trust_endpoints_require_api_key(controller):
     client, _headers, _ctx = controller
     assert client.get("/api/fleet/config/trust").status_code == 401
     assert client.post("/api/fleet/config/trust", json={}).status_code == 401
+
+
+# ─── Re-push fleet trust on a worker (re)join ─────────────────────────────────
+
+
+def test_aggregator_repushes_trust_on_rejoin(monkeypatch):
+    """A node that transitions offline→online gets the effective fleet trust
+    re-pushed once (workers may have restarted with an empty whitelist); a node
+    that stays online is not re-pushed again."""
+    import asyncio
+
+    from gencall.controller.aggregator import FleetAggregator
+    from gencall.controller.node_client import NodeClient
+
+    # Mutable: whether the single node's health probe succeeds this tick.
+    online = {"v": False}
+    pushed = []
+
+    async def fake_health(self):
+        if not online["v"]:
+            raise RuntimeError("connection refused")
+        return {"version": "2.0.0", "active_tests": 0, "status": "ok"}
+
+    async def fake_push(self, ips, drop_untrusted):
+        pushed.append((self.address, list(ips), drop_untrusted))
+        return {"status": "applied"}
+
+    monkeypatch.setattr(NodeClient, "health", fake_health, raising=True)
+    monkeypatch.setattr(NodeClient, "set_trust_whitelist", fake_push, raising=True)
+
+    nodes = [{"id": 1, "address": "http://w1", "api_key": "k1",
+              "group_id": None, "enabled": True}]
+
+    agg = FleetAggregator(
+        lambda: nodes,
+        fleet_trust_provider=lambda: {"ips": ["10.0.0.1"], "drop_untrusted": True},
+    )
+
+    # Tick 1: node is offline → no push.
+    asyncio.run(agg._poll_health_once())
+    assert pushed == []
+
+    # Tick 2: node comes online (offline→online transition) → exactly one push.
+    online["v"] = True
+    asyncio.run(agg._poll_health_once())
+    assert pushed == [("http://w1", ["10.0.0.1"], True)]
+
+    # Tick 3: node stays online → no further push.
+    asyncio.run(agg._poll_health_once())
+    assert pushed == [("http://w1", ["10.0.0.1"], True)]
+
+
+def test_aggregator_without_trust_provider_does_not_push(monkeypatch):
+    """Backwards-compat: no fleet_trust_provider (default None) → never pushes,
+    even on an offline→online transition."""
+    import asyncio
+
+    from gencall.controller.aggregator import FleetAggregator
+    from gencall.controller.node_client import NodeClient
+
+    pushed = []
+
+    async def fake_health(self):
+        return {"version": "2.0.0", "active_tests": 0, "status": "ok"}
+
+    async def fake_push(self, ips, drop_untrusted):
+        pushed.append(self.address)
+        return {"status": "applied"}
+
+    monkeypatch.setattr(NodeClient, "health", fake_health, raising=True)
+    monkeypatch.setattr(NodeClient, "set_trust_whitelist", fake_push, raising=True)
+
+    nodes = [{"id": 1, "address": "http://w1", "api_key": "k1",
+              "group_id": None, "enabled": True}]
+    agg = FleetAggregator(lambda: nodes)  # no provider
+    asyncio.run(agg._poll_health_once())
+    assert pushed == []
