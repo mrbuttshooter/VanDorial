@@ -385,6 +385,24 @@ export interface SaleZonesResponse {
   codes: Record<string, string[]>;
 }
 
+/* One user-added sale-zone overlay row (POST /api/sale-zones response). The
+   bundled CSV deck has no id; only these DB rows are deletable. */
+export interface SaleZoneRow {
+  id: number;
+  country: string;
+  zone: string;
+  code: string;
+  created_at: string | null;
+}
+
+/* Body for POST /api/sale-zones — add a zone (country + label + dial code) on
+   top of the bundled catalog. */
+export interface SaleZoneCreate {
+  country: string;
+  zone: string;
+  code: string;
+}
+
 /* Result of POST /api/servers/check-worker — the "Test connection" probe. */
 export interface WorkerCheck {
   address: string;

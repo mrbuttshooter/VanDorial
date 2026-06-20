@@ -16,6 +16,8 @@ import type {
   NodeGroup,
   NodeGroupRequest,
   RunPresetRequest,
+  SaleZoneCreate,
+  SaleZoneRow,
   SaleZonesResponse,
   Scenario,
   Server,
@@ -247,6 +249,15 @@ export const api = {
 
   // ---- Sale zones (Country -> Zone -> Code pickers on the Nodes page) ----
   saleZones: () => request<SaleZonesResponse>("/api/sale-zones"),
+  createSaleZone: (req: SaleZoneCreate) =>
+    request<{ status: string; sale_zone: SaleZoneRow }>("/api/sale-zones", {
+      method: "POST",
+      body: req,
+    }),
+  deleteSaleZone: (id: number) =>
+    request<{ status: string; id: number }>(`/api/sale-zones/${id}`, {
+      method: "DELETE",
+    }),
 
   // ---- Nodes (source-IP servers, each carrying its own number pool) ----
   listServers: () => request<{ servers: Server[] }>("/api/servers"),
