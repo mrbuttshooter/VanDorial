@@ -362,6 +362,29 @@ def routable_codes(zone_name: str, codes: List[str]) -> List[str]:
 
 # ── Pair generation ───────────────────────────────────────────────────────────
 
+# Optional overlay provider: a zero-arg callable returning {zone: [codes]} of
+# user-added sale zones (the DB overlay). Registered once at app startup
+# (gencall/main.py) so every generate_pool_file() call sees new zones without
+# threading a DB session through. Stays None in the pure CLI / tests.
+_overlay_provider = None
+
+
+def set_overlay_provider(fn) -> None:
+    """Register (or clear, with None) the sale-zone overlay provider."""
+    global _overlay_provider
+    _overlay_provider = fn
+
+
+def _overlay_zones() -> Dict[str, List[str]]:
+    if _overlay_provider is None:
+        return {}
+    try:
+        return _overlay_provider() or {}
+    except Exception:
+        _log.warning("sale-zone overlay provider failed; using base deck only", exc_info=True)
+        return {}
+
+
 def _side_codes(zones, zone_name, code_override, pattern):
     """Resolve the list of codes for one side, plus an optional validation regex.
 
@@ -443,18 +466,23 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
 
 def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
                        seed=None, origin_code="", dest_code="", out_dir=None,
-                       oad_length=None, dad_length=None):
+                       oad_length=None, dad_length=None, extra_zones=None):
     """Generate an A/B number pool for a node and write it to a file.
 
     Resolves the deck, builds ``count`` validated pairs for the origin/drop sale
     zones, writes a bare ``A;B`` pool (no header/trailing) to ``out_dir`` (default
     ``$TMP/gencall_numbers``), and returns ``(csv_path, count, preview_rows)``.
     Raises ``ValueError`` on an unknown zone / impossible request.
+
+    ``extra_zones`` ({zone: [codes]}) is merged onto the deck before generation;
+    when omitted, the registered overlay provider supplies it (DB-added zones).
     """
     import os
     import tempfile
 
     zones = load_zones(resolve_deck_path())
+    overlay = extra_zones if extra_zones is not None else _overlay_zones()
+    zones = merge_zones(zones, overlay)
     pairs = generate_pairs(
         zones,
         oad_zone=origin_zone, oad_code=origin_code or None,

@@ -218,6 +218,33 @@ def test_build_country_tree_uses_overrides_for_new_zones(zones):
     assert "Nigeria-Lagos" in tree["Nigeria"]
 
 
+def test_generate_pool_file_honors_extra_zones(tmp_path, monkeypatch):
+    # Force the sample deck so the test is deck-independent.
+    monkeypatch.setenv("GENCALL_SALE_CODES", SAMPLE)
+    path, n, preview = g.generate_pool_file(
+        origin_zone="Nigeria-Lagos", dest_zone="Faketopia-Mobile",
+        count=5, length=11, seed=1,
+        extra_zones={"Faketopia-Mobile": ["999"]},
+    )
+    assert n == 5
+    for row in preview:
+        a, b = row.split(";")
+        assert b.startswith("999")
+
+
+def test_overlay_provider_is_used_when_no_explicit_extra(tmp_path, monkeypatch):
+    monkeypatch.setenv("GENCALL_SALE_CODES", SAMPLE)
+    g.set_overlay_provider(lambda: {"Faketopia-Mobile": ["999"]})
+    try:
+        path, n, preview = g.generate_pool_file(
+            origin_zone="Nigeria-Lagos", dest_zone="Faketopia-Mobile",
+            count=3, length=11, seed=2,
+        )
+        assert all(row.split(";")[1].startswith("999") for row in preview)
+    finally:
+        g.set_overlay_provider(None)  # reset global
+
+
 def test_cli_generates_to_file(tmp_path):
     out = tmp_path / "nums.csv"
     rc = g.main(["--codes", SAMPLE, "--oad-zone", "Nigeria-Lagos",
