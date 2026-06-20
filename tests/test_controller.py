@@ -780,3 +780,85 @@ def test_effective_fleet_ips_gates_on_enabled(tmp_path):
     assert db.effective_fleet_ips() == []
     db.set_fleet_trust(enabled=True, ips=["10.0.0.1"], drop_untrusted=False)
     assert db.effective_fleet_ips() == ["10.0.0.1"]
+
+
+# ─── Controller fleet trust fan-out endpoint ──────────────────────────────────
+
+
+def test_fleet_trust_endpoint_saves_and_fans_out(controller, monkeypatch):
+    """POST /api/fleet/config/trust persists the singleton and pushes the
+    EFFECTIVE list to every enabled worker via NodeClient.set_trust_whitelist."""
+    client, headers, ctx = controller
+
+    pushed = []
+
+    async def fake_push(self, ips, drop_untrusted):
+        pushed.append((self.address, list(ips), drop_untrusted))
+        return {"status": "applied", "ips": ips, "drop_untrusted": drop_untrusted}
+
+    from gencall.controller.node_client import NodeClient
+    monkeypatch.setattr(NodeClient, "set_trust_whitelist", fake_push, raising=True)
+
+    # Two enabled workers (online state is irrelevant — push targets ENABLED).
+    ctx.register_node(client, "http://node-1", online=True)
+    ctx.register_node(client, "http://node-2", online=False)
+
+    r = client.post("/api/fleet/config/trust",
+                    json={"enabled": True, "ips": ["10.0.0.1"], "drop_untrusted": True},
+                    headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["ips"] == ["10.0.0.1"]
+    assert body["pushed"] == 2
+    addrs = {res["address"] for res in body["results"] if res["ok"]}
+    assert addrs == {"http://node-1", "http://node-2"}
+    assert ("http://node-1", ["10.0.0.1"], True) in pushed
+    assert ("http://node-2", ["10.0.0.1"], True) in pushed
+
+    # Persisted on the controller singleton, and GET reflects it.
+    from gencall.controller import routes as controller_routes
+    assert controller_routes.db.get_fleet_trust()["ips"] == ["10.0.0.1"]
+    got = client.get("/api/fleet/config/trust", headers=headers).json()
+    assert got == {"enabled": True, "ips": ["10.0.0.1"], "drop_untrusted": True}
+
+
+def test_fleet_trust_disabled_pushes_empty_but_keeps_saved(controller, monkeypatch):
+    """enabled=false pushes an empty (allow-all) list to workers but keeps the
+    saved list for the UI."""
+    client, headers, ctx = controller
+
+    pushed = []
+
+    async def fake_push(self, ips, drop_untrusted):
+        pushed.append((self.address, list(ips), drop_untrusted))
+        return {"status": "applied"}
+
+    from gencall.controller.node_client import NodeClient
+    monkeypatch.setattr(NodeClient, "set_trust_whitelist", fake_push, raising=True)
+
+    ctx.register_node(client, "http://node-1", online=True)
+
+    r = client.post("/api/fleet/config/trust",
+                    json={"enabled": False, "ips": ["10.0.0.1", "10.0.0.2"],
+                          "drop_untrusted": False},
+                    headers=headers)
+    assert r.status_code == 200, r.text
+    # Saved list preserved for the UI...
+    assert r.json()["ips"] == ["10.0.0.1", "10.0.0.2"]
+    # ...but the EFFECTIVE push to the worker is empty (allow-all).
+    assert pushed == [("http://node-1", [], False)]
+
+
+def test_fleet_trust_endpoint_rejects_bad_ip(controller):
+    client, headers, _ctx = controller
+    r = client.post("/api/fleet/config/trust",
+                    json={"enabled": True, "ips": ["nope"], "drop_untrusted": False},
+                    headers=headers)
+    assert r.status_code == 422
+
+
+def test_fleet_trust_endpoints_require_api_key(controller):
+    client, _headers, _ctx = controller
+    assert client.get("/api/fleet/config/trust").status_code == 401
+    assert client.post("/api/fleet/config/trust", json={}).status_code == 401

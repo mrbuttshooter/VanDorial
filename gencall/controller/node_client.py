@@ -129,6 +129,14 @@ class NodeClient:
         return await self._request_json(
             "GET", f"/api/loops/{campaign_id}")
 
+    # ─── inbound trust whitelist (controller push, design §4.1 / §5.3) ──────
+
+    async def set_trust_whitelist(self, ips: list, drop_untrusted: bool) -> dict:
+        """POST /api/config/trust on the worker (push the inbound trust config)."""
+        return await self._request_json(
+            "POST", "/api/config/trust",
+            json={"ips": ips, "drop_untrusted": drop_untrusted})
+
     # ─── generic passthrough proxy ──────────────────────────────────────────
 
     async def proxy(
