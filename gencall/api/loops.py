@@ -28,6 +28,7 @@ from gencall.api.loop_validation import (
     validate_transport,
 )
 from gencall.core.config import Config
+from gencall.core.call_records import CallRecordParser
 from gencall.core.loop_engine import CapExceeded, IPBusy, LoopEngine
 from gencall.core.loop_matcher import LoopMatcher
 from gencall.core import sale_zones as sale_zones_db
@@ -45,6 +46,12 @@ loop_engine: Optional[LoopEngine] = None
 # When present, GET /api/loops/{id} folds the latest loop_stats snapshot into the
 # campaign's live status. None => no matcher (e.g. no DB); the field is omitted.
 loop_matcher: Optional[LoopMatcher] = None
+
+# The shared CallRecordParser (design §4.2), wired in main.py. GET/POST
+# /api/config/trust read/hot-apply its inbound trust whitelist + drop flag (the
+# controller fans the whitelist out to every worker via this endpoint). None =>
+# no parser configured on this worker; the endpoints return 503.
+call_parser: Optional[CallRecordParser] = None
 
 
 def _engine() -> LoopEngine:
@@ -1011,3 +1018,34 @@ def generate_numbers(req: GenerateNumbersRequest):
         "dest_zone": req.dest_zone,
         "preview": preview,
     }
+
+
+# ─── Inbound trust whitelist (controller push, design §4.1 / §5.3) ───────────
+
+
+class TrustConfigBody(BaseModel):
+    ips: list[str] = []
+    drop_untrusted: bool = False
+
+
+@router.get("/api/config/trust", dependencies=[Depends(require_api_key)])
+def get_trust_config():
+    """This worker's current inbound trust whitelist + drop flag."""
+    if call_parser is None:
+        raise HTTPException(503, "call-record parser not configured on this worker")
+    return call_parser.get_trust()
+
+
+@router.post("/api/config/trust", dependencies=[Depends(require_api_key)])
+def set_trust_config(body: TrustConfigBody):
+    """Hot-apply an inbound trust whitelist (controller push). Empty ips = allow-all."""
+    import ipaddress
+    if call_parser is None:
+        raise HTTPException(503, "call-record parser not configured on this worker")
+    for tok in body.ips:
+        try:
+            ipaddress.ip_network((tok or "").strip(), strict=False)
+        except ValueError:
+            raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
+    call_parser.set_trust([t.strip() for t in body.ips if t.strip()], body.drop_untrusted)
+    return {"status": "applied", **call_parser.get_trust()}
