@@ -121,10 +121,13 @@ else
   warn "Could not run 'sipp -v' in the worker — check '$COMPOSE logs gencall'."
 fi
 # tcpdump for on-demand pcap capture (Trace). It is installed in the worker
-# image (gencall/Dockerfile); the container provides the capture capability, so
-# there is no host setcap here — just verify the binary is present in the image.
+# image (gencall/Dockerfile). NOTE: the worker container runs non-root, so to
+# actually capture, the container must also hold NET_RAW — add to the worker
+# service in your compose file:  cap_add: ["NET_RAW", "NET_ADMIN"]  (without it
+# Trace capture fails cleanly with a 503, it does not crash). Here we only
+# verify the binary is present in the image.
 if $COMPOSE exec -T gencall tcpdump --version >/dev/null 2>&1; then
-  ok "tcpdump present in the worker image (Trace capture available)"
+  ok "tcpdump present in the worker image (Trace also needs the container's cap_add NET_RAW to capture)"
 else
   warn "tcpdump not found in the worker image — on-demand Trace capture will be unavailable; rebuild the image ('$COMPOSE build') or check '$COMPOSE logs gencall'."
 fi
