@@ -190,6 +190,19 @@ export interface LoopStats {
   unmatched_pairs: LoopUnmatchedPair[];
 }
 
+/* ---- On-demand trace (pcap) capture (gencall/core/capture.py) -------------
+   One tcpdump capture for a running loop, kept on the worker until deleted.
+   Mirrors CaptureManager._info(): {id, campaign_id, running, size_bytes,
+   started_at, stopped_at}. `started_at`/`stopped_at` are epoch seconds. */
+export interface CaptureInfo {
+  id: string;
+  campaign_id: string;
+  running: boolean;
+  size_bytes: number;
+  started_at: number | null;
+  stopped_at: number | null;
+}
+
 export interface StartLoopRequest {
   name?: string;
   dest_host: string;

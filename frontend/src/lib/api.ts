@@ -4,6 +4,7 @@
    live in a single place.
    ============================================================================ */
 import type {
+  CaptureInfo,
   Connector,
   ConnectorRequest,
   FleetResourcesResponse,
@@ -104,6 +105,28 @@ async function request<T>(
 
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/* Authenticated file download: the X-API-Key header can't ride on a plain
+   <a href> or window.open, so fetch the bytes with the key, wrap them in a
+   blob, and click a synthetic anchor to save them with the given filename. */
+async function downloadAuthed(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const k = getApiKey();
+  if (k) headers["X-API-Key"] = k;
+  const res = await fetch(BASE + path, { headers });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const url = URL.createObjectURL(await res.blob());
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /* When MOCK_ENABLED, route through the in-browser mock so the console is fully
@@ -242,6 +265,40 @@ export const api = {
     request<{ status: string; campaign: LoopCampaign }>(
       `/api/loops/${encodeURIComponent(id)}/stop`,
       { method: "POST" },
+    ),
+
+  // ---- On-demand trace (pcap) capture for a running loop ----
+  // Controller "fleet-capture" endpoints route by box ("local" or a worker url);
+  // tcpdump runs on the worker, the file is pulled on explicit download only.
+  /** Start a tcpdump capture for a running loop on its box. */
+  startCapture: (campaign_id: string, box: string) =>
+    request<{ status: string; capture: CaptureInfo }>("/api/loops/fleet-capture/start", {
+      method: "POST",
+      body: { campaign_id, box },
+    }),
+  /** Stop a running capture. */
+  stopCapture: (campaign_id: string, box: string, capture_id: string) =>
+    request<{ status: string; capture: CaptureInfo }>("/api/loops/fleet-capture/stop", {
+      method: "POST",
+      body: { campaign_id, box, capture_id },
+    }),
+  /** List a loop's captures (running + stopped, until deleted). */
+  listCaptures: (campaign_id: string, box: string) =>
+    request<{ captures: CaptureInfo[] }>(
+      `/api/loops/fleet-capture/list?campaign_id=${encodeURIComponent(campaign_id)}&box=${encodeURIComponent(box)}`,
+    ),
+  /** Delete a capture's file from the worker. */
+  deleteCapture: (campaign_id: string, box: string, capture_id: string) =>
+    request<{ status: string }>("/api/loops/fleet-capture/delete", {
+      method: "DELETE",
+      body: { campaign_id, box, capture_id },
+    }),
+  /** Stream a capture's .pcap to the browser (authenticated download). */
+  downloadCapture: (campaign_id: string, box: string, capture_id: string) =>
+    downloadAuthed(
+      `/api/loops/fleet-capture/download?campaign_id=${encodeURIComponent(campaign_id)}` +
+        `&box=${encodeURIComponent(box)}&capture_id=${encodeURIComponent(capture_id)}`,
+      `${campaign_id}_${capture_id}.pcap`,
     ),
 
   // ---- Sale zones (Country -> Zone -> Code pickers on the Nodes page) ----
