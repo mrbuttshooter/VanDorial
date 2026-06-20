@@ -9,7 +9,6 @@ sqlite Database + LoopEngine and exercise:
   * start a campaign     -> UAC spawned (PID registered) + a 'running' DB row;
   * stop a campaign      -> UAC process gone, status 'stopped';
   * caps enforced        -> an over-limit start is refused (CapExceeded / 409);
-  * CSV export           -> records.csv returns the call_records rows;
   * answer status        -> the persistent UAS reports running.
 
 Both the engine surface and the FastAPI router (via TestClient) are covered.
@@ -186,36 +185,6 @@ def test_answer_status_reports_uas(loop_engine):
     assert status["running"] is True
     assert status["state"] == SIPpState.RUNNING.value
     assert status["max_answered"] == loop_engine.config.loops_max_answered
-
-
-def test_records_csv_export_returns_rows(loop_engine, db):
-    """records.csv export returns the campaign's call_records as CSV rows."""
-    campaign = loop_engine.start_campaign(dest_host="1.2.3.4", duration_s=1)
-    cid = campaign["id"]
-
-    # Seed two call_records for this campaign directly (the tail-parser is
-    # covered elsewhere; here we assert the export query/format).
-    from sqlalchemy import text
-    with db.engine.begin() as conn:
-        for i in range(2):
-            conn.execute(
-                text(
-                    "INSERT INTO call_records "
-                    "(campaign_id, direction, call_uuid, a_number, b_number, "
-                    " t_start_ms, t_answer_ms, t_end_ms, duration_ms, final_code, "
-                    " created_at) VALUES "
-                    "(:cid, 'out', :uuid, '100', '200', 1000, 1120, 61120, 60000, "
-                    " 200, '2026-06-10T00:00:00Z')"
-                ),
-                {"cid": cid, "uuid": f"call-{i}@h"},
-            )
-
-    csv_text = loop_engine.records_csv(cid)
-    lines = [ln for ln in csv_text.splitlines() if ln.strip()]
-    assert lines[0].startswith("id,campaign_id,direction,")
-    assert len(lines) == 3  # header + 2 rows
-    assert any("call-0@h" in ln for ln in lines)
-    assert any("call-1@h" in ln for ln in lines)
 
 
 # ─── Call-path bug regressions (review-confirmed) ─────────────────────────────
@@ -803,59 +772,6 @@ def test_fleet_resources_local_and_remote(stub_sipp, tmp_path, monkeypatch):
         Config.reset()
 
 
-def test_records_export_box_aware(stub_sipp, tmp_path, monkeypatch):
-    """records.csv export: a local campaign yields CSV here; a remote campaign
-    (box = a worker api_url) is proxied to that worker — pointed at an
-    unreachable box it returns 502 (the proxy path was taken), NOT a local
-    header-only CSV (the 'no records from the controller' bug)."""
-    import textwrap
-    from fastapi.testclient import TestClient
-
-    from gencall.core.config import Config
-    from gencall.core.api_gateway import APIKeyManager
-
-    db_path = tmp_path / "rec.db"
-    cfg_path = tmp_path / "rec.cfg"
-    cfg_path.write_text(textwrap.dedent(f"""\
-        [sipp]
-        command = {stub_sipp.launcher}
-        stats_dir = {stub_sipp.stats_dir}
-        open_file_limit = 256
-        [database]
-        engine = sqlite
-        sqlite_path = {db_path}
-        """), encoding="utf-8")
-
-    Config.reset()
-    monkeypatch.setenv("GENCALL_CONFIG", str(cfg_path))
-    import gencall.main as gc_main
-    from gencall.api import loops as loops_api
-
-    app, _config = gc_main.create_app(str(cfg_path))
-    le = loops_api.loop_engine
-    raw_key, _ = APIKeyManager(db=le.db).create_key("rec")
-    client = TestClient(app)
-    client.headers.update({"X-API-Key": raw_key})
-    try:
-        # Local (default box): valid CSV with at least the header row.
-        r = client.get("/api/loops/whatever/records.csv")
-        assert r.status_code == 200, r.text
-        assert r.text.splitlines()[0].startswith("id,campaign_id,direction")
-
-        # Remote box that is unreachable: proxied -> 502 (proxy path taken).
-        r2 = client.get("/api/loops/whatever/records.csv",
-                        params={"box": "http://127.0.0.1:9"})
-        assert r2.status_code == 502, r2.text
-    finally:
-        try:
-            le.stop_monitor()
-            le.engine.stop_all()
-            le.parser.stop()
-        except Exception:
-            pass
-        Config.reset()
-
-
 def test_uac_scenario_rtp_rendering(tmp_path):
     """RTP toggle: signaling-only returns the shipped template unchanged; RTP on
     renders a per-campaign scenario that injects a single rtp_stream exec (after
@@ -1309,33 +1225,6 @@ def test_api_answer_status(api_client, loop_engine):
     assert resp.json()["running"] is True
 
 
-def test_api_records_csv(api_client, loop_engine, db):
-    """GET /api/loops/{id}/records.csv returns CSV with the seeded rows."""
-    start = api_client.post(
-        "/api/loops", json={"dest_host": "9.9.9.9", "duration_s": 1},
-    )
-    cid = start.json()["campaign"]["id"]
-
-    from sqlalchemy import text
-    with db.engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO call_records "
-                "(campaign_id, direction, call_uuid, a_number, b_number, "
-                " duration_ms, final_code, created_at) VALUES "
-                "(:cid, 'out', 'x@h', '100', '200', 60000, 200, '2026-06-10T00:00:00Z')"
-            ),
-            {"cid": cid},
-        )
-
-    resp = api_client.get(f"/api/loops/{cid}/records.csv")
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["content-type"].startswith("text/csv")
-    lines = [ln for ln in resp.text.splitlines() if ln.strip()]
-    assert lines[0].startswith("id,campaign_id,direction,")
-    assert any("x@h" in ln for ln in lines)
-
-
 # ─── Input-validation hardening (review-confirmed security bugs) ──────────────
 
 def test_api_rejects_out_of_range_rate(api_client):
@@ -1434,47 +1323,6 @@ def test_engine_rejects_unbounded_inputs_directly(loop_engine):
     with pytest.raises(CapExceeded):
         loop_engine.start_campaign(
             dest_host="9.9.9.9", max_concurrent=99999, duration_s=1)
-
-
-def test_records_csv_quotes_comma_and_defangs_formula(loop_engine, db):
-    """CSV export quotes a comma field and de-fangs a leading '=' (injection)."""
-    campaign = loop_engine.start_campaign(dest_host="9.9.9.9", duration_s=1)
-    cid = campaign["id"]
-
-    from sqlalchemy import text
-    with db.engine.begin() as conn:
-        # a_number carries a formula-injection payload; b_number embeds a comma.
-        conn.execute(
-            text(
-                "INSERT INTO call_records "
-                "(campaign_id, direction, call_uuid, a_number, b_number, "
-                " source_ip, duration_ms, final_code, created_at) VALUES "
-                "(:cid, 'out', 'evil@h', :a, :b, :ip, 1000, 200, "
-                " '2026-06-10T00:00:00Z')"
-            ),
-            {
-                "cid": cid,
-                "a": "=cmd|'/c calc'!A0",   # formula injection
-                "b": "100,200",             # contains a comma
-                "ip": "@SUM(1+1)",          # another formula lead
-            },
-        )
-
-    csv_text = loop_engine.records_csv(cid)
-
-    # Parse it back with the stdlib reader — proves the quoting is well-formed.
-    import csv as _csv
-    import io as _io
-    rows = list(_csv.reader(_io.StringIO(csv_text)))
-    header = rows[0]
-    data = rows[1]
-    record = dict(zip(header, data))
-
-    # The comma field round-trips as ONE cell (was quoted, not split).
-    assert record["b_number"] == "100,200"
-    # The formula leads are de-fanged with a leading apostrophe.
-    assert record["a_number"].startswith("'="), record["a_number"]
-    assert record["source_ip"].startswith("'@"), record["source_ip"]
 
 
 # ─── dest_host validation unit tests ──────────────────────────────────────────

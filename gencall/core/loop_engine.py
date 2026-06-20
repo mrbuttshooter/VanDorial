@@ -36,9 +36,7 @@ monitor thread sleeps ≥ 1 s between passes — no busy loops (per this codebas
 standard).
 """
 
-import csv
 import datetime
-import io
 import logging
 import os
 import random
@@ -894,66 +892,3 @@ class LoopEngine:
         except Exception as e:
             logger.warning("Could not list loop campaigns: %s", e)
             return None
-
-    # ── CSV export of call_records (design §4.4) ─────────────────────────────
-
-    # CSV-injection guard: a leading one of these makes spreadsheet apps treat
-    # the cell as a formula. a_number/b_number/source_ip arrive off the wire, so
-    # any cell starting with one is de-fanged with a leading apostrophe.
-    _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
-
-    @classmethod
-    def _csv_safe(cls, value) -> str:
-        """Neutralize formula injection in an exported CSV cell.
-
-        Quoting is handled by ``csv.writer``; this only addresses the formula
-        vector (a leading =/+/-/@ executing in Excel/Sheets) by prefixing such a
-        cell with an apostrophe. Tab/CR/LF leads are treated the same way since
-        a cell may be re-trimmed by the consumer.
-        """
-        if value is None:
-            return ""
-        s = str(value)
-        if s and (s[0] in cls._CSV_FORMULA_PREFIXES or s[0] in ("\t", "\r", "\n")):
-            return "'" + s
-        return s
-
-    def records_csv(self, campaign_id: str) -> str:
-        """Export this campaign's ``call_records`` as a CSV string (header + rows).
-
-        Uses ``csv.writer`` for correct RFC-4180 quoting (a field containing a
-        comma/quote/newline is quoted, not naively joined) and de-fangs formula
-        injection in attacker-influenced cells. Returns just the header row when
-        there are no records (or no DB) so the endpoint always yields valid CSV.
-        """
-        columns = [
-            "id", "campaign_id", "direction", "call_uuid", "a_number",
-            "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
-            "duration_ms", "final_code", "matched_record_id", "created_at",
-        ]
-        buf = io.StringIO()
-        # \r\n line terminator is the CSV (RFC-4180) standard; quoting is QUOTE_MINIMAL.
-        writer = csv.writer(buf, lineterminator="\n")
-        writer.writerow(columns)
-
-        rows = []
-        if self.db is not None:
-            try:
-                from sqlalchemy import text
-
-                with self.db.engine.connect() as conn:
-                    rows = conn.execute(
-                        text(
-                            "SELECT " + ", ".join(columns) + " FROM call_records "
-                            "WHERE campaign_id = :cid ORDER BY id"
-                        ),
-                        {"cid": campaign_id},
-                    ).fetchall()
-            except Exception as e:
-                logger.warning("Could not export call_records for %s: %s",
-                               campaign_id, e)
-                rows = []
-
-        for r in rows:
-            writer.writerow([self._csv_safe(v) for v in r])
-        return buf.getvalue()
