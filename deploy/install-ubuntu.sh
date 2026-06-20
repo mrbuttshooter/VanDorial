@@ -8,7 +8,7 @@
 #     sudo ./deploy/install-ubuntu.sh
 #
 # It is idempotent (safe to re-run). Override prompts with env vars, e.g.:
-#     PG_PASSWORD=xxx RTP_RANGE=16384-16584 MADA_IPS="203.0.113.10" sudo -E ./deploy/install-ubuntu.sh
+#     PG_PASSWORD=xxx RTP_RANGE=16384-16584 sudo -E ./deploy/install-ubuntu.sh
 #
 # Target: Ubuntu 22.04 / 24.04, 4 vCPU / 4 GB. Needs UDP/5060 free (do NOT co-locate
 # with sigma on the same box unless you change GenCall's SIP port).
@@ -149,12 +149,9 @@ set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
 # Headless worker => no console/web app + no live-stats WebSocket; controller => full console.
 set_cfg web serve_console "$SERVE_CONSOLE"
-MADA="${MADA_IPS:-}"
-if [ -z "$MADA" ]; then
-  read -rp "   MADA signalling IP(s) for the inbound whitelist [blank = set later]: " MADA || true
-fi
-[ -n "$MADA" ] && { set_cfg trust whitelist "$MADA"; ok "[trust] whitelist = $MADA"; } \
-               || warn "trust whitelist empty — inbound calls will be FLAGGED until you set it"
+# Inbound trust whitelist is no longer set here — configure it from the
+# controller console (Configuration → Inbound Trust), which pushes it to every
+# worker at runtime. The HOST FIREWALL remains the real boundary (see docs).
 ok "config written ($CFG); RTP $RTP_LO-$RTP_HI, sipp=/usr/local/bin/sipp"
 
 # DB URL the worker uses — also used to mint the API key right now.

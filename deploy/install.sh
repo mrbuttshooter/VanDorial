@@ -12,7 +12,7 @@
 # health checks. Re-running it is safe (idempotent).
 #
 # Override any prompt non-interactively with env vars, e.g.:
-#     POSTGRES_PASSWORD=xxx RTP_RANGE=16384-16584 MADA_IPS="203.0.113.10" ./deploy/install.sh
+#     POSTGRES_PASSWORD=xxx RTP_RANGE=16384-16584 ./deploy/install.sh
 #
 set -euo pipefail
 
@@ -86,33 +86,15 @@ fi
 RTP_LO="${RTP_RANGE%-*}"; RTP_HI="${RTP_RANGE#*-}"
 ok "RTP range = $RTP_RANGE"
 
-# ── 2. gencall.cfg — RTP window + MADA trust whitelist ────────────────────────
+# ── 2. gencall.cfg — RTP window ───────────────────────────────────────────────
 say "Configuring $CFG (RTP window must match the firewall)"
 set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
 ok "[sip] min/max_rtp_port = $RTP_LO / $RTP_HI"
 
-MADA="${MADA_IPS:-}"
-if [ -z "$MADA" ]; then
-  current="$(python3 - "$CFG" <<'PY' 2>/dev/null || true
-import configparser,sys
-cp=configparser.ConfigParser(); cp.read(sys.argv[1])
-print(cp.get("trust","whitelist",fallback="").strip())
-PY
-)"
-  if [ -n "$current" ]; then
-    ok "[trust] whitelist already set: $current"
-  else
-    echo "   MADA's signalling IP(s) are your inbound whitelist (space/comma separated)."
-    read -rp "   Enter MADA IP(s) [leave blank to set later]: " MADA || true
-  fi
-fi
-if [ -n "$MADA" ]; then
-  set_cfg trust whitelist "$MADA"
-  ok "[trust] whitelist = $MADA"
-else
-  warn "Trust whitelist left empty — the answering side will FLAG every inbound call until you set it."
-fi
+# Inbound trust whitelist is no longer set here — configure it from the
+# controller console (Configuration → Inbound Trust), which pushes it to every
+# worker at runtime. The HOST FIREWALL remains the real boundary (see docs).
 
 # ── 3. Build the image (SIPp compiled from source) ────────────────────────────
 say "Building the worker image (compiles SIPp from source — first build is slow)"
