@@ -32,6 +32,7 @@ from gencall.api.loop_validation import (
 from gencall.core.config import Config
 from gencall.core.loop_engine import CapExceeded, IPBusy, LoopEngine
 from gencall.core.loop_matcher import LoopMatcher
+from gencall.core import sale_zones as sale_zones_db
 from gencall.scripts import gen_loop_csv
 
 logger = logging.getLogger("gencall.api.loops")
@@ -939,20 +940,94 @@ class GenerateNumbersRequest(BaseModel):
     seed: Optional[int] = None
 
 
+def _merged_catalog():
+    """(zones, country_overrides, country_tree) = CSV deck + DB overlay."""
+    base = _zones()                                  # cached CSV {zone: [codes]}
+    db = getattr(_engine(), "db", None)
+    if db is None:
+        merged = gen_loop_csv.merge_zones(base, {})
+        return merged, {}, gen_loop_csv.build_country_tree(merged)
+    db_zones, overrides = sale_zones_db.db_catalog(db)
+    merged = gen_loop_csv.merge_zones(base, db_zones)
+    tree = gen_loop_csv.build_country_tree(merged, country_overrides=overrides)
+    return merged, overrides, tree
+
+
 @router.get("/api/sale-zones", dependencies=[Depends(require_api_key)])
 def sale_zones():
-    """Country -> [sale zones] tree + a zone -> [codes] map for the cascading
-    Country / Sale Zone / Code pickers. ``codes`` lets the UI pin a single dialing
-    code (e.g. only 22462) instead of spreading across a whole zone."""
+    """Country -> [sale zones] tree + zone -> [codes] map (CSV deck + DB overlay)."""
     try:
-        zones = _zones()  # {zone: [codes]} (shortest-first)
-        tree = gen_loop_csv.build_country_tree(zones)
+        merged, _overrides, tree = _merged_catalog()
     except FileNotFoundError as e:
         raise HTTPException(503, str(e))
     return {
         "countries": [{"name": c, "zones": zs} for c, zs in tree.items()],
-        "codes": {z: list(codes) for z, codes in zones.items()},
+        "codes": {z: list(codes) for z, codes in merged.items()},
     }
+
+
+class SaleZoneCreate(BaseModel):
+    country: str
+    zone: str
+    code: str
+
+    @field_validator("country", "zone")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("must not be empty")
+        return v
+
+    @field_validator("code")
+    @classmethod
+    def _digits(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v.isdigit():
+            raise ValueError("code must be digits")
+        return v
+
+
+@router.post("/api/sale-zones", dependencies=[Depends(require_api_key)])
+def create_sale_zone(req: SaleZoneCreate):
+    """Add a user sale zone (overlay on the CSV deck). 409 on duplicate (zone, code)."""
+    from sqlalchemy.exc import IntegrityError
+    from gencall.db.models import SaleZone
+
+    db = getattr(_engine(), "db", None)
+    if db is None:
+        raise HTTPException(503, "Database not configured on this worker")
+    session = db.get_session()
+    try:
+        row = SaleZone(country=req.country, zone=req.zone, code=req.code)
+        session.add(row)
+        session.commit()
+        return {"status": "created", "sale_zone": row.to_dict()}
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, f"zone/code already exists: {req.zone} / {req.code}")
+    finally:
+        session.close()
+
+
+@router.delete("/api/sale-zones/{sale_zone_id}", dependencies=[Depends(require_api_key)])
+def delete_sale_zone(sale_zone_id: int):
+    """Delete a user-added sale zone by id (bundled CSV zones are not deletable)."""
+    from gencall.db.models import SaleZone
+
+    db = getattr(_engine(), "db", None)
+    if db is None:
+        raise HTTPException(503, "Database not configured on this worker")
+    session = db.get_session()
+    try:
+        row = session.query(SaleZone).filter_by(id=sale_zone_id).first()
+        if not row:
+            raise HTTPException(404, f"sale zone {sale_zone_id} not found")
+        session.delete(row)
+        session.commit()
+        return {"status": "deleted", "id": sale_zone_id}
+    finally:
+        session.close()
 
 
 @router.post("/api/loops/numbers", dependencies=[Depends(require_api_key)])
