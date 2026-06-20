@@ -752,3 +752,31 @@ def test_fleet_loop_view_404(controller):
     client, headers, _ctx = controller
     assert client.get("/api/fleet/loops/999",
                       headers=headers).status_code == 404
+
+
+# ─── FleetSettings singleton (controller-managed trust whitelist) ─────────────
+
+
+def test_fleet_settings_singleton_get_set(tmp_path):
+    from gencall.controller.models import ControllerDatabase
+    db = ControllerDatabase(f"sqlite:///{tmp_path / 'ctl.db'}")
+    db.create_tables()
+    # default
+    assert db.get_fleet_trust() == {"enabled": False, "ips": [], "drop_untrusted": False}
+    db.set_fleet_trust(enabled=True, ips=["10.0.0.1", "10.0.0.2"], drop_untrusted=True)
+    assert db.get_fleet_trust() == {"enabled": True, "ips": ["10.0.0.1", "10.0.0.2"], "drop_untrusted": True}
+    # singleton: a second set updates the same row, not a new one
+    db.set_fleet_trust(enabled=False, ips=[], drop_untrusted=False)
+    assert db.get_fleet_trust()["enabled"] is False
+
+
+def test_effective_fleet_ips_gates_on_enabled(tmp_path):
+    from gencall.controller.models import ControllerDatabase
+    db = ControllerDatabase(f"sqlite:///{tmp_path / 'ctl2.db'}")
+    db.create_tables()
+    db.set_fleet_trust(enabled=False, ips=["10.0.0.1"], drop_untrusted=False)
+    # Disabled keeps the saved list (for the UI) but enforces an empty (allow-all) list.
+    assert db.get_fleet_trust()["ips"] == ["10.0.0.1"]
+    assert db.effective_fleet_ips() == []
+    db.set_fleet_trust(enabled=True, ips=["10.0.0.1"], drop_untrusted=False)
+    assert db.effective_fleet_ips() == ["10.0.0.1"]

@@ -182,6 +182,21 @@ class FleetRun(Base):
         }
 
 
+# ─── FleetSettings ───────────────────────────────────────────────────────────
+
+class FleetSettings(Base):
+    """Fleet-wide runtime settings (singleton row id=1). Today: the inbound
+    trust whitelist pushed to every worker."""
+    __tablename__ = "fleet_settings"
+
+    id = Column(Integer, primary_key=True)          # always 1 (singleton)
+    trust_enabled = Column(Boolean, default=False)
+    trust_whitelist = Column(Text, default="")      # space/comma-separated IPs/CIDRs
+    trust_drop_untrusted = Column(Boolean, default=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        onupdate=datetime.datetime.utcnow)
+
+
 # ─── Database manager ──────────────────────────────────────────────────────────
 
 class ControllerDatabase:
@@ -205,3 +220,37 @@ class ControllerDatabase:
 
     def drop_tables(self):
         Base.metadata.drop_all(self.engine)
+
+    # ─── Fleet trust whitelist (singleton; design §4.1 / §5.3) ──────────────
+
+    def get_fleet_trust(self) -> dict:
+        session = self.get_session()
+        try:
+            row = session.query(FleetSettings).filter_by(id=1).first()
+            if row is None:
+                return {"enabled": False, "ips": [], "drop_untrusted": False}
+            ips = [t for t in (row.trust_whitelist or "").replace(",", " ").split() if t]
+            return {"enabled": bool(row.trust_enabled), "ips": ips,
+                    "drop_untrusted": bool(row.trust_drop_untrusted)}
+        finally:
+            session.close()
+
+    def set_fleet_trust(self, enabled: bool, ips: list, drop_untrusted: bool) -> None:
+        session = self.get_session()
+        try:
+            row = session.query(FleetSettings).filter_by(id=1).first()
+            if row is None:
+                row = FleetSettings(id=1)
+                session.add(row)
+            row.trust_enabled = bool(enabled)
+            row.trust_whitelist = " ".join(t.strip() for t in ips if t and t.strip())
+            row.trust_drop_untrusted = bool(drop_untrusted)
+            session.commit()
+        finally:
+            session.close()
+
+    def effective_fleet_ips(self) -> list:
+        """The list workers should enforce: the saved list when enabled, else []
+        (allow-all) — keeps the saved list for the UI while enforcement is off."""
+        t = self.get_fleet_trust()
+        return t["ips"] if t["enabled"] else []
