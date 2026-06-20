@@ -70,6 +70,32 @@ export function Nodes() {
   const [regenId, setRegenId] = useState<number | null>(null);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  const [showZone, setShowZone] = useState(false);
+  const [zoneForm, setZoneForm] = useState({ country: "", zone: "", code: "" });
+  const [zoneBusy, setZoneBusy] = useState(false);
+
+  const saveZone = async () => {
+    const country = zoneForm.country.trim();
+    const zone = zoneForm.zone.trim();
+    const code = zoneForm.code.trim();
+    if (!country || !zone || !/^\d+$/.test(code)) {
+      toast.error("Country, zone, and a digits-only code are required.");
+      return;
+    }
+    setZoneBusy(true);
+    try {
+      await api.createSaleZone({ country, zone, code });
+      toast.ok(`Sale zone added · ${zone} (${code})`);
+      setShowZone(false);
+      setZoneForm({ country: "", zone: "", code: "" });
+      zoneTree.refetch();
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    } finally {
+      setZoneBusy(false);
+    }
+  };
+
   const set = <K extends keyof NodeForm>(k: K, v: NodeForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -228,6 +254,9 @@ export function Nodes() {
         </Button>
         <Button variant="primary" onClick={openNew}>
           <IconPlus /> Add Node
+        </Button>
+        <Button variant="ghost" onClick={() => setShowZone(true)}>
+          <IconPlus /> Add sale zone
         </Button>
       </div>
 
@@ -491,6 +520,48 @@ export function Nodes() {
         <Field label="Description" hint="Optional.">
           <input value={form.description} onChange={(e) => set("description", e.target.value)} />
         </Field>
+      </Modal>
+
+      <Modal
+        open={showZone}
+        title={<><IconPlus /> Add sale zone</>}
+        onClose={() => setShowZone(false)}
+        footer={
+          <ModalActions
+            onCancel={() => setShowZone(false)}
+            onConfirm={saveZone}
+            confirmLabel={zoneBusy ? "Adding…" : "Add zone"}
+            disabled={zoneBusy}
+          />
+        }
+      >
+        <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-sm)", marginTop: 0 }}>
+          Adds a zone on top of the bundled catalog. The number length is resolved
+          the same way as every other zone (by dial code).
+        </p>
+        <FieldRow>
+          <Field label="Country" hint="Groups the zone in the picker.">
+            <input
+              value={zoneForm.country}
+              onChange={(e) => setZoneForm((f) => ({ ...f, country: e.target.value }))}
+              placeholder="Algeria"
+            />
+          </Field>
+          <Field label="Sale zone label" hint="Shown under the country.">
+            <input
+              value={zoneForm.zone}
+              onChange={(e) => setZoneForm((f) => ({ ...f, zone: e.target.value }))}
+              placeholder="Algeria-Mobile (Djezzy)"
+            />
+          </Field>
+          <Field label="Dial code" hint="Digits only.">
+            <input
+              value={zoneForm.code}
+              onChange={(e) => setZoneForm((f) => ({ ...f, code: e.target.value }))}
+              placeholder="21377"
+            />
+          </Field>
+        </FieldRow>
       </Modal>
     </>
   );
