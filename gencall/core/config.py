@@ -224,6 +224,36 @@ class Config:
         # Windows) or to relocate stats off /tmp on Linux containers.
         return self.get("sipp", "stats_dir", "/tmp")
 
+    # --- Capture (on-demand pcap "trace", design Part 3) ---
+    # On-demand tcpdump capture per running loop. tcpdump is Linux-only; the
+    # capture endpoints fail cleanly (503) when it is absent. The watchdog caps
+    # below bound a single forgotten capture's size/duration so it can't fill
+    # the disk.
+    @property
+    def capture_command(self):
+        """tcpdump binary used for on-demand pcap captures."""
+        return self.get("capture", "command", "tcpdump")
+
+    @property
+    def capture_dir(self):
+        """Where pcap captures are written (defaults to the sipp stats dir)."""
+        return self.get("capture", "dir", "") or self.sipp_stats_dir
+
+    @property
+    def capture_max_seconds(self):
+        """Auto-stop a capture after this many seconds (watchdog). 0 = no limit."""
+        return self.getint("capture", "max_seconds", 300)
+
+    @property
+    def capture_max_mb(self):
+        """Auto-stop a capture once its file exceeds this many MB. 0 = no limit."""
+        return self.getint("capture", "max_mb", 100)
+
+    @property
+    def capture_snaplen(self):
+        """tcpdump -s snaplen (0 = full packet)."""
+        return self.getint("capture", "snaplen", 0)
+
     # --- Database ---
     # Secrets (DB credentials) should come from the environment, never the
     # config file. Env vars override the corresponding [database] settings.
