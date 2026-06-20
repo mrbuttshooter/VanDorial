@@ -559,3 +559,16 @@ def test_loop_scenarios_log_rfc_events_inside_recv_actions():
         el.get("message", "") for el in ET.parse(_loop_uac_xml_path()).getroot().iter("log"))
     for key in ("t_200ok_received", "t_bye_sent"):
         assert key in uac_logs, f"loop_uac.xml must log {key}"
+
+
+# ── thread-safe runtime trust setter (controller push, design §5.3) ──────────
+
+
+def test_set_and_get_trust_is_threadsafe_swap():
+    p = CallRecordParser(db=None, trust_whitelist=["10.0.0.1"], drop_untrusted=False)
+    assert p.get_trust() == {"ips": ["10.0.0.1"], "drop_untrusted": False}
+    p.set_trust(["10.0.0.2", "192.168.0.0/24"], True)
+    assert p.get_trust() == {"ips": ["10.0.0.2", "192.168.0.0/24"], "drop_untrusted": True}
+    # empty list = allow-all
+    p.set_trust([], False)
+    assert ip_in_whitelist("8.8.8.8", p.trust_whitelist) is True

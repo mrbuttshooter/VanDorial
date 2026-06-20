@@ -514,6 +514,21 @@ class CallRecordParser:
             logger.warning("Could not persist call_record %s: %s",
                            row.get("call_uuid"), e)
 
+    # ── runtime trust config (controller push, design §5.3) ──────────────────
+
+    def set_trust(self, whitelist, drop_untrusted):
+        """Hot-swap the inbound trust config (controller push). Thread-safe vs the
+        tail-poll thread: we replace the list REFERENCE under the lock, so a reader
+        in _apply_trust_filter always sees a complete old-or-new list."""
+        with self._lock:
+            self.trust_whitelist = list(whitelist or [])
+            self.drop_untrusted = bool(drop_untrusted)
+
+    def get_trust(self):
+        """Current effective trust config."""
+        with self._lock:
+            return {"ips": list(self.trust_whitelist), "drop_untrusted": self.drop_untrusted}
+
     # ── background loop (throttled, >= 1 s — no busy poll) ───────────────────
 
     def start(self):
