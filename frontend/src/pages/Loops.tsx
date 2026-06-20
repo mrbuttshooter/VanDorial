@@ -12,7 +12,6 @@ import {
   IconStop,
   IconPlus,
   IconRefresh,
-  IconDownload,
   IconTrash,
 } from "@/components/icons";
 import { useAsync } from "@/hooks/useAsync";
@@ -211,14 +210,6 @@ export function Loops() {
     }
   };
 
-  const download = async (id: string, box?: string) => {
-    try {
-      await api.downloadLoopRecordsCsv(id, box);
-    } catch (e) {
-      toast.error(`Download failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-
   const campaigns = loops.data?.campaigns ?? [];
   const running = useMemo(
     () =>
@@ -358,7 +349,6 @@ export function Loops() {
                                     campaign={c}
                                     stats={stats[c.id] ?? c.loop_stats ?? undefined}
                                     onStop={() => stop(c)}
-                                    onDownload={() => download(c.id, c.box)}
                                   />
                                 ))}
                               </div>
@@ -385,7 +375,6 @@ export function Loops() {
                 campaign={c}
                 stats={stats[c.id] ?? c.loop_stats ?? undefined}
                 onStop={() => stop(c)}
-                onDownload={() => download(c.id, c.box)}
               />
             ))}
           </div>
@@ -762,12 +751,10 @@ function LoopCard({
   campaign,
   stats,
   onStop,
-  onDownload,
 }: {
   campaign: LoopCampaign;
   stats: LoopStats | undefined;
   onStop: () => void;
-  onDownload: () => void;
 }) {
   const isRunning = campaign.status === "running";
   const st = stats;
@@ -933,9 +920,6 @@ function LoopCard({
       </div>
 
       <div className={s.cardActions}>
-        <Button size="sm" variant="ghost" onClick={onDownload}>
-          <IconDownload /> Download CSV
-        </Button>
         <div style={{ flex: 1 }} />
         {isRunning && (
           <Button size="sm" variant="danger" onClick={onStop}>

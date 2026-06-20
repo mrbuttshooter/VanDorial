@@ -3,13 +3,10 @@ import s from "./pages.module.css";
 import ui from "@/components/ui/ui.module.css";
 import { Panel } from "@/components/ui/Panel";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { statusTone } from "@/components/ui/tone";
 import { EmptyState, Spinner } from "@/components/ui/Misc";
-import { IconDownload } from "@/components/icons";
 import { useAsync } from "@/hooks/useAsync";
 import { api } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
 import { datetime, duration, int, ms, num, pct } from "@/lib/format";
 import type { LoopCampaign, RunStatus } from "@/lib/types";
 
@@ -50,17 +47,8 @@ export function History() {
    Every loop campaign (a "run"), newest first, with its final accounting. */
 function LoopHistory() {
   const hist = useAsync(() => api.listLoopsFleet(), [], 5000);
-  const toast = useToast();
 
   const runs: LoopCampaign[] = hist.data?.campaigns ?? [];
-
-  const download = async (id: string, box?: string) => {
-    try {
-      await api.downloadLoopRecordsCsv(id, box);
-    } catch (e) {
-      toast.error(`Download failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
 
   return (
     <Panel title="Loop runs" flush>
@@ -84,7 +72,6 @@ function LoopHistory() {
                 <th className={ui.numCell}>Min out/in</th>
                 <th>Status</th>
                 <th>Started</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -122,11 +109,6 @@ function LoopHistory() {
                       <Badge tone={statusTone(r.status)}>{r.status}</Badge>
                     </td>
                     <td style={{ color: "var(--text-muted)" }}>{datetime(r.started_at)}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <Button size="sm" variant="ghost" title="Download records CSV" onClick={() => download(r.id, r.box)}>
-                        <IconDownload />
-                      </Button>
-                    </td>
                   </tr>
                 );
               })}
