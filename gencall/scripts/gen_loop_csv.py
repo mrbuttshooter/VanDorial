@@ -100,6 +100,23 @@ def load_zones(deck_path: str) -> "OrderedDict[str, List[str]]":
     return zones
 
 
+def merge_zones(base: Dict[str, List[str]],
+                extra: Optional[Dict[str, List[str]]]) -> "OrderedDict[str, List[str]]":
+    """Return a NEW ``{zone: [codes]}`` map = ``base`` plus ``extra`` (the DB
+    overlay). Extra codes are appended to an existing zone (de-duped) or create a
+    new zone. Codes stay shortest-first. ``base`` is never mutated."""
+    merged: "OrderedDict[str, List[str]]" = OrderedDict(
+        (z, list(codes)) for z, codes in base.items()
+    )
+    for zone, codes in (extra or {}).items():
+        cur = merged.setdefault(zone, [])
+        for c in codes:
+            if c not in cur:
+                cur.append(c)
+        cur.sort(key=lambda c: (len(c), c))
+    return merged
+
+
 # Countries whose own name contains a dash, so country-splitting must NOT cut
 # them at the first '-'. Extend as the deck reveals more.
 KNOWN_DASH_COUNTRIES = ("Guinea-Bissau", "Timor-Leste")
@@ -122,11 +139,18 @@ def derive_country(zone: str) -> str:
     return name.split("-", 1)[0].strip()
 
 
-def build_country_tree(zones: Dict[str, List[str]]) -> "OrderedDict[str, List[str]]":
-    """Group zone names by derived country: ``country -> [zone, ...]`` (sorted)."""
+def build_country_tree(zones: Dict[str, List[str]],
+                       country_overrides: Optional[Dict[str, str]] = None
+                       ) -> "OrderedDict[str, List[str]]":
+    """Group zone names by country: ``country -> [zone, ...]`` (sorted).
+
+    Country is ``country_overrides[zone]`` when present (DB overlay rows carry an
+    explicit country), else derived from the zone name."""
+    overrides = country_overrides or {}
     tree: "OrderedDict[str, List[str]]" = OrderedDict()
     for zone in zones:
-        tree.setdefault(derive_country(zone), []).append(zone)
+        country = overrides.get(zone) or derive_country(zone)
+        tree.setdefault(country, []).append(zone)
     out: "OrderedDict[str, List[str]]" = OrderedDict()
     for country in sorted(tree):
         out[country] = sorted(tree[country])

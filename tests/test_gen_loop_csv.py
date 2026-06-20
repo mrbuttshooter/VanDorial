@@ -198,6 +198,26 @@ def test_cli_list_zones(capsys):
     assert "Guinea-Mobile (Orange)" in out
 
 
+def test_merge_zones_adds_new_zone_and_extra_codes(zones):
+    merged = g.merge_zones(zones, {
+        "Algeria-Mobile (Djezzy)": ["21377"],   # brand-new zone
+        "Nigeria-Lagos": ["2342"],              # extra code on an existing zone
+    })
+    assert merged["Algeria-Mobile (Djezzy)"] == ["21377"]
+    assert merged["Nigeria-Lagos"] == ["2341", "2342"]  # shortest-first, de-duped
+    # original is not mutated
+    assert zones["Nigeria-Lagos"] == ["2341"]
+
+
+def test_build_country_tree_uses_overrides_for_new_zones(zones):
+    merged = g.merge_zones(zones, {"Algeria-Mobile (Djezzy)": ["21377"]})
+    tree = g.build_country_tree(merged, country_overrides={"Algeria-Mobile (Djezzy)": "Algeria"})
+    assert "Algeria" in tree
+    assert tree["Algeria"] == ["Algeria-Mobile (Djezzy)"]
+    # unrelated zones still grouped by derived country
+    assert "Nigeria-Lagos" in tree["Nigeria"]
+
+
 def test_cli_generates_to_file(tmp_path):
     out = tmp_path / "nums.csv"
     rc = g.main(["--codes", SAMPLE, "--oad-zone", "Nigeria-Lagos",
