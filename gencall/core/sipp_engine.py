@@ -283,6 +283,7 @@ class SIPpInstance:
             "remote_host": self.remote_host,
             "remote_port": self.remote_port,
             "local_port": self.local_port,
+            "media_port": self.media_port,
             "local_ip": self.local_ip,
             "mode": self.mode.value,
             "transport": self.transport.value,

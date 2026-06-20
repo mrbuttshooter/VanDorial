@@ -18,6 +18,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from gencall.api.routes import require_api_key
@@ -52,6 +53,11 @@ loop_matcher: Optional[LoopMatcher] = None
 # controller fans the whitelist out to every worker via this endpoint). None =>
 # no parser configured on this worker; the endpoints return 503.
 call_parser: Optional[CallRecordParser] = None
+
+# The on-demand pcap CaptureManager (design Part 3), wired in main.py. None =>
+# capture is not configured on this worker (e.g. a Windows dev box, or tcpdump
+# absent); the capture endpoints then return 503 rather than crashing.
+capture_manager = None  # gencall.core.capture.CaptureManager
 
 
 def _engine() -> LoopEngine:
@@ -425,6 +431,84 @@ def get_loop(campaign_id: str):
 def answer_status():
     """UAS health + current answered-call count (design §4.4)."""
     return _engine().answer_status()
+
+
+# ─── On-demand pcap capture ("Trace", design Part 3) ─────────────────────────
+# Per running loop, start/stop a tcpdump capture filtered to the loop's dest
+# switch + its SIPp signalling/RTP ports, keep the .pcap on THIS worker, list it,
+# stream it on request, and delete it. Captures are NEVER started automatically.
+# The capture manager is wired in main.py; absent (Windows dev / no tcpdump) it
+# is None and every endpoint returns a clean 503 instead of crashing.
+
+
+def _capture_mgr():
+    if capture_manager is None:
+        raise HTTPException(503, "capture not configured on this worker")
+    return capture_manager
+
+
+@router.post("/api/loops/{campaign_id}/capture/start", dependencies=[Depends(require_api_key)])
+def capture_start(campaign_id: str):
+    """Start a tcpdump capture for a running loop (filtered to its dest switch)."""
+    from gencall.core.capture import build_capture_filter
+    try:
+        c = _engine().get_campaign(campaign_id)
+    except KeyError:
+        raise HTTPException(404, f"loop campaign '{campaign_id}' not found")
+    sipp = c.get("sipp") or {}
+    bpf = build_capture_filter(
+        dest_host=c.get("dest_host", ""), dest_port=c.get("dest_port", 5060),
+        local_port=(sipp.get("local_port") or 0), media_port=(sipp.get("media_port") or 0),
+        transport=c.get("transport", "udp"))
+    try:
+        cap = _capture_mgr().start(campaign_id, bpf)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return {"status": "capturing", "capture": cap}
+
+
+@router.post("/api/loops/{campaign_id}/capture/{capture_id}/stop", dependencies=[Depends(require_api_key)])
+def capture_stop(campaign_id: str, capture_id: str):
+    try:
+        return {"status": "stopped", "capture": _capture_mgr().stop(capture_id)}
+    except KeyError:
+        raise HTTPException(404, f"capture '{capture_id}' not found")
+
+
+@router.get("/api/loops/{campaign_id}/captures", dependencies=[Depends(require_api_key)])
+def capture_list(campaign_id: str):
+    return {"captures": _capture_mgr().list(campaign_id)}
+
+
+@router.get("/api/loops/{campaign_id}/capture/{capture_id}/download", dependencies=[Depends(require_api_key)])
+def capture_download(campaign_id: str, capture_id: str):
+    import os
+    try:
+        path = _capture_mgr().path(capture_id)
+    except KeyError:
+        raise HTTPException(404, f"capture '{capture_id}' not found")
+    if not os.path.isfile(path):
+        raise HTTPException(404, "capture file not found")
+
+    def _chunks():
+        with open(path, "rb") as fh:
+            while True:
+                b = fh.read(65536)
+                if not b:
+                    break
+                yield b
+
+    return StreamingResponse(_chunks(), media_type="application/vnd.tcpdump.pcap",
+                             headers={"Content-Disposition": f'attachment; filename="{capture_id}.pcap"'})
+
+
+@router.delete("/api/loops/{campaign_id}/capture/{capture_id}", dependencies=[Depends(require_api_key)])
+def capture_delete(campaign_id: str, capture_id: str):
+    try:
+        _capture_mgr().delete(capture_id)
+    except KeyError:
+        raise HTTPException(404, f"capture '{capture_id}' not found")
+    return {"status": "deleted", "id": capture_id}
 
 
 # ─── Node groups (group nodes by route; start/stop a whole group's loops) ─────

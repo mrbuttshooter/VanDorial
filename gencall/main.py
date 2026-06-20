@@ -214,6 +214,20 @@ def create_app(config_path: str = None):
     loops_api.call_parser = call_parser
     call_parser.start()
 
+    # ── On-demand pcap capture ("Trace", design Part 3) ──────────────────────
+    # A DB-free manager that runs/tracks tcpdump per loop, with a size/duration
+    # watchdog so a forgotten capture can't fill the disk. tcpdump is Linux-only;
+    # the capture endpoints fail cleanly (503) when it is absent. Wiring it here
+    # only constructs the manager (no process spawned until a capture is asked
+    # for), so a box without tcpdump still boots fine.
+    from gencall.core.capture import CaptureManager
+
+    loops_api.capture_manager = CaptureManager(
+        command=config.capture_command, capture_dir=config.capture_dir,
+        max_seconds=config.capture_max_seconds, max_mb=config.capture_max_mb,
+        snaplen=config.capture_snaplen,
+    )
+
     # ── Retention (design §5, §7 stage 10) ───────────────────────────────────
     # call_records is the growth table; the retention job prunes it INTERVAL-
     # GATED (default once/24 h, rows older than 30 days), never per-iteration, so
