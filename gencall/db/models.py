@@ -6,7 +6,7 @@ Uses SQLAlchemy for ORM with SQLite/PostgreSQL support.
 import datetime
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime, Text, Enum,
-    create_engine,
+    UniqueConstraint, create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -205,6 +205,33 @@ class Server(Base):
             "pool_length": self.pool_length or 11,
             "csv_path": self.csv_path or "",
             "has_pool": bool(self.csv_path),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class SaleZone(Base):
+    """A user-added sale zone: an additive overlay on the bundled sale_codes.csv.
+
+    The CSV deck is the immutable base catalog; rows here ADD new (zone, code)
+    pairs (or extra codes for an existing zone). ``country`` is stored explicitly
+    so grouping is robust regardless of the zone label. One row per (zone, code);
+    a zone with several codes is several rows. Delete affects only these rows.
+    """
+    __tablename__ = "sale_zones"
+    __table_args__ = (UniqueConstraint("zone", "code", name="uq_sale_zones_zone_code"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    country = Column(String(255), nullable=False)
+    zone = Column(String(255), nullable=False)
+    code = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "country": self.country,
+            "zone": self.zone,
+            "code": self.code,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
