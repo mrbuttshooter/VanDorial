@@ -7,6 +7,8 @@ import type {
   Connector,
   ConnectorRequest,
   FleetResourcesResponse,
+  FleetTrust,
+  FleetTrustResult,
   GeneratePoolRequest,
   GroupStartResult,
   Health,
@@ -225,6 +227,11 @@ export const api = {
   listLoopsFleet: () => request<{ campaigns: LoopCampaign[] }>("/api/loops/fleet"),
   /** Per-node CPU/RAM across the fleet (Fleet page). Polls each remote worker. */
   listFleetResources: () => request<FleetResourcesResponse>("/api/fleet/resources"),
+  /** Fleet-wide inbound trust whitelist (controller-managed; Config page). */
+  getFleetTrust: () => request<FleetTrust>("/api/fleet/config/trust"),
+  /** Persist the fleet trust whitelist and push it to every enabled worker. */
+  setFleetTrust: (body: FleetTrust) =>
+    request<FleetTrustResult>("/api/fleet/config/trust", { method: "POST", body }),
   /** Stop a campaign on whichever box runs it (box = "local" or a worker url). */
   stopLoopFleet: (campaign_id: string, box: string) =>
     request<{ status: string }>("/api/loops/fleet-stop", {

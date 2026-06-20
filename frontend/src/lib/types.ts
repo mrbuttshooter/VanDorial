@@ -403,6 +403,26 @@ export interface SaleZoneCreate {
   code: string;
 }
 
+/* ---- Fleet inbound trust whitelist (controller-managed) -------------------
+   GET/POST /api/fleet/config/trust on the controller. The controller persists
+   this singleton and fans it out to every enabled worker. Empty/disabled =
+   allow-all (calls still recorded, just flagged). */
+export interface FleetTrust {
+  enabled: boolean;
+  ips: string[];
+  drop_untrusted: boolean;
+}
+
+/* POST /api/fleet/config/trust response: the saved config plus the per-node
+   push outcome (one result per enabled worker). */
+export interface FleetTrustResult {
+  enabled: boolean;
+  ips: string[];
+  drop_untrusted: boolean;
+  pushed?: number;
+  results?: { address: string; ok: boolean; error: string | null }[];
+}
+
 /* Result of POST /api/servers/check-worker — the "Test connection" probe. */
 export interface WorkerCheck {
   address: string;
