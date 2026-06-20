@@ -107,6 +107,13 @@ def create_app(config_path: str = None):
     except Exception as e:
         logger.warning("Database init failed (running without persistence): %s", e)
 
+    # Make DB-added sale zones visible to every number-generation call (standalone
+    # and per-node) without threading a session through gen_loop_csv.
+    if db is not None:
+        from gencall.core import sale_zones as _sale_zones
+        from gencall.scripts import gen_loop_csv as _gen_loop_csv
+        _gen_loop_csv.set_overlay_provider(_sale_zones.make_provider(db))
+
     # ── Reliability: managed-process registry (design §4.5) ──────────────────
     # Records every spawned SIPp PID so we can reconcile crash-orphans on boot
     # and stop everything on shutdown. Uses the DB (managed_processes table) with
