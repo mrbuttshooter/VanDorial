@@ -30,6 +30,8 @@ import type {
   StatsSnapshot,
   TestInstance,
   TestRun,
+  TrafficCalcResult,
+  TrafficProfile,
   WorkerCheck,
 } from "./types";
 import { mockApi, MOCK_ENABLED } from "./mock";
@@ -398,6 +400,11 @@ export const api = {
       total: number;
       results: GroupStartResult["results"];
     }>(`/api/loop-presets/${id}/run`, { method: "POST", body: target }),
+
+  // ---- Traffic calculator (size a diurnal campaign from a minutes target) ----
+  /** Size peak/avg CPS + peak concurrency from a daily minutes target + ACD. */
+  trafficCalc: (body: { target_minutes: number; acd_s: number; profile: Partial<TrafficProfile> }) =>
+    request<TrafficCalcResult>("/api/loops/traffic-calc", { method: "POST", body }),
 
   /** Probe a remote worker's health WITHOUT saving — the node form's
    *  "Test connection" button (POST /api/servers/check-worker). */

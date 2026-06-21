@@ -384,6 +384,30 @@ export interface RunPresetRequest {
   node_ids?: number[];
 }
 
+/* ---- Traffic calculator (gencall/core/traffic_profile.py) ------------------
+   The diurnal curve knobs (TrafficProfile) + the sizing result (peak/avg CPS,
+   peak concurrency) returned by POST /api/loops/traffic-calc. Mirrors
+   traffic_profile.make_curve kwargs + traffic_profile.calculate(). */
+export interface TrafficProfile {
+  preset: string;
+  night_floor: number;
+  ramp_up_start: number;
+  plateau_start: number;
+  plateau_end: number;
+  ramp_down_end: number;
+  tz_offset: number;
+}
+
+export interface TrafficCalcResult {
+  per_hour: { hour: number; weight: number; cps: number; attempts: number }[];
+  peak_cps: number;
+  avg_cps: number;
+  peak_concurrent: number;
+  attempts_per_day: number;
+  warnings: string[];
+  nodes_needed: number;
+}
+
 /* A country with its sale zones (GET /api/sale-zones), for the cascading
    Country -> Sale Zone pickers on the Nodes page. */
 export interface SaleZoneCountry {
