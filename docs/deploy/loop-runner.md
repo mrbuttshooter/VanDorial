@@ -208,7 +208,41 @@ No cron job is required; set `call_records_days = 0` to disable pruning.
 
 ---
 
-## 5. Box validation checklist (design §6)
+## 5. Traffic shaping (diurnal)
+
+A loop campaign can shape its attempts to follow a daily (diurnal) curve so the
+traffic reads as **organic** rather than a flat 24/7 rate. Turn it on per
+campaign/preset with the traffic profile (`profile_enabled` + a daily
+**minutes target** and the curve knobs); leave it off and a campaign runs at its
+fixed launch rate exactly as before.
+
+How it works:
+
+- **Sizing** is done up front by the Calculator (`POST /api/loops/traffic-calc`,
+  the pure `gencall/core/traffic_profile.py`): a daily minutes target + ACD →
+  per-hour CPS, peak CPS and peak concurrency to provision. The running shaper
+  uses the *same* function, so what you size is what runs.
+- **Runtime** the worker's shaper thread wakes once a minute and, for every
+  running profiled campaign, computes the current hour's curve rate and steps the
+  campaign to it. The step is an **overlap relaunch**: a fresh UAC starts at the
+  new rate first, then the old one is drained — so there is **no hourly dip**.
+  ACD, the concurrency cap, scenario, destination and source IP are carried over
+  unchanged; only the rate moves. The curve repeats every day.
+- The two UACs briefly run on the same source IP during the overlap. They get
+  **distinct ports** automatically: the SIP source port is OS-ephemeral (`-p 0`)
+  and each UAC gets a unique RTP media port (`-mp`), so there is no
+  "address already in use".
+- `tz_offset` rotates the curve to the destination market's local hours, so a box
+  in one timezone can shape to a peak somewhere else.
+
+Toggle: `[loops] shaper_enabled` (default **true**). Set it to `false` to pin
+every campaign at its launch rate (the Calculator still works; the curve is just
+not applied at runtime). The shaper thread is event-driven and idle between wakes
+— no busy loop, no measurable idle CPU.
+
+---
+
+## 6. Box validation checklist (design §6)
 
 After a deploy, run a 50-loop campaign for ~1 h from the console and confirm:
 
