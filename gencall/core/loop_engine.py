@@ -98,6 +98,13 @@ UAS_INSTANCE_ID = "loop-uas"
 # keeps the control plane near-idle (design §4.1 / risks §8).
 MONITOR_INTERVAL_S = 2.0
 
+# Shaper wake interval (Phase 2 diurnal shaping). The shaper thread wakes once a
+# minute and only relaunches a campaign when the current hour's curve rate
+# actually differs from the running rate — so in practice it steps at most once
+# per hour. A 60 s wake (not per-second) keeps the control plane near-idle; the
+# wait is event-driven (woken early only on stop), never a busy loop.
+SHAPER_INTERVAL_S = 60.0
+
 _TRANSPORT_MAP = {
     "udp": SIPpTransport.UDP,
     "tcp": SIPpTransport.TCP,
@@ -153,6 +160,14 @@ class LoopEngine:
         self._monitor_stop = threading.Event()
         self._monitor_thread = None
         self._last_uas_start = 0.0
+        # Diurnal shaper thread machinery (Phase 2). Lazily started by
+        # start_campaign when a profiled campaign launches; event-driven wait so
+        # it idles between hourly steps (no busy loop).
+        self._shaper_stop = threading.Event()
+        self._shaper_thread = None
+        # Monotonic counter making each overlap-relaunch UAC id unique even when
+        # two steps land in the same second (the id also carries the rate).
+        self._step_seq = 0
 
     # ── Answer side (persistent UAS) ─────────────────────────────────────────
 
@@ -367,6 +382,14 @@ class LoopEngine:
         node_id=None,
         rtp=False,
         rtp_loop=False,
+        profile_enabled=False,
+        profile_preset="diurnal",
+        night_floor=0.25,
+        ramp_up_start=6,
+        plateau_start=9,
+        plateau_end=18,
+        ramp_down_end=22,
+        tz_offset=0,
     ) -> dict:
         """Start a Loop Campaign: spawn one UAC and persist a 'running' row.
 
@@ -441,6 +464,30 @@ class LoopEngine:
             # flag — it is enforced by the monitor / stop path, so -m stays 0.
             max_calls = int(target_calls) if target_calls and target_calls > 0 else 0
 
+            # Initial rate. For a profiled (diurnal) campaign, START at the current
+            # hour's curve value rather than the request's nominal rate, so the
+            # campaign reads as organic from its first minute (the shaper thread
+            # then keeps it on the curve). _shaper_target_rate clamps to the cap;
+            # if it yields 0 (e.g. no target_minutes) we fall back to the nominal
+            # rate so we never launch a 0-cps UAC.
+            effective_rate = float(rate)
+            if profile_enabled:
+                import time as _time
+                profile_view = {
+                    "duration_s": int(duration_s),
+                    "target_minutes": int(target_minutes or 0),
+                    "night_floor": float(night_floor),
+                    "ramp_up_start": int(ramp_up_start),
+                    "plateau_start": int(plateau_start),
+                    "plateau_end": int(plateau_end),
+                    "ramp_down_end": int(ramp_down_end),
+                    "tz_offset": int(tz_offset),
+                }
+                hour_rate = self._shaper_target_rate(
+                    profile_view, _time.localtime().tm_hour)
+                if hour_rate > 0:
+                    effective_rate = hour_rate
+
             tr = _TRANSPORT_MAP.get((transport or "udp").lower(), SIPpTransport.UDP)
             instance = SIPpInstance(
                 id=instance_id,
@@ -454,7 +501,7 @@ class LoopEngine:
                 local_ip=effective_ip,
                 mode=SIPpMode.UAC,
                 transport=tr,
-                call_rate=float(rate),
+                call_rate=effective_rate,
                 max_calls=max_calls,
                 call_limit=int(max_concurrent),
                 # Hold each call for duration_s via SIPp -d (an attributed <pause>
@@ -490,7 +537,10 @@ class LoopEngine:
                 "dest_port": int(dest_port),
                 "transport": transport,
                 "csv_path": csv_path,
-                "rate": float(rate),
+                # The rate the UAC is actually running at (the current hour's curve
+                # value for a profiled campaign; the request's nominal rate
+                # otherwise). The shaper steps this hourly.
+                "rate": effective_rate,
                 "max_concurrent": int(max_concurrent),
                 "duration_mode": duration_mode,
                 "duration_s": int(duration_s),
@@ -500,6 +550,16 @@ class LoopEngine:
                 "target_minutes": int(target_minutes or 0),
                 "rtp": bool(rtp),
                 "rtp_loop": bool(rtp_loop),
+                # Diurnal traffic profile (Phase 2 shaper). Read by the shaper
+                # thread (Task 7); stored verbatim so a restart carries it.
+                "profile_enabled": bool(profile_enabled),
+                "profile_preset": profile_preset or "diurnal",
+                "night_floor": float(night_floor),
+                "ramp_up_start": int(ramp_up_start),
+                "plateau_start": int(plateau_start),
+                "plateau_end": int(plateau_end),
+                "ramp_down_end": int(ramp_down_end),
+                "tz_offset": int(tz_offset),
                 "created_at": now,
                 "started_at": now,
                 "stopped_at": None,
@@ -518,6 +578,10 @@ class LoopEngine:
                 "Loop campaign %s started (UAC %s -> %s:%s)",
                 campaign_id, instance_id, dest_host, dest_port,
             )
+            # A profiled campaign needs the shaper running so its rate tracks the
+            # diurnal curve hour by hour. Idempotent + idle-safe (event wait).
+            if profile_enabled:
+                self._ensure_shaper()
             return self._public_campaign(campaign)
 
     def stop_campaign(self, campaign_id: str) -> dict:
@@ -565,6 +629,148 @@ class LoopEngine:
                                    campaign_id, e)
             logger.info("Loop campaign %s stopped", campaign_id)
             return self._public_campaign(campaign)
+
+    def step_campaign_rate(self, campaign_id: str, new_rate: float) -> bool:
+        """Change a running campaign's attempt rate with NO traffic dip.
+
+        Overlap relaunch: start a fresh UAC at ``new_rate``, then gracefully drain
+        (stop + remove) the old one. ACD/hold, concurrency cap, scenario, dest and
+        source IP are carried over from the old instance unchanged — only the rate
+        changes. SIPp has no live rate-change for a backgrounded instance, so a
+        relaunch is how the rate moves; running the two briefly in parallel means
+        the curve has no hourly gap.
+
+        Returns False if the campaign isn't running, the new rate is invalid
+        (<= 0 or above the per-campaign cap), the rate is effectively unchanged,
+        or the replacement UAC fails to start (the old one is then left running).
+        """
+        with self._lock:
+            campaign = self._campaigns.get(campaign_id)
+            if campaign is None or campaign.get("status") != "running":
+                return False
+            try:
+                new_rate = float(new_rate)
+            except (TypeError, ValueError):
+                return False
+            if new_rate <= 0 or new_rate > self.config.loops_max_rate_cps:
+                return False
+            if abs(new_rate - float(campaign.get("rate", 0))) < 1e-9:
+                return False
+
+            old_iid = campaign["instance_id"]
+            old = self.engine.get_instance(old_iid)
+            if old is None:
+                return False
+
+            # Build the replacement UAC from the old instance's settings + the new
+            # rate. local_port=0 => the OS assigns a fresh ephemeral SIP source
+            # port; SIPpEngine assigns a distinct -mp media port — so even though
+            # both UACs briefly share one local_ip there is no port collision.
+            self._step_seq += 1
+            new_iid = f"uac-{campaign_id}-{int(new_rate * 1000)}-{self._step_seq}"
+            new = SIPpInstance(
+                id=new_iid,
+                scenario_file=old.scenario_file,
+                remote_host=old.remote_host,
+                remote_port=old.remote_port,
+                local_port=0,                 # OS-assigned ephemeral (distinct)
+                local_ip=old.local_ip,
+                mode=SIPpMode.UAC,
+                transport=old.transport,
+                call_rate=new_rate,
+                max_calls=old.max_calls,
+                call_limit=old.call_limit,
+                duration=old.duration,        # hold carried over unchanged
+                csv_file=old.csv_file,
+                campaign_id=campaign_id,
+            )
+            if not self.engine.start_instance(new):
+                logger.warning(
+                    "shaper: replacement UAC for %s failed (%s); keeping old at %s cps",
+                    campaign_id, new.error_message, campaign.get("rate"),
+                )
+                return False
+            # Register the new UAC's per-call log with the parser (the old one's
+            # is unregistered when it is drained, below).
+            self._register_logs(new, campaign_id=campaign_id)
+            campaign["instance_id"] = new_iid
+            campaign["rate"] = new_rate
+            self._update_campaign_rate(campaign_id, new_rate)
+
+        # Drain the old UAC OUTSIDE the lock (stop_instance signals + waits up to
+        # ~10 s): the new UAC is already placing calls, so the old one's in-flight
+        # calls finishing causes no dip. Unregister its log so the parser stops
+        # tailing a file that will go quiet.
+        try:
+            if self.parser is not None:
+                self._unregister_logs(old)
+            self.engine.stop_instance(old_iid)
+            self.engine.remove_instance(old_iid)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("shaper: draining old UAC %s failed: %s", old_iid, e)
+        logger.info("Loop campaign %s rate stepped to %s cps (UAC %s -> %s)",
+                    campaign_id, new_rate, old_iid, new_iid)
+        return True
+
+    # ── Diurnal traffic shaper (Phase 2: hourly step along the curve) ─────────
+
+    def _shaper_target_rate(self, campaign: dict, hour: int) -> float:
+        """Per-hour attempt rate for a profiled campaign, clamped to the cap.
+
+        Uses the same pure ``traffic_profile.calculate`` the Calculator uses, so a
+        running campaign and the Calculator agree to the digit. ACD == the
+        campaign's hold (``duration_s``); the daily target is ``target_minutes``.
+        """
+        from gencall.core import traffic_profile
+        prof = {k: campaign.get(k) for k in (
+            "night_floor", "ramp_up_start", "plateau_start",
+            "plateau_end", "ramp_down_end", "tz_offset")
+            if campaign.get(k) is not None}
+        acd = int(campaign.get("duration_s") or 0) or 1
+        res = traffic_profile.calculate(
+            int(campaign.get("target_minutes") or 0), acd, prof)
+        cps = res["per_hour"][hour % 24]["cps"]
+        return min(max(cps, 0.0), self.config.loops_max_rate_cps)
+
+    def _ensure_shaper(self):
+        """Start the diurnal shaper thread if enabled and not already running."""
+        if not self.config.loops_shaper_enabled:
+            return
+        if self._shaper_thread is not None and self._shaper_thread.is_alive():
+            return
+        self._shaper_stop.clear()
+        self._shaper_thread = threading.Thread(
+            target=self._shaper_loop, daemon=True, name="loop-shaper")
+        self._shaper_thread.start()
+
+    def _shaper_loop(self):
+        """Each wake, step every running profiled campaign to the current hour's
+        curve rate (overlap relaunch). Idles ``SHAPER_INTERVAL_S`` between wakes
+        on an event wait — woken early only by stop_shaper, never a busy loop."""
+        import time as _time
+        while not self._shaper_stop.is_set():
+            try:
+                hour = _time.localtime().tm_hour
+                # Snapshot the items so a concurrent start/stop can't mutate the
+                # dict mid-iteration.
+                for cid, campaign in list(self._campaigns.items()):
+                    if (campaign.get("status") != "running"
+                            or not campaign.get("profile_enabled")):
+                        continue
+                    target = self._shaper_target_rate(campaign, hour)
+                    if target > 0 and abs(
+                            target - float(campaign.get("rate", 0))) > 1e-3:
+                        self.step_campaign_rate(cid, target)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("shaper pass failed: %s", e)
+            self._shaper_stop.wait(SHAPER_INTERVAL_S)
+
+    def stop_shaper(self, timeout=5.0):
+        """Stop the diurnal shaper thread (used on shutdown)."""
+        self._shaper_stop.set()
+        if self._shaper_thread is not None:
+            self._shaper_thread.join(timeout=timeout)
+            self._shaper_thread = None
 
     def list_campaigns(self) -> list:
         """List campaigns (DB-backed if available, else the in-memory set)."""
@@ -798,21 +1004,28 @@ class LoopEngine:
                         "(id, name, status, node_id, local_ip, dest_host, "
                         " dest_port, transport, csv_path, rate, max_concurrent, "
                         " duration_mode, duration_s, duration_max_s, match_key, "
-                        " target_calls, target_minutes, created_at, started_at, "
-                        " stopped_at) "
+                        " target_calls, target_minutes, profile_enabled, "
+                        " profile_preset, night_floor, ramp_up_start, "
+                        " plateau_start, plateau_end, ramp_down_end, tz_offset, "
+                        " created_at, started_at, stopped_at) "
                         "VALUES (:id, :name, :status, :node_id, :local_ip, "
                         " :dest_host, :dest_port, :transport, :csv_path, :rate, "
                         " :max_concurrent, :duration_mode, :duration_s, "
                         " :duration_max_s, :match_key, :target_calls, "
-                        " :target_minutes, :created_at, :started_at, :stopped_at)"
+                        " :target_minutes, :profile_enabled, :profile_preset, "
+                        " :night_floor, :ramp_up_start, :plateau_start, "
+                        " :plateau_end, :ramp_down_end, :tz_offset, :created_at, "
+                        " :started_at, :stopped_at)"
                     ),
                     {k: campaign.get(k) for k in (
                         "id", "name", "status", "node_id", "local_ip",
                         "dest_host", "dest_port", "transport", "csv_path", "rate",
                         "max_concurrent", "duration_mode", "duration_s",
                         "duration_max_s", "match_key", "target_calls",
-                        "target_minutes", "created_at", "started_at",
-                        "stopped_at",
+                        "target_minutes", "profile_enabled", "profile_preset",
+                        "night_floor", "ramp_up_start", "plateau_start",
+                        "plateau_end", "ramp_down_end", "tz_offset", "created_at",
+                        "started_at", "stopped_at",
                     )},
                 )
         except Exception as e:
@@ -838,16 +1051,39 @@ class LoopEngine:
             logger.warning("Could not update loop campaign %s status: %s",
                            campaign_id, e)
 
+    def _update_campaign_rate(self, campaign_id, rate):
+        """Persist a shaper rate step so a reloaded campaign reflects its current
+        (curve-stepped) rate, not the rate it was first started at."""
+        if self.db is None:
+            return
+        try:
+            from sqlalchemy import text
+
+            with self.db.engine.begin() as conn:
+                conn.execute(
+                    text("UPDATE loop_campaigns SET rate = :rate WHERE id = :id"),
+                    {"rate": float(rate), "id": campaign_id},
+                )
+        except Exception as e:
+            logger.warning("Could not update loop campaign %s rate: %s",
+                           campaign_id, e)
+
     def _row_to_campaign(self, row):
         keys = (
             "id", "name", "status", "node_id", "local_ip", "dest_host",
             "dest_port", "transport", "csv_path", "rate", "max_concurrent",
             "duration_mode", "duration_s", "duration_max_s", "match_key",
-            "target_calls", "target_minutes", "created_at", "started_at",
-            "stopped_at",
+            "target_calls", "target_minutes", "profile_enabled",
+            "profile_preset", "night_floor", "ramp_up_start", "plateau_start",
+            "plateau_end", "ramp_down_end", "tz_offset", "created_at",
+            "started_at", "stopped_at",
         )
         c = dict(zip(keys, row))
         c["instance_id"] = f"uac-{c['id']}"
+        # Normalise the profile flag so a reloaded campaign behaves like a live
+        # one (sqlite stores BOOLEAN as 0/1; the shaper checks truthiness).
+        if "profile_enabled" in c:
+            c["profile_enabled"] = bool(c["profile_enabled"])
         return c
 
     def _load_campaign(self, campaign_id):
@@ -862,7 +1098,9 @@ class LoopEngine:
                         "SELECT id, name, status, node_id, local_ip, dest_host, dest_port, "
                         "transport, csv_path, rate, max_concurrent, duration_mode, "
                         "duration_s, duration_max_s, match_key, target_calls, "
-                        "target_minutes, created_at, started_at, stopped_at "
+                        "target_minutes, profile_enabled, profile_preset, night_floor, "
+                        "ramp_up_start, plateau_start, plateau_end, ramp_down_end, "
+                        "tz_offset, created_at, started_at, stopped_at "
                         "FROM loop_campaigns WHERE id = :id"
                     ),
                     {"id": campaign_id},
@@ -884,7 +1122,9 @@ class LoopEngine:
                         "SELECT id, name, status, node_id, local_ip, dest_host, dest_port, "
                         "transport, csv_path, rate, max_concurrent, duration_mode, "
                         "duration_s, duration_max_s, match_key, target_calls, "
-                        "target_minutes, created_at, started_at, stopped_at "
+                        "target_minutes, profile_enabled, profile_preset, night_floor, "
+                        "ramp_up_start, plateau_start, plateau_end, ramp_down_end, "
+                        "tz_offset, created_at, started_at, stopped_at "
                         "FROM loop_campaigns ORDER BY created_at DESC"
                     )
                 ).fetchall()
