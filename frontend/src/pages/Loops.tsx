@@ -29,6 +29,7 @@ import type {
   LoopPresetRequest,
   LoopStats,
   RunPresetRequest,
+  TrafficCalcResult,
   Transport,
 } from "@/lib/types";
 
@@ -133,6 +134,44 @@ export function Loops() {
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<LoopPresetRequest>(PRESET_BLANK);
   const [busy, setBusy] = useState(false);
+
+  // Traffic Calculator modal: size peak/avg CPS + concurrency from a daily
+  // minutes target + ACD + a diurnal curve (no engine — pure sizing).
+  const [showCalc, setShowCalc] = useState(false);
+  const [calc, setCalc] = useState({ target_minutes: 1000000, acd_s: 120, night_floor: 0.25 });
+  const [calcRes, setCalcRes] = useState<TrafficCalcResult | null>(null);
+  const [calcBusy, setCalcBusy] = useState(false);
+
+  const runCalc = async () => {
+    setCalcBusy(true);
+    try {
+      const res = await api.trafficCalc({
+        target_minutes: Number(calc.target_minutes), acd_s: Number(calc.acd_s),
+        profile: { night_floor: Number(calc.night_floor) },
+      });
+      setCalcRes(res);
+    } catch (e) {
+      toast.error(`${e instanceof Error ? e.message : e}`);
+    } finally {
+      setCalcBusy(false);
+    }
+  };
+
+  // "Apply to new preset": pre-fill a fresh preset with the sized rate +
+  // concurrency, close the calculator, and open the preset form.
+  const applyCalcToPreset = () => {
+    if (!calcRes) return;
+    setEditId(null);
+    setForm({
+      ...PRESET_BLANK,
+      rate: calcRes.peak_cps,
+      max_concurrent: calcRes.peak_concurrent,
+      duration_s: Number(calc.acd_s),
+      target_minutes: Number(calc.target_minutes),
+    });
+    setShowCalc(false);
+    setShowPreset(true);
+  };
 
   // Run modal (pick node or group for a chosen preset).
   const [runFor, setRunFor] = useState<LoopPreset | null>(null);
@@ -258,6 +297,9 @@ export function Loops() {
         <div className={s.spacer} />
         <Button size="sm" variant="ghost" onClick={() => { loops.refetch(); presets.refetch(); }}>
           <IconRefresh /> Refresh
+        </Button>
+        <Button variant="ghost" onClick={() => setShowCalc(true)}>
+          <IconWave /> Calculator
         </Button>
         <Button variant="primary" onClick={openNew}>
           <IconPlus /> New Preset
@@ -547,6 +589,128 @@ export function Loops() {
             </select>
           </Field>
         </FieldRow>
+      </Modal>
+
+      {/* ---- Traffic calculator modal (size CPS + concurrency) ---- */}
+      <Modal
+        open={showCalc}
+        title={<><IconWave /> Traffic calculator</>}
+        onClose={() => setShowCalc(false)}
+        footer={
+          <ModalActions
+            onCancel={() => setShowCalc(false)}
+            onConfirm={runCalc}
+            confirmLabel="Calculate"
+            disabled={calcBusy}
+          />
+        }
+      >
+        <p className={s.advancedSummary}>
+          Size a diurnal campaign: from a daily minutes target + ACD + a day/night
+          curve, get the peak CPS and concurrency to provision (assumes ~100% answer).
+        </p>
+
+        <FieldRow>
+          <Field label="Daily minutes target" hint="total answered minutes/day">
+            <input
+              type="number"
+              value={calc.target_minutes}
+              onChange={(e) => setCalc((c) => ({ ...c, target_minutes: Number(e.target.value) }))}
+            />
+          </Field>
+          <Field label="ACD (s)" hint="avg call duration in seconds">
+            <input
+              type="number"
+              value={calc.acd_s}
+              onChange={(e) => setCalc((c) => ({ ...c, acd_s: Number(e.target.value) }))}
+            />
+          </Field>
+          <Field label="Night floor (0–1)" hint="overnight rate vs the daytime peak">
+            <input
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={calc.night_floor}
+              onChange={(e) => setCalc((c) => ({ ...c, night_floor: Number(e.target.value) }))}
+            />
+          </Field>
+        </FieldRow>
+
+        {calcRes && (
+          <>
+            <div className={s.tiles} style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-3)", marginTop: "var(--space-3)" }}>
+              <div className={s.mini}>
+                <span className={s.miniVal} style={{ color: "var(--signal)" }}>{num(calcRes.peak_cps)}</span>
+                <span className={s.miniLabel}>Peak CPS</span>
+              </div>
+              <div className={s.mini}>
+                <span className={s.miniVal}>{num(calcRes.avg_cps)}</span>
+                <span className={s.miniLabel}>Avg CPS</span>
+              </div>
+              <div className={s.mini}>
+                <span className={s.miniVal} style={{ color: "var(--cyan)" }}>{int(calcRes.peak_concurrent)}</span>
+                <span className={s.miniLabel}>Peak concurrent</span>
+              </div>
+            </div>
+
+            {/* 24-bar diurnal sparkline of per-hour CPS (inline, no chart lib). */}
+            <div
+              style={{
+                fontSize: "var(--fs-2xs)", textTransform: "uppercase",
+                letterSpacing: "var(--tracking-wide)", color: "var(--text-faint)",
+                margin: "var(--space-3) 0 4px",
+              }}
+            >
+              Per-hour CPS (00–23h)
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60 }}>
+              {calcRes.per_hour.map((h) => (
+                <div
+                  key={h.hour}
+                  title={`${h.hour}:00 — ${h.cps} cps`}
+                  style={{
+                    flex: 1,
+                    height: `${calcRes.peak_cps > 0 ? (h.cps / calcRes.peak_cps) * 100 : 0}%`,
+                    minHeight: 1,
+                    background: "var(--signal, #4ade80)",
+                    borderRadius: 1,
+                  }}
+                />
+              ))}
+            </div>
+
+            <dl className={s.kv} style={{ marginTop: "var(--space-3)" }}>
+              <dt>Attempts / day</dt>
+              <dd>{int(calcRes.attempts_per_day)}</dd>
+              <dt>Nodes needed</dt>
+              <dd>{int(calcRes.nodes_needed)}</dd>
+            </dl>
+
+            {calcRes.warnings.length > 0 && (
+              <div style={{ marginTop: "var(--space-2)", display: "grid", gap: 4 }}>
+                {calcRes.warnings.map((w, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      fontSize: "var(--fs-xs)", color: "var(--amber)",
+                      padding: "4px 8px", borderRadius: "var(--r-sm)",
+                      border: "1px solid var(--amber)", background: "var(--bg-inset)",
+                    }}
+                  >
+                    {w}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--space-4)" }}>
+              <Button size="sm" variant="primary" onClick={applyCalcToPreset}>
+                <IconPlus /> Apply to new preset
+              </Button>
+            </div>
+          </>
+        )}
       </Modal>
 
       {/* ---- Run modal (pick node or group) ---- */}
