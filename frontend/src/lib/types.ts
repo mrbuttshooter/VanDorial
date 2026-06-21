@@ -244,6 +244,7 @@ export interface Server {
   dest_zone: string;
   origin_code: string;
   dest_code: string;
+  dest_fixed_only: boolean;
   pool_count: number;
   pool_length: number;
   csv_path: string;
@@ -264,6 +265,8 @@ export interface ServerRequest {
   /* Optional pinned code within each zone (e.g. only 22462). "" = whole zone. */
   origin_code?: string;
   dest_code?: string;
+  /* Dial FIXED only: exclude every mobile/other breakout under the dest code. */
+  dest_fixed_only?: boolean;
   count?: number;
   length?: number;
 }
@@ -328,6 +331,7 @@ export interface GeneratePoolRequest {
   dest_zone?: string;
   origin_code?: string;
   dest_code?: string;
+  dest_fixed_only?: boolean;
   count?: number;
   length?: number;
 }

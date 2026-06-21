@@ -117,6 +117,71 @@ def test_accumulator_outbound_a_side_duration():
     assert row["final_code"] == 200
 
 
+def test_fixed_only_excludes_mobile_breakouts():
+    """FIXED-only generation: numbers come from the country code but never land on
+    a defined mobile/other breakout under it; without the flag, some do."""
+    from gencall.scripts import gen_loop_csv as g
+    zones = {
+        "Testland": ["1"],
+        "Testland-Mobile (A)": ["12", "13"],
+        "Testland-Mobile (B)": ["145"],
+    }
+    ex = g.breakouts_under(zones, "1")
+    assert ex == {"12", "13", "145"}
+
+    fixed = g.generate_pairs(
+        zones, oad_zone="Testland", oad_code="1",
+        dad_zone="Testland", dad_code="1",
+        count=400, length=8, seed=3, dad_fixed_only=True)
+    assert all(not any(b.startswith(p) for p in ex) for _a, b in fixed)
+
+    spread = g.generate_pairs(
+        zones, oad_zone="Testland", oad_code="1",
+        dad_zone="Testland", dad_code="1",
+        count=400, length=8, seed=3, dad_fixed_only=False)
+    assert any(any(b.startswith(p) for p in ex) for _a, b in spread)
+
+
+def test_accumulator_answered_no_bye_stays_until_stale_then_evicts():
+    """An answered call with NO BYE parsed (switch tore it down at a media
+    timeout, so the UAC never logged t_bye_sent) must NOT linger forever — it is
+    force-finalized once older than max_age_s so the parser can't leak memory.
+    """
+    import time
+    acc = _CallAccumulator(max_age_s=1800)
+    acc.ingest(parse_log_line(
+        "direction=out call_id=stuck a_number=100 b_number=200 t_invite=1000"))
+    acc.ingest(parse_log_line(
+        "direction=out call_id=stuck t_200ok_received=1100 final_code=200"))
+    # Fresh: answered, no BYE -> not terminal, stays in memory.
+    assert dict(acc.pop_complete()) == {}
+    assert len(acc._records) == 1
+
+    # Make it look old, then it is force-finalized and evicted (duration 0,
+    # since no end was ever timed).
+    for k in list(acc._seen):
+        acc._seen[k] = time.monotonic() - 3600
+    rows = dict(acc.pop_complete())
+    assert len(rows) == 1
+    (row,) = rows.values()
+    assert row["final_code"] == 200
+    assert row["duration_ms"] == 0
+    assert acc._records == {} and acc._seen == {}
+
+
+def test_accumulator_stale_eviction_disabled_when_max_age_zero():
+    """max_age_s=0 disables the staleness sweep (a partial record is kept)."""
+    import time
+    acc = _CallAccumulator(max_age_s=0)
+    acc.ingest(parse_log_line(
+        "direction=out call_id=p a_number=1 b_number=2 t_invite=1 "
+        "t_200ok_received=2 final_code=200"))
+    for k in list(acc._seen):
+        acc._seen[k] = time.monotonic() - 99999
+    assert dict(acc.pop_complete()) == {}     # not evicted
+    assert len(acc._records) == 1
+
+
 def test_accumulator_inbound_maps_from_to_onto_ab():
     """UAS from_number/to_number map onto a_number/b_number; B-side math."""
     acc = _CallAccumulator()

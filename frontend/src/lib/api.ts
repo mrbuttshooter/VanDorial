@@ -71,9 +71,28 @@ export function setApiKey(key: string | null): void {
   }
 }
 
+/* Console auto-auth: ask the controller for the console's API key at startup so
+   ANY browser that opens /console is authenticated — the key no longer has to
+   be pasted into each browser by hand. The backend serves it from
+   /api/console/bootstrap only when it serves the console; a 404 (fleet worker /
+   external-API box) just leaves any manually-set key in place. Always run this
+   before the first data fetch (see main.tsx). Skipped in mock mode. */
+export async function bootstrapApiKey(): Promise<void> {
+  if (MOCK_ENABLED) return;
+  try {
+    const res = await fetch(BASE + "/api/console/bootstrap");
+    if (!res.ok) return; // 404 => no auto-auth on this box; keep existing key
+    const body = (await res.json()) as { api_key?: string };
+    if (body.api_key) setApiKey(body.api_key);
+  } catch {
+    /* backend unreachable — fall back to whatever key is stored */
+  }
+}
+
 async function request<T>(
   path: string,
   init?: Omit<RequestInit, "body"> & { body?: unknown },
+  _retry = false,
 ): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   const apiKey = getApiKey();
@@ -92,6 +111,16 @@ async function request<T>(
     // Backend unreachable. In mock mode we never get here (intercepted below),
     // so surface a clear, actionable error.
     throw new ApiError(0, `Network unreachable: ${String(networkErr)}`);
+  }
+
+  // Self-heal a rotated console key: on 401, re-fetch the controller's current
+  // key once (the worker mints a fresh one each boot) and retry. Without this a
+  // worker restart leaves every open tab polling with a stale key — 401 forever
+  // until the user manually clears localStorage. Skip for the bootstrap call
+  // itself and only retry once to avoid a loop.
+  if (res.status === 401 && !_retry && !path.includes("/api/console/bootstrap")) {
+    await bootstrapApiKey();
+    if (getApiKey()) return request<T>(path, init, true);
   }
 
   if (!res.ok) {

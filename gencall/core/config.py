@@ -324,6 +324,14 @@ class Config:
     def loops_answered_max_duration_s(self):
         return self.getint("loops", "answered_max_duration_s", 7200)
 
+    # Force-finalize a call record with no parsed BYE after this long, so the
+    # tail-parser's in-memory accumulator can't leak. Must be comfortably above
+    # the longest call hold (ACD) you run; default 1800 s (30 min) covers any
+    # normal loop. 0 disables the staleness sweep.
+    @property
+    def loops_record_max_age_s(self):
+        return self.getint("loops", "record_max_age_s", 1800)
+
     # Minimum seconds between UAS restart attempts — the throttled backoff floor
     # for the answer-side monitor (design §8). Never busy-restart a crash loop.
     @property
@@ -381,6 +389,52 @@ class Config:
         """Hard ceiling on a single call's hold duration (seconds)."""
         return self.getint("loops", "max_call_duration_s", 86400)
 
+    # ── Adaptive number pool (cut 404 "no route" by learning routable prefixes) ──
+    # A monitor periodically scores each destination prefix's ASR from
+    # call_records, prunes the 404-heavy ones, rebuilds the pool from the routable
+    # prefixes, and restarts the loop's UAC to load it. ON by default (proven to
+    # lift loop NER dramatically on partial-route destinations); set
+    # [loops] adaptive_pool = false to disable.
+    @property
+    def loops_adaptive_pool(self):
+        return self.getbool("loops", "adaptive_pool", True)
+
+    @property
+    def loops_adaptive_interval_s(self):
+        """How often the optimizer re-scores + (if needed) rebuilds a pool."""
+        return self.getint("loops", "adaptive_interval_s", 300)
+
+    @property
+    def loops_adaptive_min_attempts(self):
+        """A prefix is only judged (kept/dropped) once it has this many calls."""
+        return self.getint("loops", "adaptive_min_attempts", 30)
+
+    @property
+    def loops_adaptive_min_asr(self):
+        """Drop a prefix whose ASR falls below this (0..1) once it has the
+        minimum attempts; keep it otherwise. 0.3 cleanly separates dead routes
+        (typically a few %) from routable ones while sparing marginal prefixes."""
+        return self.getfloat("loops", "adaptive_min_asr", 0.3)
+
+    @property
+    def loops_adaptive_prefix_len(self):
+        """Leading B-number digits that define a 'prefix' (CC+operator, e.g. 224626)."""
+        return self.getint("loops", "adaptive_prefix_len", 6)
+
+    @property
+    def loops_adaptive_window(self):
+        """Score only the most-recent N calls per campaign (0 = all-time). A
+        window keeps the decision tracking CURRENT routability instead of being
+        dragged by pre-convergence history."""
+        return self.getint("loops", "adaptive_window", 1000)
+
+    @property
+    def loops_sipp_trace_err(self):
+        """Write SIPp's -trace_err error file. Off by default: on a busy loop it
+        balloons to 100s of MB of retransmit/unexpected-msg noise and is rarely
+        read. Turn on ([loops] sipp_trace_err = true) only when debugging."""
+        return self.getbool("loops", "sipp_trace_err", False)
+
     # ── Loop destination allow-list (security: open SIP originator / SSRF) ──────
     # dest_host comes off the wire and flows to the SIPp target. Private,
     # loopback, multicast and 0.0.0.0 destinations are rejected by default so the
@@ -432,8 +486,13 @@ class Config:
     # from rebuilding sigma's DELETE storm.
     @property
     def retention_call_records_days(self):
-        """Delete call_records older than this many days (0 disables pruning)."""
-        return self.getint("retention", "call_records_days", 30)
+        """Delete call_records older than this many days (0 disables pruning).
+
+        Default 7 (was 30): a loop box writes ~400k rows/day, so 30 days grew the
+        SQLite DB to multiple GB and filled small disks. 7 days is plenty for
+        diagnostics; lower it further ([retention] call_records_days = 2) on a
+        high-volume worker, or raise it on a dedicated archive box."""
+        return self.getint("retention", "call_records_days", 7)
 
     @property
     def retention_interval_hours(self):

@@ -27,7 +27,7 @@ logger = logging.getLogger("gencall.api")
 app = FastAPI(
     title="GenCall API",
     description="GenCall SIP Traffic Generator - REST API",
-    version="2.0.2",
+    version="2.2.0",
 )
 
 # These get set during app startup
@@ -38,6 +38,13 @@ db: Optional[Database] = None
 # API authentication gateway (keys + rate limiter + audit log). Wired in
 # main.py when a database is available; None means auth is not configured.
 gateway: Optional[APIGateway] = None
+
+# Raw API key handed to the served NOC console at load via /api/console/bootstrap
+# so any browser that opens /console is authenticated without pasting a key by
+# hand (the key used to live only in each browser's localStorage). Set in
+# main.py ONLY when this box serves the console; stays None on fleet workers and
+# in external-API-only deployments, where the bootstrap endpoint then 404s.
+console_api_key: Optional[str] = None
 
 
 # ─── Authentication ──────────────────────────────────────────────────────────
@@ -130,6 +137,10 @@ class ServerRequest(BaseModel):
     # spread across the whole zone's codes.
     origin_code: str = ""
     dest_code: str = ""
+    # Dial FIXED only: generate from the (country) dest code but exclude every
+    # mobile/operator/special breakout under it (so random digits can't land on a
+    # mobile range). The deck supplies the breakouts to exclude.
+    dest_fixed_only: bool = False
     # Pool size is bounded: generation is synchronous, so an unbounded count
     # could pin a request thread + RAM. 2M is plenty for a random-draw pool.
     count: int = Field(default=500000, ge=1, le=2_000_000)
@@ -143,6 +154,9 @@ class GeneratePoolRequest(BaseModel):
     dest_zone: str = ""
     origin_code: str = ""
     dest_code: str = ""
+    # None => keep the node's stored fixed-only setting (so a bare "regenerate"
+    # never silently clears it); True/False explicitly overrides it.
+    dest_fixed_only: Optional[bool] = None
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=0, ge=0, le=18)  # 0 => keep the node's stored length
 
@@ -563,17 +577,22 @@ def _worker_post(api_url: str, api_key: str, path: str, payload: dict, timeout: 
 
 def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
                         count: int, length: int,
-                        origin_code: str = "", dest_code: str = "") -> None:
+                        origin_code: str = "", dest_code: str = "",
+                        dest_fixed_only: bool = False) -> None:
     """Generate ``s``'s number pool from its zones (optionally pinned to a single
     code per side) and store path/count on it. For a REMOTE node (api_url set)
     the pool is generated ON that worker (so the box that runs the loop has the
-    file); ``csv_path`` then holds the path on the worker."""
+    file); ``csv_path`` then holds the path on the worker.
+
+    ``dest_fixed_only`` dials FIXED: generate from the (country) dest code but
+    exclude every mobile/other breakout under it."""
     if s.api_url:
         try:
             res = _worker_post(s.api_url, s.api_key, "/api/loops/numbers", {
                 "origin_zone": origin_zone, "dest_zone": dest_zone,
                 "origin_code": origin_code or "", "dest_code": dest_code or "",
                 "count": count, "length": length,
+                "dest_fixed_only": bool(dest_fixed_only),
             })
         except Exception as e:
             raise HTTPException(502, f"worker {s.api_url} pool generation failed: {e}")
@@ -581,6 +600,7 @@ def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
         s.dest_zone = dest_zone
         s.origin_code = origin_code or ""
         s.dest_code = dest_code or ""
+        s.dest_fixed_only = bool(dest_fixed_only)
         s.pool_count = int(res.get("count") or 0)
         s.pool_length = length
         s.csv_path = res.get("csv_path") or ""   # path ON the worker
@@ -592,7 +612,7 @@ def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
         path, n, _preview = generate_pool_file(
             origin_zone=origin_zone, dest_zone=dest_zone,
             origin_code=origin_code or "", dest_code=dest_code or "",
-            count=count, length=length,
+            count=count, length=length, dest_fixed_only=bool(dest_fixed_only),
         )
     except (ValueError, RuntimeError) as e:
         raise HTTPException(422, str(e))
@@ -603,6 +623,7 @@ def _generate_node_pool(s: Server, origin_zone: str, dest_zone: str,
     s.dest_zone = dest_zone
     s.origin_code = origin_code or ""
     s.dest_code = dest_code or ""
+    s.dest_fixed_only = bool(dest_fixed_only)
     s.pool_count = n
     s.pool_length = length
     s.csv_path = path
@@ -666,7 +687,8 @@ def create_server(req: ServerRequest):
         if req.origin_zone and req.dest_zone:
             _generate_node_pool(s, req.origin_zone, req.dest_zone,
                                 req.count, req.length,
-                                origin_code=req.origin_code, dest_code=req.dest_code)
+                                origin_code=req.origin_code, dest_code=req.dest_code,
+                                dest_fixed_only=req.dest_fixed_only)
         session.add(s)
         session.commit()
         return {"status": "created", "server": s.to_dict()}
@@ -704,8 +726,10 @@ def generate_server_pool(server_id: int, req: GeneratePoolRequest):
         # Re-pin to the requested code, else keep the node's stored pin.
         ocode = req.origin_code if req.origin_code != "" else (s.origin_code or "")
         dcode = req.dest_code if req.dest_code != "" else (s.dest_code or "")
+        fixed = req.dest_fixed_only if req.dest_fixed_only is not None else bool(s.dest_fixed_only)
         _generate_node_pool(s, origin, dest, req.count, length,
-                            origin_code=ocode, dest_code=dcode)
+                            origin_code=ocode, dest_code=dcode,
+                            dest_fixed_only=fixed)
         session.commit()
         return {"status": "generated", "server": s.to_dict()}
     except HTTPException:
@@ -802,12 +826,27 @@ def get_test_history(limit: int = Query(default=50, ge=1, le=500)):
 
 # ─── System ────────────────────────────────────────────────────────────────────
 
+@app.get("/api/console/bootstrap")
+def console_bootstrap():
+    """Hand the served console its API key so opening /console just works.
+
+    Deliberately UNAUTHENTICATED (like /api/health) — it is the one endpoint a
+    fresh browser can reach before it has a key. Only returns a key on a box
+    that serves the console (console_api_key set in main.py); otherwise 404, so
+    fleet workers and external-API deployments expose nothing. This is the
+    chosen trade-off: anyone who can open the console is authenticated; minting
+    of keys for programmatic callers is unchanged."""
+    if not console_api_key:
+        raise HTTPException(404, "Console auto-auth not configured")
+    return {"api_key": console_api_key}
+
+
 @app.get("/api/health")
 def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "2.0.2",
+        "version": "2.2.0",
         "name": "GenCall",
         "active_tests": len([i for i in engine.instances.values()
                              if i.state == SIPpState.RUNNING]) if engine else 0,

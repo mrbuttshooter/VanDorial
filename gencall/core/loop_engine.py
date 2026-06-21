@@ -168,6 +168,12 @@ class LoopEngine:
         # Monotonic counter making each overlap-relaunch UAC id unique even when
         # two steps land in the same second (the id also carries the rate).
         self._step_seq = 0
+        # Adaptive-pool optimizer thread machinery ([loops] adaptive_pool).
+        self._opt_stop = threading.Event()
+        self._opt_thread = None
+        # campaign_id -> keep-set last applied, so we only rebuild + restart when
+        # the routable-prefix decision actually changes (no per-interval thrash).
+        self._opt_last_keep: dict[str, list] = {}
 
     # ── Answer side (persistent UAS) ─────────────────────────────────────────
 
@@ -309,6 +315,9 @@ class LoopEngine:
             target=self._monitor_loop, daemon=True, name="loop-uas-monitor"
         )
         self._monitor_thread.start()
+        # Bring up the adaptive-pool optimizer alongside the answer side
+        # (idempotent; no-op unless [loops] adaptive_pool is enabled).
+        self.start_optimizer()
 
     def _monitor_loop(self):
         """Restart the UAS with throttled backoff if it dies (design §8).
@@ -359,6 +368,150 @@ class LoopEngine:
         if self._monitor_thread is not None:
             self._monitor_thread.join(timeout=timeout)
             self._monitor_thread = None
+        self.stop_optimizer(timeout=timeout)
+
+    # ── Adaptive-pool optimizer (cut 404 by learning routable prefixes) ──────
+
+    def start_optimizer(self):
+        """Start the adaptive-pool optimizer thread (idempotent; opt-in).
+
+        No-op unless ``[loops] adaptive_pool`` is on. Periodically scores each
+        running campaign's destination prefixes from call_records, prunes the
+        404-heavy ones, rebuilds the pool from the routable prefixes, and
+        restarts that campaign's UAC to load it."""
+        if not getattr(self.config, "loops_adaptive_pool", False):
+            return
+        if self._opt_thread is not None and self._opt_thread.is_alive():
+            return
+        self._opt_stop.clear()
+        self._opt_thread = threading.Thread(
+            target=self._optimizer_loop, daemon=True, name="loop-pool-optimizer"
+        )
+        self._opt_thread.start()
+        logger.info("Adaptive pool optimizer started (interval %ds)",
+                    self.config.loops_adaptive_interval_s)
+
+    def stop_optimizer(self, timeout=5.0):
+        self._opt_stop.set()
+        if self._opt_thread is not None:
+            self._opt_thread.join(timeout=timeout)
+            self._opt_thread = None
+
+    def _optimizer_loop(self):
+        """Event-driven sleep; on each tick, optimize every running campaign."""
+        from gencall.core import pool_optimizer
+        interval = max(30, int(self.config.loops_adaptive_interval_s))
+        # Wait one interval before the first pass so calls accumulate.
+        while not self._opt_stop.wait(interval):
+            try:
+                with self._lock:
+                    running = [dict(c) for c in self._campaigns.values()
+                               if c.get("status") == "running"]
+                for camp in running:
+                    if self._opt_stop.is_set():
+                        break
+                    try:
+                        report = pool_optimizer.optimize(
+                            self.db, camp, self._load_node(camp.get("node_id")),
+                            prefix_len=self.config.loops_adaptive_prefix_len,
+                            min_attempts=self.config.loops_adaptive_min_attempts,
+                            min_asr=self.config.loops_adaptive_min_asr,
+                            window=self.config.loops_adaptive_window,
+                            last_keep=self._opt_last_keep.get(camp["id"]),
+                        )
+                    except Exception as e:
+                        logger.warning("adaptive pool: optimize failed for %s: %s",
+                                       camp.get("id"), e)
+                        continue
+                    if not report:
+                        continue
+                    logger.info(
+                        "adaptive pool %s: dropped %s, kept %s -> rebuilt %d numbers; "
+                        "restarting UAC", camp["id"], report["dropped"],
+                        report["kept"], report["rows"])
+                    if self._restart_uac_with_csv(camp["id"], report["csv_path"]):
+                        # Remember what we applied so we don't rebuild/restart
+                        # again next interval unless the decision changes.
+                        self._opt_last_keep[camp["id"]] = report["kept"]
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("adaptive pool optimizer pass failed: %s", e)
+
+    def _load_node(self, node_id):
+        """Best-effort load a node (Server) row as a dict, or None."""
+        if node_id is None or self.db is None:
+            return None
+        try:
+            from sqlalchemy import text
+            with self.db.engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT origin_zone, origin_code, dest_zone, dest_code, "
+                         "pool_count, pool_length FROM servers WHERE id = :id"),
+                    {"id": node_id},
+                ).fetchone()
+            if not row:
+                return None
+            return {
+                "origin_zone": row[0] or "", "origin_code": row[1] or "",
+                "dest_zone": row[2] or "", "dest_code": row[3] or "",
+                "pool_count": row[4] or 0, "pool_length": row[5] or 12,
+            }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("adaptive pool: could not load node %s: %s", node_id, e)
+            return None
+
+    def _restart_uac_with_csv(self, campaign_id: str, new_csv: str):
+        """Swap a running campaign's UAC onto ``new_csv`` (stop → rebuild → start).
+
+        Reuses the campaign's stored parameters so only the number pool changes.
+        Brief blip while the UAC restarts; in-flight calls on the old dialer end.
+        """
+        with self._lock:
+            camp = self._campaigns.get(campaign_id)
+            if not camp or camp.get("status") != "running":
+                return False
+            old_id = camp["instance_id"]
+            self.engine.stop_instance(old_id)
+            self.engine.remove_instance(old_id)
+
+            # SIPp's -inf must be the PREPARED file (3-col, [field2] hold + the
+            # SIPp header), not the raw A;B pool — loop_uac.xml holds with
+            # <pause milliseconds="[field2]"/>. Passing the raw pool makes SIPp
+            # exit at startup ("field 2 not found") and the restart fails.
+            resolved_csv = self._prepare_csv(
+                new_csv, camp.get("duration_mode", "fixed"),
+                camp.get("duration_s") or 0, camp.get("duration_max_s") or 0,
+            )
+
+            tr = _TRANSPORT_MAP.get((camp.get("transport") or "udp").lower(),
+                                    SIPpTransport.UDP)
+            tc = int(camp.get("target_calls") or 0)
+            instance = SIPpInstance(
+                id=old_id,
+                scenario_file=self._uac_scenario(bool(camp.get("rtp")),
+                                                 bool(camp.get("rtp_loop"))),
+                remote_host=camp["dest_host"],
+                remote_port=int(camp["dest_port"]),
+                local_port=0,
+                local_ip=camp.get("local_ip", ""),
+                media_ip=_detect_primary_ip(),
+                mode=SIPpMode.UAC,
+                transport=tr,
+                call_rate=float(camp.get("rate") or 1.0),
+                max_calls=tc if tc > 0 else 0,
+                call_limit=int(camp.get("max_concurrent") or 10),
+                duration=int(camp.get("duration_s") or 0),
+                csv_file=resolved_csv,
+                campaign_id=campaign_id,
+            )
+            ok = self.engine.start_instance(instance)
+            if not ok:
+                logger.error("adaptive pool: UAC restart failed for %s: %s",
+                             campaign_id, instance.error_message or "unknown")
+                return False
+            self._register_logs(instance, campaign_id=campaign_id)
+            camp["csv_path"] = new_csv
+            self._persist_campaign(camp)
+            return True
 
     # ── Loop Campaigns (per-campaign UAC) ────────────────────────────────────
 
@@ -499,6 +652,14 @@ class LoopEngine:
                 # the OS picks per routing. Pinned to the chosen server's IP so
                 # MADA sees the whitelisted VanDorial origination source.
                 local_ip=effective_ip,
+                # Advertise the LOCAL interface IP for media (SDP c=), decoupled
+                # from the signalling IP above. When the node is configured with
+                # a public IP, sending that public IP in the SDP made Chad/Algeria
+                # SBCs drop the call (media-IP mismatch); the on-box local IP is
+                # what their RTP path matches. If the node IP already IS the local
+                # interface IP (single-homed MADA box), this resolves to the same
+                # address and nothing changes.
+                media_ip=_detect_primary_ip(),
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=effective_rate,
@@ -779,6 +940,118 @@ class LoopEngine:
             return [self._public_campaign(r) for r in rows]
         with self._lock:
             return [self._public_campaign(c) for c in self._campaigns.values()]
+
+    # ── Auto-resume after a worker restart (design §4.5) ─────────────────────
+    def resume_interrupted(self) -> dict:
+        """Re-launch campaigns that were running before this process restarted.
+
+        A systemd restart / reboot kills every SIPp child and startup
+        reconciliation marks their campaigns ``interrupted`` — without this they
+        stayed down until an operator restarted each by hand (the "restart .4 and
+        all loops stop" problem). Here we read every non-terminal campaign row,
+        mark it terminal FIRST (so a crash mid-resume can't duplicate it on the
+        next boot), then start a fresh campaign with the same parameters.
+
+        Best-effort and isolated: one campaign that can't be resumed (e.g. its
+        number pool is gone and can't be regenerated) is skipped with a warning,
+        never aborting the rest. Returns ``{"resumed": [...], "skipped": [...]}``.
+        """
+        if self.db is None:
+            return {"resumed": [], "skipped": []}
+        from sqlalchemy import text
+        cols = ("id", "name", "status", "node_id", "local_ip", "dest_host",
+                "dest_port", "transport", "csv_path", "rate", "max_concurrent",
+                "duration_mode", "duration_s", "duration_max_s", "match_key",
+                "target_calls", "target_minutes")
+        try:
+            with self.db.engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT " + ", ".join(cols) + " FROM loop_campaigns "
+                    "WHERE status IN ('running', 'interrupted', 'starting')"
+                )).fetchall()
+        except Exception as e:
+            logger.warning("resume_interrupted: could not read campaigns: %s", e)
+            return {"resumed": [], "skipped": []}
+
+        resumed, skipped = [], []
+        for row in rows:
+            c = dict(zip(cols, row))
+            old_id = c["id"]
+            # Only resume rows from a PREVIOUS process. A campaign we already
+            # track in memory (e.g. one we just resumed) is live — skip it so a
+            # second pass can't relaunch/duplicate it.
+            if old_id in self._campaigns:
+                continue
+            # Mark terminal BEFORE attempting, so a persistent failure can't be
+            # re-resumed (and duplicated) every boot.
+            self._update_campaign_status(old_id, "stopped", stopped_at=_now_iso())
+            csv_path = self._resolve_resume_csv(c)
+            if not csv_path:
+                logger.warning("resume: skipping %s (%s) — no usable number pool",
+                               old_id, c.get("name"))
+                skipped.append(old_id)
+                continue
+            try:
+                new = self.start_campaign(
+                    name=c.get("name") or "",
+                    dest_host=c["dest_host"],
+                    dest_port=int(c.get("dest_port") or 5060),
+                    transport=c.get("transport") or "udp",
+                    csv_path=csv_path,
+                    rate=float(c.get("rate") or 1.0),
+                    max_concurrent=int(c.get("max_concurrent") or 10),
+                    duration_mode=c.get("duration_mode") or "fixed",
+                    duration_s=int(c.get("duration_s") or 0),
+                    duration_max_s=int(c.get("duration_max_s") or 0),
+                    match_key=c.get("match_key") or "exact",
+                    target_calls=int(c.get("target_calls") or 0),
+                    target_minutes=int(c.get("target_minutes") or 0),
+                    local_ip=c.get("local_ip") or "",
+                    node_id=c.get("node_id"),
+                )
+                resumed.append(new.get("id"))
+                logger.info("resume: %s (%s) -> %s", old_id, c.get("name"),
+                            new.get("id"))
+            except Exception as e:
+                logger.warning("resume: failed to restart %s (%s): %s",
+                               old_id, c.get("name"), e)
+                skipped.append(old_id)
+        if resumed or skipped:
+            logger.info("Auto-resume after restart: %d resumed, %d skipped",
+                        len(resumed), len(skipped))
+        return {"resumed": resumed, "skipped": skipped}
+
+    def _resolve_resume_csv(self, c: dict) -> str:
+        """Find a usable pool CSV for a resumed campaign.
+
+        Reuse the stored path if it still exists (a service restart keeps /tmp);
+        otherwise regenerate from the campaign's node zones (a full reboot clears
+        /tmp). Returns a path, or "" if none can be produced.
+        """
+        import os
+        p = (c.get("csv_path") or "").strip()
+        if p and os.path.isfile(p):
+            return p
+        node = self._load_node(c.get("node_id"))
+        if not node:
+            return ""
+        try:
+            from gencall.scripts import gen_loop_csv
+            path, n, _ = gen_loop_csv.generate_pool_file(
+                origin_zone=node.get("origin_zone", ""),
+                dest_zone=node.get("dest_zone", ""),
+                origin_code=node.get("origin_code", ""),
+                dest_code=node.get("dest_code", ""),
+                count=int(node.get("pool_count") or 100000),
+                length=int(node.get("pool_length") or 12),
+            )
+            logger.info("resume: regenerated %d-number pool for node %s",
+                        n, c.get("node_id"))
+            return path
+        except Exception as e:
+            logger.warning("resume: could not regenerate pool for node %s: %s",
+                           c.get("node_id"), e)
+            return ""
 
     def get_campaign(self, campaign_id: str) -> dict:
         """Live status for one campaign incl. its UAC's current SIPp stats.

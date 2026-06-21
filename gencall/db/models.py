@@ -202,6 +202,10 @@ class Server(Base):
     # Empty => spread across all of the zone's codes (previous behaviour).
     origin_code = Column(String(32), default="")
     dest_code = Column(String(32), default="")
+    # Dial FIXED only: generate from the (country) dest code but exclude every
+    # mobile/operator/special breakout carved out under it, so random subscriber
+    # digits can't land on a mobile range. See gen_loop_csv.breakouts_under.
+    dest_fixed_only = Column(Boolean, default=False)
     pool_count = Column(Integer, default=0)
     pool_length = Column(Integer, default=11)
     csv_path = Column(String(1024), default="")
@@ -222,6 +226,7 @@ class Server(Base):
             "dest_zone": self.dest_zone or "",
             "origin_code": self.origin_code or "",
             "dest_code": self.dest_code or "",
+            "dest_fixed_only": bool(self.dest_fixed_only),
             "pool_count": self.pool_count or 0,
             "pool_length": self.pool_length or 11,
             "csv_path": self.csv_path or "",
@@ -404,6 +409,7 @@ class Database:
             ("dest_code", "VARCHAR(32) DEFAULT ''"),
             ("pool_count", "INTEGER DEFAULT 0"),
             ("pool_length", "INTEGER DEFAULT 11"),
+            ("dest_fixed_only", "BOOLEAN DEFAULT 0"),
             ("csv_path", "VARCHAR(1024) DEFAULT ''"),
             ("group_id", "INTEGER"),
             ("api_url", "VARCHAR(512) DEFAULT ''"),

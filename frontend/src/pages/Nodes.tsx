@@ -26,6 +26,7 @@ interface NodeForm {
   destCountry: string;
   destZone: string;
   destCode: string;
+  destFixedOnly: boolean; // dial FIXED only: exclude mobile/other breakouts
   count: number;
   regenerate: boolean; // edit mode: rebuild the pool with the zones/codes below
   apiUrl: string;      // remote worker URL ("" = this box / local)
@@ -43,6 +44,7 @@ const BLANK: NodeForm = {
   destCountry: "",
   destZone: "",
   destCode: "",
+  destFixedOnly: false,
   count: 500000,
   regenerate: false,
   apiUrl: "",
@@ -144,6 +146,7 @@ export function Nodes() {
       destCountry: countryOf(n.dest_zone),
       destZone: n.dest_zone,
       destCode: n.dest_code,
+      destFixedOnly: !!n.dest_fixed_only,
       count: n.pool_count || 500000,
       regenerate: false,
       apiUrl: n.api_url,
@@ -181,6 +184,7 @@ export function Nodes() {
           dest_zone: form.destZone,
           origin_code: form.originCode,
           dest_code: form.destCode,
+          dest_fixed_only: form.destFixedOnly,
           count: form.count,
         } as ServerRequest);
         toast.ok(`Node added · ${res.server.name} · ${int(res.server.pool_count)} numbers`);
@@ -198,6 +202,7 @@ export function Nodes() {
             dest_zone: form.destZone,
             origin_code: form.originCode,
             dest_code: form.destCode,
+            dest_fixed_only: form.destFixedOnly,
             count: form.count,
           });
           toast.ok(`Node saved · ${int(r.server.pool_count)} numbers`);
@@ -508,6 +513,29 @@ export function Nodes() {
             </select>
           </Field>
         </FieldRow>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            margin: "0 0 var(--space-3)",
+            cursor: "pointer",
+            fontSize: "var(--fs-sm)",
+            color: "var(--text-muted)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={form.destFixedOnly}
+            onChange={(e) => set("destFixedOnly", e.target.checked)}
+            style={{ width: 18, height: 18, flex: "0 0 auto", margin: 0, accentColor: "var(--ember, #f26a21)" }}
+          />
+          <span>
+            <strong style={{ color: "var(--text-bright)" }}>Fixed only</strong> — dial fixed-line: generate
+            from the country code but exclude every mobile/operator breakout under it, so numbers can't land
+            on a mobile range.
+          </span>
+        </label>
         <Field label="How many" hint="Random draw pool (max 2,000,000).">
           <input
             type="number"

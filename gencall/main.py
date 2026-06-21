@@ -72,7 +72,7 @@ def create_app(config_path: str = None):
     setup_logging(config)
 
     logger.info("=" * 60)
-    logger.info("  GenCall v2.0.2 - SIP Traffic Generator")
+    logger.info("  GenCall v2.2.0 - SIP Traffic Generator")
     logger.info("=" * 60)
 
     # Initialize components
@@ -164,6 +164,21 @@ def create_app(config_path: str = None):
             logger.warning("=" * 60)
         logger.info("API authentication enabled (%d key(s))",
                     gateway.keys.count_keys())
+
+        # Console auto-auth: when this box serves the NOC console, give the
+        # browser a key at load (/api/console/bootstrap) so opening /console
+        # just works — no per-browser key paste. A stable key from
+        # GENCALL_CONSOLE_API_KEY survives restarts; otherwise we mint one per
+        # boot (the console re-bootstraps on every load, so that is fine).
+        if config.serve_console:
+            env_console_key = os.environ.get("GENCALL_CONSOLE_API_KEY")
+            if env_console_key:
+                gateway.keys.register_raw_key(env_console_key, name="console")
+                routes.console_api_key = env_console_key
+            else:
+                raw_console, _ = gateway.keys.create_key("console")
+                routes.console_api_key = raw_console
+            logger.info("Console auto-auth enabled (GET /api/console/bootstrap)")
     else:
         routes.gateway = None
         logger.warning(
@@ -209,6 +224,7 @@ def create_app(config_path: str = None):
         db=db,
         trust_whitelist=config.trust_whitelist,
         drop_untrusted=config.trust_drop_untrusted,
+        record_max_age_s=config.loops_record_max_age_s,
     )
     loop_engine.parser = call_parser
     loops_api.call_parser = call_parser
@@ -244,6 +260,16 @@ def create_app(config_path: str = None):
         loop_engine.start_answer()
     except Exception as e:
         logger.warning("Could not start loop answer side (UAS): %s", e)
+
+    # Auto-resume: re-launch loops that were running before this restart. A
+    # systemd restart/reboot kills the SIPp children and reconciliation marks
+    # their campaigns 'interrupted'; without this they stay down until restarted
+    # by hand. Runs AFTER the UAS so returning calls are answered immediately.
+    # Best-effort: never block API startup on it.
+    try:
+        loop_engine.resume_interrupted()
+    except Exception as e:
+        logger.warning("Auto-resume of interrupted loops failed: %s", e)
 
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.

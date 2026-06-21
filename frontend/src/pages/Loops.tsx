@@ -113,6 +113,18 @@ function ner(st: LoopStats): number {
   return ((st.calls_out - networkFails(st.failures?.out ?? {})) / st.calls_out) * 100;
 }
 
+/** Pick the FRESHER of the live WS snapshot vs the REST-poll snapshot by ``ts``.
+ *  The WS value used to win unconditionally (``ws ?? rest``), so once the socket
+ *  delivered one snapshot the card was pinned to it — and when the socket later
+ *  went silent (e.g. after a worker restart) the card froze, ignoring the still-
+ *  updating 3 s REST poll. Comparing ts lets whichever source is actually fresh
+ *  drive the card, so REST keeps it live even with the WS down. */
+function freshest(a?: LoopStats, b?: LoopStats): LoopStats | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return (a.ts ?? "") >= (b.ts ?? "") ? a : b;
+}
+
 /** Loop completion as a fraction toward a calls/minutes target (0–100), or
  *  null when the campaign runs until stopped (no target). */
 function targetProgress(c: LoopCampaign, st: LoopStats | undefined): number | null {
@@ -350,10 +362,19 @@ export function Loops() {
     [campaigns],
   );
   const presetRows = presets.data?.presets ?? [];
-  // A running campaign belongs to a preset if its name matches "<preset>" or
-  // "<preset>-<node>" (how preset runs are named).
+  // A running campaign is named "<preset>" or "<preset>-<node-ip>". A preset
+  // "matches" when the name equals it or starts with "<preset>-". When preset
+  // names share a prefix (e.g. "Guinea" and "Guinea-22460"), a campaign matches
+  // BOTH — so attribute each campaign to the LONGEST (most specific) matching
+  // preset only, otherwise "Guinea-22460-<ip>" wrongly shows under "Guinea" too.
+  const matchesPreset = (name: string, presetName: string) =>
+    name === presetName || name.startsWith(`${presetName}-`);
+  const bestPresetName = (name: string) =>
+    presetRows
+      .filter((q) => matchesPreset(name, q.name))
+      .reduce((best, q) => (q.name.length > best.length ? q.name : best), "");
   const runsForPreset = (p: LoopPreset) =>
-    running.filter((c) => c.name === p.name || c.name.startsWith(`${p.name}-`));
+    running.filter((c) => bestPresetName(c.name) === p.name);
   const orphanRunning = useMemo(
     () =>
       running.filter(
@@ -481,7 +502,7 @@ export function Loops() {
                                   <LoopCard
                                     key={c.id}
                                     campaign={c}
-                                    stats={stats[c.id] ?? c.loop_stats ?? undefined}
+                                    stats={freshest(stats[c.id], c.loop_stats ?? undefined)}
                                     onStop={() => stop(c)}
                                     onCapture={() => setCaptureFor(c)}
                                   />
@@ -508,7 +529,7 @@ export function Loops() {
               <LoopCard
                 key={c.id}
                 campaign={c}
-                stats={stats[c.id] ?? c.loop_stats ?? undefined}
+                stats={freshest(stats[c.id], c.loop_stats ?? undefined)}
                 onStop={() => stop(c)}
                 onCapture={() => setCaptureFor(c)}
               />

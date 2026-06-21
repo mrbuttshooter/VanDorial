@@ -136,6 +136,11 @@ class SIPpInstance:
     remote_port: int = 5060
     local_port: int = 5060
     local_ip: str = ""
+    # Media (RTP) source/advertised address (SIPp -mi → SDP [media_ip]). Empty
+    # means "same as local_ip". The loop engine sets this to the auto-detected
+    # LOCAL interface IP so the SDP c= advertises the on-box media address even
+    # when signalling sources from a different (e.g. whitelisted public) node IP.
+    media_ip: str = ""
     mode: SIPpMode = SIPpMode.UAC
     transport: SIPpTransport = SIPpTransport.UDP
     call_rate: float = 1.0
@@ -193,12 +198,20 @@ class SIPpInstance:
         cmd.append(f"{self.remote_host}:{self.remote_port}")
 
         # Local binding. -i sets the SIP signalling source address; -mi sets the
-        # media (RTP) source address. We bind both to local_ip when known so the
-        # SDP we advertise ([media_ip]) matches the socket SIPp actually echoes
-        # on — otherwise -rtp_echo and the SDP can land on the wrong interface.
+        # media (RTP) source address, which SIPp substitutes into the SDP as
+        # [media_ip]. These are SEPARATE on purpose: signalling sources from the
+        # node's configured IP (the whitelisted origination source MADA expects
+        # in Via/Contact/From), while media advertises media_ip — the auto-
+        # detected LOCAL interface IP the loop engine supplies. Chad/Algeria SBCs
+        # drop the call (one-way audio / cause 47) when the advertised media IP
+        # is a public/foreign address that doesn't match where their RTP arrives
+        # from; advertising the on-box local IP makes them match. media_ip falls
+        # back to local_ip when unset, preserving the single-homed MADA case.
         if self.local_ip:
             cmd.extend(["-i", self.local_ip])
-            cmd.extend(["-mi", self.local_ip])
+        media_ip = self.media_ip or self.local_ip
+        if media_ip:
+            cmd.extend(["-mi", media_ip])
         cmd.extend(["-p", str(self.local_port)])
 
         # RTP echo media port. SIPp's real option is -mp (the local RTP echo base
@@ -260,15 +273,17 @@ class SIPpInstance:
         # not-yet-existent path is harmless (the parser skips missing files).
         self.log_file = os.path.splitext(self._stats_file)[0] + ".calllog"
 
-        # Screen output control. -trace_err writes SIPp's own error file, so we
-        # do NOT need (and must not keep) a stderr PIPE open — see start_instance,
-        # which routes stderr to DEVNULL to avoid a full-pipe deadlock on a busy
-        # run. We run SIPp in the FOREGROUND (no -bg): -bg daemonizes (forks and
-        # the parent exits immediately), which would leave Popen tracking a dead
-        # parent while the real dialer runs as an untracked orphan. Staying in the
-        # foreground under our os.setsid process group keeps the spawned PID the
-        # one we signal/reap and the one recorded for crash-orphan reconciliation.
-        cmd.extend(["-trace_err", "-trace_logs"])
+        # -trace_logs is REQUIRED (the CallRecordParser ingests its per-call
+        # <log> output). -trace_err writes SIPp's own error file, which balloons
+        # on a busy loop (retransmits/unexpected-msg noise — observed at 100+ MB)
+        # and is rarely consulted, so it's opt-in via [loops] sipp_trace_err
+        # (default off) to keep the disk from filling. Errors still go to stderr,
+        # which start_instance routes to DEVNULL. We run SIPp in the FOREGROUND
+        # (no -bg) under our os.setsid group so the spawned PID is the one we
+        # signal/reap and record for crash-orphan reconciliation.
+        cmd.append("-trace_logs")
+        if getattr(config, "loops_sipp_trace_err", False):
+            cmd.append("-trace_err")
 
         # Extra args
         if self.extra_args:
@@ -529,8 +544,35 @@ class SIPpEngine:
         for instance_id in list(self.instances.keys()):
             self.stop_instance(instance_id)
 
+    def _cleanup_instance_files(self, instance: "SIPpInstance") -> None:
+        """Delete every on-disk artifact SIPp produced for this instance: the
+        stat CSV, the .calllog, and the pid-named -trace_logs/-trace_err files.
+
+        Without this they orphan in the run dir on every stop — and the adaptive
+        pool restarts a loop's UAC repeatedly, so each restart leaked a fresh
+        ``<scenario>_<pid>_logs.log`` (+ _errors.log), filling the disk (observed
+        on a worker: hundreds of MB of stale /tmp logs)."""
+        paths: list[str] = []
+        if instance._stats_file:
+            paths.append(instance._stats_file)
+            paths.append(os.path.splitext(instance._stats_file)[0] + ".calllog")
+        if instance.log_file:
+            paths.append(instance.log_file)
+        pid = getattr(instance._process, "pid", None)
+        run_dir = getattr(instance, "_run_dir", "")
+        if pid is not None and run_dir and instance.scenario_file:
+            stem = os.path.splitext(os.path.basename(instance.scenario_file))[0]
+            paths.append(os.path.join(run_dir, f"{stem}_{pid}_logs.log"))
+            paths.append(os.path.join(run_dir, f"{stem}_{pid}_errors.log"))
+        for p in set(paths):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except OSError as e:  # pragma: no cover - best effort
+                logger.debug("cleanup: could not remove %s: %s", p, e)
+
     def remove_instance(self, instance_id: str) -> bool:
-        """Remove a stopped instance."""
+        """Remove a stopped instance and delete its on-disk SIPp artifacts."""
         with self._lock:
             instance = self.instances.get(instance_id)
             if not instance:
@@ -538,9 +580,7 @@ class SIPpEngine:
             if instance.state == SIPpState.RUNNING:
                 return False
             self._release_media_port(instance)
-            # Cleanup stats file
-            if instance._stats_file and os.path.exists(instance._stats_file):
-                os.remove(instance._stats_file)
+            self._cleanup_instance_files(instance)
             del self.instances[instance_id]
             return True
 

@@ -9,16 +9,16 @@
 
 :root {
   /* ---- Substrate (cool ink plates) -------------------------------------- */
-  --bg-void: #08090c;          /* deepest background, behind everything       */
-  --bg-base: #0c0e13;          /* app background                              */
-  --bg-panel: #11141b;         /* card / panel surface                        */
-  --bg-panel-2: #161a23;       /* elevated surface (modals, headers)          */
-  --bg-inset: #090a0e;         /* sunken wells (tables, code)                 */
-  --bg-hover: #1a1f29;
+  --bg-void: #15181f;          /* deepest background, behind everything       */
+  --bg-base: #1a1e27;          /* app background                              */
+  --bg-panel: #222731;         /* card / panel surface                        */
+  --bg-panel-2: #2b313d;       /* elevated surface (modals, headers)          */
+  --bg-inset: #15181f;         /* sunken wells (tables, code)                 */
+  --bg-hover: #323845;
 
   /* ---- Hairlines & structure ------------------------------------------- */
-  --line: #20242e;             /* default border                              */
-  --line-strong: #303744;
+  --line: #363d4a;             /* default border                              */
+  --line-strong: #4a5260;
   --line-phosphor: rgba(255, 122, 41, 0.22); /* ember edge on live panels    */
   --grid-line: rgba(146, 160, 186, 0.05);    /* perforated-plate dots        */
 
@@ -38,8 +38,8 @@
   /* ---- Text (warm ivory on cool ink) ------------------------------------ */
   --text: #ddd8cb;             /* primary readable text                       */
   --text-bright: #f7f3e8;      /* headings, key readouts                      */
-  --text-muted: #837f72;       /* labels, secondary                           */
-  --text-faint: #514f46;       /* disabled, decorative                        */
+  --text-muted: #9d9889;       /* labels, secondary (raised for contrast)     */
+  --text-faint: #6b685d;       /* disabled, decorative                        */
 
   /* ---- Type -------------------------------------------------------------- */
   --font-display: "Archivo", "Segoe UI", sans-serif;        /* headings, readouts */

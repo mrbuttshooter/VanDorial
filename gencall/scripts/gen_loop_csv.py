@@ -420,10 +420,28 @@ def _side_codes(zones, zone_name, code_override, pattern):
     raise ValueError("each side needs a zone (--*-zone), a code (--*-code) or a pattern (--oad/--dad)")
 
 
+def breakouts_under(zones, code):
+    """Every deck code that is a STRICT extension of ``code`` (starts with it and
+    is longer) — i.e. all the mobile/operator/special breakouts carved out of the
+    country-code space.
+
+    Dialing FIXED means the country code MINUS every defined breakout (fixed/
+    geographic is the un-carved remainder), so this is the exclusion set: generate
+    ``code + random`` and reject anything that starts with one of these.
+    """
+    out = set()
+    for codes in zones.values():
+        for c in codes:
+            if c != code and len(c) > len(code) and c.startswith(code):
+                out.add(c)
+    return out
+
+
 def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
                    dad_zone=None, dad_code=None, dad_pattern=None,
                    count=100, length=11, seed=None, unique=True,
-                   oad_length=None, dad_length=None) -> List[Pair]:
+                   oad_length=None, dad_length=None,
+                   dad_fixed_only=False) -> List[Pair]:
     """Generate ``count`` validated (A, B) pairs.
 
     Each side is driven by a zone (codes spread across the zone), a pinned code,
@@ -436,6 +454,22 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
     rng = random.Random(seed)
     a_codes, a_re, a_pat = _side_codes(zones, oad_zone, oad_code, oad_pattern)
     b_codes, b_re, b_pat = _side_codes(zones, dad_zone, dad_code, dad_pattern)
+
+    # FIXED-only on the drop side: exclude every breakout carved out of the chosen
+    # B code(s), so a number generated from the bare country code can't land on a
+    # mobile/operator range. Checked by the lengths actually present, so it's a
+    # couple of set lookups per number, not a scan of the whole exclusion list.
+    excl_set, excl_lens = set(), []
+    if dad_fixed_only and b_codes:
+        for code in b_codes:
+            excl_set |= breakouts_under(zones, code)
+        excl_lens = sorted({len(p) for p in excl_set})
+
+    def is_excluded(n: str) -> bool:
+        for L in excl_lens:
+            if n[:L] in excl_set:
+                return True
+        return False
 
     def make(codes, regex, pat, explicit_len) -> str:
         if pat:
@@ -452,6 +486,8 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
         attempts += 1
         a = make(a_codes, a_re, a_pat, oad_length)
         b = make(b_codes, b_re, b_pat, dad_length)
+        if excl_lens and is_excluded(b):
+            continue   # B landed on a mobile/other breakout — FIXED wants none
         pair = (a, b)
         if unique and pair in seen:
             continue
@@ -466,7 +502,8 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
 
 def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
                        seed=None, origin_code="", dest_code="", out_dir=None,
-                       oad_length=None, dad_length=None, extra_zones=None):
+                       oad_length=None, dad_length=None, extra_zones=None,
+                       dest_fixed_only=False):
     """Generate an A/B number pool for a node and write it to a file.
 
     Resolves the deck, builds ``count`` validated pairs for the origin/drop sale
@@ -489,6 +526,7 @@ def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
         dad_zone=dest_zone, dad_code=dest_code or None,
         count=count, length=length, seed=seed,
         oad_length=oad_length, dad_length=dad_length,
+        dad_fixed_only=dest_fixed_only,
     )
     out_dir = out_dir or os.path.join(tempfile.gettempdir(), "gencall_numbers")
     os.makedirs(out_dir, exist_ok=True)

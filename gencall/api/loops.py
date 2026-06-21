@@ -557,6 +557,42 @@ def fleet_stop_loop(req: FleetStopRequest):
         raise HTTPException(502, f"worker {req.box} stop failed: {e}")
 
 
+@router.get("/api/loops/{campaign_id}/pool-stats", dependencies=[Depends(require_api_key)])
+def loop_pool_stats(campaign_id: str):
+    """Per-prefix ASR the adaptive pool sees for this campaign (read-only).
+
+    Scores ``call_records`` by destination prefix and labels each keep/drop/
+    undecided using the live ``[loops] adaptive_*`` thresholds — the same view
+    the optimizer acts on. Lets the console show which prefixes route (and why a
+    prefix was pruned) without enabling adaptive_pool. Empty until calls land."""
+    from gencall.core import pool_optimizer as po
+    eng = _engine()
+    cfg = eng.config
+    plen = getattr(cfg, "loops_adaptive_prefix_len", 6)
+    min_attempts = getattr(cfg, "loops_adaptive_min_attempts", 30)
+    min_asr = getattr(cfg, "loops_adaptive_min_asr", 0.5)
+    stats = po.prefix_asr(eng.db, campaign_id, plen)
+    keep, drop, undecided = po.classify_prefixes(stats, min_attempts, min_asr)
+    label = {**{p: "keep" for p in keep}, **{p: "drop" for p in drop},
+             **{p: "undecided" for p in undecided}}
+    prefixes = [
+        {"prefix": p, "answered": a, "total": t,
+         "asr": round(a / t, 3) if t else 0.0, "status": label.get(p, "undecided")}
+        for p, (a, t) in sorted(stats.items(), key=lambda kv: (-kv[1][1], kv[0]))
+    ]
+    total = sum(t for _, t in stats.values())
+    answered = sum(a for a, _ in stats.values())
+    return {
+        "campaign_id": campaign_id,
+        "prefix_len": plen,
+        "thresholds": {"min_attempts": min_attempts, "min_asr": min_asr},
+        "calls": total,
+        "overall_asr": round(answered / total, 3) if total else 0.0,
+        "keep": keep, "drop": drop, "undecided": undecided,
+        "prefixes": prefixes,
+    }
+
+
 @router.get("/api/loops/{campaign_id}", dependencies=[Depends(require_api_key)])
 def get_loop(campaign_id: str):
     """Live status for one campaign incl. its UAC's SIPp stats + latest loop_stats.
@@ -1147,6 +1183,8 @@ class GenerateNumbersRequest(BaseModel):
     dest_zone: str
     origin_code: str = ""          # optional: pin one code instead of spreading
     dest_code: str = ""
+    # Dial FIXED only: exclude every mobile/other breakout under the dest code.
+    dest_fixed_only: bool = False
     count: int = Field(default=500000, ge=1, le=5_000_000)
     length: int = Field(default=11, ge=4, le=18)
     seed: Optional[int] = None
@@ -1256,6 +1294,7 @@ def generate_numbers(req: GenerateNumbersRequest):
             origin_zone=req.origin_zone, dest_zone=req.dest_zone,
             origin_code=req.origin_code, dest_code=req.dest_code,
             count=req.count, length=req.length, seed=req.seed,
+            dest_fixed_only=req.dest_fixed_only,
         )
     except (ValueError, RuntimeError) as e:
         raise HTTPException(422, str(e))

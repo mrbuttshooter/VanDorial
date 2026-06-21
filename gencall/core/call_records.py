@@ -149,9 +149,17 @@ class _CallAccumulator:
         },
     }
 
-    def __init__(self):
+    def __init__(self, max_age_s=1800):
         # key -> record dict
         self._records = {}
+        # key -> monotonic time the record was first seen, for staleness eviction.
+        self._seen = {}
+        # Force-finalize+evict a record older than this many seconds even if no
+        # BYE was ever parsed (e.g. the switch tore the call down at a media
+        # timeout, so the UAC never logged t_bye_sent). Without this an answered
+        # call with no parsed BYE lingers forever and the parser process leaks
+        # memory unbounded (observed: 1.2M stuck records ≈ 1.26 GB RSS). 0 = off.
+        self.max_age_s = float(max_age_s)
 
     @staticmethod
     def key_of(fields):
@@ -185,6 +193,7 @@ class _CallAccumulator:
                 "final_code": None,
             }
             self._records[key] = rec
+            self._seen[key] = time.monotonic()
 
         # Identity / metadata fields (last non-empty wins).
         if fields.get("a_number"):
@@ -263,17 +272,27 @@ class _CallAccumulator:
         records are removed from the accumulator after yielding so memory stays
         bounded over a long campaign; partial records (still awaiting BYE) are
         left in place for the next pass.
+
+        A record older than ``max_age_s`` is ALSO treated as terminal even with
+        no BYE parsed: a call the switch tore down (media timeout, lost BYE) never
+        logs t_bye_sent, so without this it would linger forever and leak memory.
+        Such a record is finalized with whatever it has (an answered-but-untimed
+        call persists with duration 0) and evicted.
         """
+        now = time.monotonic()
         done_keys = []
         for key, rec in self._records.items():
             terminal = rec["t_end_ms"] is not None
             code = rec["final_code"]
             failed = code is not None and not _is_success_code(code)
-            if terminal or failed:
+            stale = (self.max_age_s > 0
+                     and (now - self._seen.get(key, now)) > self.max_age_s)
+            if terminal or failed or stale:
                 done_keys.append(key)
         for key in done_keys:
             row = self.finalize(key)
             del self._records[key]
+            self._seen.pop(key, None)
             yield key, row
 
 
@@ -291,11 +310,15 @@ class CallRecordParser:
     """
 
     def __init__(self, db=None, poll_interval=MIN_POLL_INTERVAL_S,
-                 trust_whitelist=None, drop_untrusted=False):
+                 trust_whitelist=None, drop_untrusted=False,
+                 record_max_age_s=1800):
         # ``db`` is a gencall.db.models.Database (or None for parse-only tests).
         self.db = db
         # Floor the interval at the mandated minimum — never busy-poll (§4.2).
         self.poll_interval = max(float(poll_interval), MIN_POLL_INTERVAL_S)
+        # Staleness cap handed to every per-file accumulator: force-finalize a
+        # record with no parsed BYE after this long so memory can't leak.
+        self.record_max_age_s = float(record_max_age_s)
         # Verification-only trust filter (design §4.1). Inbound records whose
         # source_ip is not in this list are flagged untrusted (and dropped if
         # ``drop_untrusted``) so a misconfigured firewall is visible rather than
@@ -323,7 +346,7 @@ class CallRecordParser:
                 self._files[path] = {
                     "offset": 0,
                     "campaign_id": campaign_id,
-                    "acc": _CallAccumulator(),
+                    "acc": _CallAccumulator(max_age_s=self.record_max_age_s),
                 }
 
     def remove_log_file(self, path):
