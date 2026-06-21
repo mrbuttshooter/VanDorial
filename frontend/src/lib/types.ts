@@ -375,6 +375,18 @@ export interface LoopPresetRequest {
   rtp?: boolean;
   /* When rtp: loop media for the whole call; false = play once. */
   rtp_loop?: boolean;
+  /* ---- Diurnal traffic profile (Phase 2 shaper) -------------------------
+     When profile_enabled, a run of this preset steps its rate hourly along the
+     diurnal curve (sized from target_minutes + the ACD). The seven knobs are
+     the traffic_profile.make_curve kwargs. */
+  profile_enabled?: boolean;
+  profile_preset?: string;
+  night_floor?: number;
+  ramp_up_start?: number;
+  plateau_start?: number;
+  plateau_end?: number;
+  ramp_down_end?: number;
+  tz_offset?: number;
 }
 
 /* Where to fire a preset: a single node, or a group (optionally a subset). */

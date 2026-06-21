@@ -126,6 +126,19 @@ class LoopPreset(Base):
     rtp = Column(Integer, default=0)
     # When rtp is on: loop the media for the whole call (1) vs play it once (0).
     rtp_loop = Column(Integer, default=0)
+    # ── Diurnal traffic profile (Phase 2 shaper) ──────────────────────────────
+    # When profile_enabled, a running campaign's rate is stepped hourly to follow
+    # the diurnal curve (gencall.core.traffic_profile) so it reads as organic.
+    # The seven knobs are the make_curve kwargs (preset + curve shape) and
+    # target_minutes (above) is the daily minutes target the rate is sized from.
+    profile_enabled = Column(Boolean, default=False)
+    profile_preset = Column(String(32), default="diurnal")
+    night_floor = Column(Float, default=0.25)
+    ramp_up_start = Column(Integer, default=6)
+    plateau_start = Column(Integer, default=9)
+    plateau_end = Column(Integer, default=18)
+    ramp_down_end = Column(Integer, default=22)
+    tz_offset = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     def to_dict(self):
@@ -146,6 +159,14 @@ class LoopPreset(Base):
             "target_minutes": self.target_minutes or 0,
             "rtp": bool(self.rtp),
             "rtp_loop": bool(self.rtp_loop),
+            "profile_enabled": bool(self.profile_enabled),
+            "profile_preset": self.profile_preset or "diurnal",
+            "night_floor": self.night_floor if self.night_floor is not None else 0.25,
+            "ramp_up_start": self.ramp_up_start if self.ramp_up_start is not None else 6,
+            "plateau_start": self.plateau_start if self.plateau_start is not None else 9,
+            "plateau_end": self.plateau_end if self.plateau_end is not None else 18,
+            "ramp_down_end": self.ramp_down_end if self.ramp_down_end is not None else 22,
+            "tz_offset": self.tz_offset or 0,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -391,6 +412,15 @@ class Database:
         "loop_presets": [
             ("rtp", "INTEGER DEFAULT 0"),
             ("rtp_loop", "INTEGER DEFAULT 0"),
+            # Diurnal traffic profile (Phase 2 shaper).
+            ("profile_enabled", "BOOLEAN DEFAULT 0"),
+            ("profile_preset", "VARCHAR(32) DEFAULT 'diurnal'"),
+            ("night_floor", "FLOAT DEFAULT 0.25"),
+            ("ramp_up_start", "INTEGER DEFAULT 6"),
+            ("plateau_start", "INTEGER DEFAULT 9"),
+            ("plateau_end", "INTEGER DEFAULT 18"),
+            ("ramp_down_end", "INTEGER DEFAULT 22"),
+            ("tz_offset", "INTEGER DEFAULT 0"),
         ],
     }
 

@@ -138,6 +138,19 @@ class StartLoopRequest(BaseModel):
     rtp: bool = False
     # When rtp: loop the media across the whole call (True) vs play once (False).
     rtp_loop: bool = False
+    # ── Diurnal traffic profile (Phase 2 shaper) ──────────────────────────────
+    # When profile_enabled, the engine steps this campaign's rate hourly to follow
+    # the diurnal curve (gencall.core.traffic_profile) so it reads as organic; the
+    # rate is sized from target_minutes (above) + the ACD (duration_s). The seven
+    # knobs are the make_curve kwargs (preset + curve shape).
+    profile_enabled: bool = False
+    profile_preset: str = "diurnal"
+    night_floor: float = 0.25
+    ramp_up_start: int = 6
+    plateau_start: int = 9
+    plateau_end: int = 18
+    ramp_down_end: int = 22
+    tz_offset: int = 0
 
     @field_validator("transport")
     @classmethod
@@ -145,6 +158,15 @@ class StartLoopRequest(BaseModel):
         # Reject an unknown transport with 422 rather than silently downgrading
         # to UDP (which could send a TLS-intended campaign in cleartext).
         return validate_transport(v)
+
+
+# The eight diurnal-profile fields carried from a start request through to the
+# engine's start_campaign (Phase 2 shaper). Kept in one place so the local call
+# and the remote-worker proxy payload stay in sync.
+_PROFILE_FIELDS = (
+    "profile_enabled", "profile_preset", "night_floor", "ramp_up_start",
+    "plateau_start", "plateau_end", "ramp_down_end", "tz_offset",
+)
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -193,6 +215,7 @@ def start_loop(req: StartLoopRequest):
                 "duration_max_s": req.duration_max_s, "match_key": req.match_key,
                 "target_calls": req.target_calls, "target_minutes": req.target_minutes,
                 "rtp": req.rtp, "rtp_loop": req.rtp_loop,
+                **{f: getattr(req, f) for f in _PROFILE_FIELDS},
             }
             try:
                 res = _worker_post(node["api_url"], node.get("api_key", ""),
@@ -223,6 +246,7 @@ def start_loop(req: StartLoopRequest):
             node_id=req.node_id,
             rtp=req.rtp,
             rtp_loop=req.rtp_loop,
+            **{f: getattr(req, f) for f in _PROFILE_FIELDS},
         )
     except IPBusy as e:
         raise HTTPException(409, str(e))
@@ -886,6 +910,18 @@ class LoopPresetRequest(BaseModel):
     rtp: bool = False
     # When rtp: loop the media across the whole call (True) vs play once (False).
     rtp_loop: bool = False
+    # ── Diurnal traffic profile (Phase 2 shaper) ──────────────────────────────
+    # When profile_enabled, a run of this preset steps its rate hourly to follow
+    # the diurnal curve (sized from target_minutes + the ACD). The seven knobs are
+    # the make_curve kwargs (preset + curve shape).
+    profile_enabled: bool = False
+    profile_preset: str = "diurnal"
+    night_floor: float = 0.25
+    ramp_up_start: int = 6
+    plateau_start: int = 9
+    plateau_end: int = 18
+    ramp_down_end: int = 22
+    tz_offset: int = 0
 
     @field_validator("transport")
     @classmethod
@@ -905,6 +941,9 @@ _PRESET_FIELDS = (
     "name", "description", "dest_host", "dest_port", "transport", "rate",
     "max_concurrent", "duration_mode", "duration_s", "duration_max_s",
     "match_key", "target_calls", "target_minutes", "rtp", "rtp_loop",
+    # Diurnal traffic profile (Phase 2 shaper).
+    "profile_enabled", "profile_preset", "night_floor", "ramp_up_start",
+    "plateau_start", "plateau_end", "ramp_down_end", "tz_offset",
 )
 
 # The subset of preset fields passed straight to start_campaign (everything bar
@@ -913,6 +952,9 @@ _PRESET_RUN_PARAMS = (
     "dest_host", "dest_port", "transport", "rate", "max_concurrent",
     "duration_mode", "duration_s", "duration_max_s", "match_key",
     "target_calls", "target_minutes", "rtp", "rtp_loop",
+    # Diurnal traffic profile (Phase 2 shaper).
+    "profile_enabled", "profile_preset", "night_floor", "ramp_up_start",
+    "plateau_start", "plateau_end", "ramp_down_end", "tz_offset",
 )
 
 
