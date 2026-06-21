@@ -233,6 +233,41 @@ def start_loop(req: StartLoopRequest):
     return {"status": "started", "campaign": campaign}
 
 
+# ─── Traffic calculator (size a diurnal campaign; no engine/DB) ──────────────
+# Pure sizing: a daily minutes target + ACD + a diurnal curve -> peak/avg CPS +
+# peak concurrency. Declared BEFORE the /api/loops/{campaign_id} routes so the
+# literal 'traffic-calc' path is not swallowed as a campaign id.
+
+
+class TrafficCalcProfile(BaseModel):
+    preset: str = "diurnal"
+    night_floor: float = 0.25
+    ramp_up_start: int = 6
+    plateau_start: int = 9
+    plateau_end: int = 18
+    ramp_down_end: int = 22
+    tz_offset: int = 0
+
+
+class TrafficCalcRequest(BaseModel):
+    target_minutes: int = Field(ge=0)
+    acd_s: float = Field(gt=0)
+    profile: TrafficCalcProfile = TrafficCalcProfile()
+
+
+@router.post("/api/loops/traffic-calc", dependencies=[Depends(require_api_key)])
+def traffic_calc(req: TrafficCalcRequest):
+    """Size a diurnal campaign from a daily minutes target + ACD."""
+    from gencall.core import traffic_profile
+    cfg = Config()
+    try:
+        return traffic_profile.calculate(
+            req.target_minutes, req.acd_s, req.profile.model_dump(exclude={"preset"}),
+            max_cps=cfg.loops_max_rate_cps, max_channels=cfg.loops_max_channels)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 # ─── Fleet capture (controller routes by box; download is STREAMED) ──────────
 # The console talks to the controller; these resolve ``box`` ("local" => this
 # box's manager, else a worker api_url => proxy with that worker's api_key) and
