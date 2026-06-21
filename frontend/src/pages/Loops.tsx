@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import s from "./pages.module.css";
 import ui from "@/components/ui/ui.module.css";
 import { Panel } from "@/components/ui/Panel";
@@ -51,6 +51,16 @@ const PRESET_BLANK: LoopPresetRequest = {
   target_minutes: 0,
   rtp: false,
   rtp_loop: false,
+  // Diurnal traffic profile (off by default) — the make_curve knobs match the
+  // backend defaults so an untouched form posts the same shape the API assumes.
+  profile_enabled: false,
+  profile_preset: "diurnal",
+  night_floor: 0.25,
+  ramp_up_start: 6,
+  plateau_start: 9,
+  plateau_end: 18,
+  ramp_down_end: 22,
+  tz_offset: 0,
 };
 
 /** ms → minutes, rounded to 1 decimal. */
@@ -135,6 +145,12 @@ export function Loops() {
   const [form, setForm] = useState<LoopPresetRequest>(PRESET_BLANK);
   const [busy, setBusy] = useState(false);
 
+  // Live diurnal preview for the preset form's "Traffic profile" section: the
+  // 24-bar CPS curve sized from the form's target_minutes + the ACD (duration_s)
+  // + the knobs. Recomputed (debounced) whenever a profile input changes while
+  // the section is enabled.
+  const [profilePreview, setProfilePreview] = useState<TrafficCalcResult | null>(null);
+
   // Traffic Calculator modal: size peak/avg CPS + concurrency from a daily
   // minutes target + ACD + a diurnal curve (no engine — pure sizing).
   const [showCalc, setShowCalc] = useState(false);
@@ -158,7 +174,8 @@ export function Loops() {
   };
 
   // "Apply to new preset": pre-fill a fresh preset with the sized rate +
-  // concurrency, close the calculator, and open the preset form.
+  // concurrency AND enable the diurnal profile (the knobs + target the rate was
+  // sized from), so a run of this preset shapes itself along the same curve.
   const applyCalcToPreset = () => {
     if (!calcRes) return;
     setEditId(null);
@@ -168,6 +185,8 @@ export function Loops() {
       max_concurrent: calcRes.peak_concurrent,
       duration_s: Number(calc.acd_s),
       target_minutes: Number(calc.target_minutes),
+      profile_enabled: true,
+      night_floor: Number(calc.night_floor),
     });
     setShowCalc(false);
     setShowPreset(true);
@@ -191,6 +210,53 @@ export function Loops() {
 
   const set = <K extends keyof LoopPresetRequest>(k: K, v: LoopPresetRequest[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  // Recompute the profile preview when the modal is open, the profile is on, and
+  // any sizing input changes. Debounced + abortable so dragging a number input
+  // doesn't spam the API or land a stale result.
+  useEffect(() => {
+    if (!showPreset || !form.profile_enabled) {
+      setProfilePreview(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api
+        .trafficCalc({
+          target_minutes: Number(form.target_minutes) || 0,
+          acd_s: Number(form.duration_s) || 1,
+          profile: {
+            night_floor: Number(form.night_floor),
+            ramp_up_start: Number(form.ramp_up_start),
+            plateau_start: Number(form.plateau_start),
+            plateau_end: Number(form.plateau_end),
+            ramp_down_end: Number(form.ramp_down_end),
+            tz_offset: Number(form.tz_offset),
+          },
+        })
+        .then((res) => {
+          if (!cancelled) setProfilePreview(res);
+        })
+        .catch(() => {
+          if (!cancelled) setProfilePreview(null);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [
+    showPreset,
+    form.profile_enabled,
+    form.target_minutes,
+    form.duration_s,
+    form.night_floor,
+    form.ramp_up_start,
+    form.plateau_start,
+    form.plateau_end,
+    form.ramp_down_end,
+    form.tz_offset,
+  ]);
 
   const openNew = () => {
     setEditId(null);
@@ -216,6 +282,14 @@ export function Loops() {
       target_minutes: p.target_minutes,
       rtp: p.rtp,
       rtp_loop: p.rtp_loop,
+      profile_enabled: p.profile_enabled ?? false,
+      profile_preset: p.profile_preset ?? "diurnal",
+      night_floor: p.night_floor ?? 0.25,
+      ramp_up_start: p.ramp_up_start ?? 6,
+      plateau_start: p.plateau_start ?? 9,
+      plateau_end: p.plateau_end ?? 18,
+      ramp_down_end: p.ramp_down_end ?? 22,
+      tz_offset: p.tz_offset ?? 0,
     });
     setShowPreset(true);
   };
@@ -589,6 +663,137 @@ export function Loops() {
             </select>
           </Field>
         </FieldRow>
+
+        {/* ---- Traffic profile (diurnal shaper) ----
+           When enabled, a run of this preset steps its rate hourly along a
+           day/night curve sized from the daily minutes target + ACD (the
+           Duration above). Off = a flat rate (the Call rate above). */}
+        <div className={s.formSection}>Traffic profile (diurnal shaper)</div>
+        <label
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            fontSize: "var(--fs-sm)", cursor: "pointer", margin: "var(--space-2) 0",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={!!form.profile_enabled}
+            onChange={(e) => set("profile_enabled", e.target.checked)}
+          />
+          <span style={{ color: "var(--text-bright)" }}>Enable trend</span>
+          <span style={{ color: "var(--text-muted)" }}>
+            shape this loop's rate to a daily curve (organic-looking traffic)
+          </span>
+        </label>
+
+        {form.profile_enabled && (
+          <>
+            <FieldRow>
+              <Field label="Preset" hint="curve shape (only diurnal for now)">
+                <select
+                  value={form.profile_preset}
+                  onChange={(e) => set("profile_preset", e.target.value)}
+                >
+                  <option value="diurnal">Diurnal (day/night)</option>
+                </select>
+              </Field>
+              <Field label="Daily minutes target" hint="rate is sized from this + ACD">
+                <input
+                  type="number"
+                  value={form.target_minutes}
+                  onChange={(e) => set("target_minutes", Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Night floor (0–1)" hint="overnight rate vs the daytime peak">
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0"
+                  max="1"
+                  value={form.night_floor}
+                  onChange={(e) => set("night_floor", Number(e.target.value))}
+                />
+              </Field>
+            </FieldRow>
+
+            <FieldRow>
+              <Field label="Ramp-up start (h)" hint="rise begins, local hour 0–23">
+                <input
+                  type="number"
+                  min="0"
+                  max="23"
+                  value={form.ramp_up_start}
+                  onChange={(e) => set("ramp_up_start", Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Plateau start (h)" hint="reaches the peak">
+                <input
+                  type="number"
+                  min="0"
+                  max="23"
+                  value={form.plateau_start}
+                  onChange={(e) => set("plateau_start", Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Plateau end (h)" hint="peak holds until">
+                <input
+                  type="number"
+                  min="0"
+                  max="23"
+                  value={form.plateau_end}
+                  onChange={(e) => set("plateau_end", Number(e.target.value))}
+                />
+              </Field>
+            </FieldRow>
+
+            <FieldRow>
+              <Field label="Ramp-down end (h)" hint="back to night floor by">
+                <input
+                  type="number"
+                  min="0"
+                  max="23"
+                  value={form.ramp_down_end}
+                  onChange={(e) => set("ramp_down_end", Number(e.target.value))}
+                />
+              </Field>
+              <Field label="TZ offset (h)" hint="rotate curve to the market's local time">
+                <input
+                  type="number"
+                  value={form.tz_offset}
+                  onChange={(e) => set("tz_offset", Number(e.target.value))}
+                />
+              </Field>
+            </FieldRow>
+
+            {/* 24-bar preview of the sized per-hour CPS (peak = the Call rate). */}
+            <div
+              style={{
+                fontSize: "var(--fs-2xs)", textTransform: "uppercase",
+                letterSpacing: "var(--tracking-wide)", color: "var(--text-faint)",
+                margin: "var(--space-3) 0 4px",
+              }}
+            >
+              Per-hour CPS preview (00–23h)
+            </div>
+            {profilePreview ? (
+              <>
+                <Sparkline cps={profilePreview.per_hour.map((h) => h.cps)} />
+                <dl className={s.kv} style={{ marginTop: "var(--space-2)" }}>
+                  <dt>Peak / avg CPS</dt>
+                  <dd>
+                    {num(profilePreview.peak_cps)} / {num(profilePreview.avg_cps)}
+                  </dd>
+                  <dt>Peak concurrent</dt>
+                  <dd>{int(profilePreview.peak_concurrent)}</dd>
+                </dl>
+              </>
+            ) : (
+              <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+                Set a daily minutes target to preview the curve.
+              </div>
+            )}
+          </>
+        )}
       </Modal>
 
       {/* ---- Traffic calculator modal (size CPS + concurrency) ---- */}
@@ -664,21 +869,7 @@ export function Loops() {
             >
               Per-hour CPS (00–23h)
             </div>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60 }}>
-              {calcRes.per_hour.map((h) => (
-                <div
-                  key={h.hour}
-                  title={`${h.hour}:00 — ${h.cps} cps`}
-                  style={{
-                    flex: 1,
-                    height: `${calcRes.peak_cps > 0 ? (h.cps / calcRes.peak_cps) * 100 : 0}%`,
-                    minHeight: 1,
-                    background: "var(--signal, #4ade80)",
-                    borderRadius: 1,
-                  }}
-                />
-              ))}
-            </div>
+            <Sparkline cps={calcRes.per_hour.map((h) => h.cps)} />
 
             <dl className={s.kv} style={{ marginTop: "var(--space-3)" }}>
               <dt>Attempts / day</dt>
@@ -1280,6 +1471,30 @@ function LoopCard({
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/* 24-bar diurnal CPS sparkline (inline, no chart lib) — shared by the
+   Calculator result and the preset form's profile preview. Bars are scaled to
+   the series peak; an all-zero series renders flat. */
+function Sparkline({ cps }: { cps: number[] }) {
+  const peak = cps.reduce((m, v) => (v > m ? v : m), 0);
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60 }}>
+      {cps.map((v, h) => (
+        <div
+          key={h}
+          title={`${h}:00 — ${num(v)} cps`}
+          style={{
+            flex: 1,
+            height: `${peak > 0 ? (v / peak) * 100 : 0}%`,
+            minHeight: 1,
+            background: "var(--signal, #4ade80)",
+            borderRadius: 1,
+          }}
+        />
+      ))}
     </div>
   );
 }

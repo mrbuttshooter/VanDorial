@@ -354,6 +354,17 @@ export interface LoopPreset {
   rtp: boolean;
   /* When rtp: loop media for the whole call; false = play once. */
   rtp_loop: boolean;
+  /* ---- Diurnal traffic profile (Phase 2 shaper) — mirrors LoopPreset.to_dict().
+     When profile_enabled, a run of this preset steps its rate hourly along the
+     diurnal curve. The seven knobs are the traffic_profile.make_curve kwargs. */
+  profile_enabled: boolean;
+  profile_preset: string;
+  night_floor: number;
+  ramp_up_start: number;
+  plateau_start: number;
+  plateau_end: number;
+  ramp_down_end: number;
+  tz_offset: number;
   created_at: string | null;
 }
 
