@@ -330,6 +330,14 @@ class Config:
     def loops_uas_restart_backoff_s(self):
         return self.getint("loops", "uas_restart_backoff_s", 5)
 
+    @property
+    def loops_shaper_enabled(self):
+        """Whether the diurnal traffic shaper runs (Phase 2). On by default; a
+        profiled campaign then steps its rate hourly to follow the diurnal curve.
+        Set [loops] shaper_enabled = false to pin every campaign at its launch
+        rate (the curve is still computed by the Calculator, just not applied)."""
+        return self.getbool("loops", "shaper_enabled", True)
+
     # ── Loop input bounds (security: keep unbounded inputs from OOMing the box) ──
     # Per-campaign caps applied at the API/engine boundary so a single start can
     # never request an absurd channel/rate count that OOMs the box. The 1000-

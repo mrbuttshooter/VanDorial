@@ -267,6 +267,9 @@ def create_app(config_path: str = None):
                 # Stop the answer-side monitor first so it doesn't restart the
                 # UAS while we're tearing everything down.
                 loop_engine.stop_monitor()
+                # Stop the diurnal shaper too so it doesn't relaunch a UAC mid
+                # teardown (Phase 2).
+                loop_engine.stop_shaper()
             except Exception as e:
                 logger.warning("Error stopping loop monitor: %s", e)
             try:
