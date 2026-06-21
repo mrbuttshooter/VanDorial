@@ -101,7 +101,7 @@ export function Config() {
         <Panel title="Runtime">
           <dl className={s.kv}>
             <dt>Console build</dt>
-            <dd>2.1.0</dd>
+            <dd>2.1.0 · Done by Sergio &amp; Joey</dd>
             <dt>Stream transport</dt>
             <dd>WebSocket /ws</dd>
             <dt>API base</dt>

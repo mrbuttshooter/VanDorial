@@ -3,7 +3,7 @@
   "private": true,
   "version": "2.1.0",
   "type": "module",
-  "description": "GenCall NOC Console — SIP/VoIP traffic generator control surface",
+  "description": "GenCall SMC Console — SIP/VoIP traffic generator control surface",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

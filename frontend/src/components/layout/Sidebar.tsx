@@ -58,7 +58,7 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
         </div>
         <div className={styles.brandText}>
           <span className={styles.brandName}>GENCALL</span>
-          <span className={styles.brandSub}>NOC Console</span>
+          <span className={styles.brandSub}>SMC Console</span>
         </div>
       </div>
 
@@ -89,6 +89,7 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
       <div className={styles.sidebarFoot}>
         <span>GenCall v2.0 · SIP traffic generator</span>
         <span>build · console 2.1.0</span>
+        <span>Done by Sergio &amp; Joey</span>
       </div>
     </aside>
   );
