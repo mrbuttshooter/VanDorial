@@ -638,6 +638,31 @@ def _unlink_quiet(path: str) -> None:
             pass
 
 
+def _reject_unsafe_worker_url(url: str) -> None:
+    """Reject a worker api_url whose host is loopback or link-local (SSRF guard).
+
+    The controller fetches/POSTs to a node's api_url, so an unguarded value lets
+    an authenticated caller aim it at the cloud metadata service
+    (169.254.169.254). Block link-local/unspecified/multicast hosts — these have
+    no legitimate use as a fleet worker. Private VLAN IPs (the real fleet) and
+    loopback (legitimate for a single-box/self-proxy setup) are allowed; the
+    fixed proxy paths plus the firewall are the real boundary. A hostname (non-IP)
+    is allowed — DNS rebinding is out of scope for a guard at this layer."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    host = (urlparse(url if "://" in url else "http://" + url).hostname or "").strip()
+    if not host:
+        return
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return  # hostname, not a literal IP — allow
+    if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+        raise HTTPException(
+            400, f"worker URL host {host} is not allowed (link-local/metadata)")
+
+
 class CheckWorkerRequest(BaseModel):
     api_url: str
     api_key: str = ""
@@ -654,6 +679,7 @@ def check_worker(req: CheckWorkerRequest):
         raise HTTPException(422, "api_url is required")
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
+    _reject_unsafe_worker_url(url)
     try:
         headers = {"X-API-Key": req.api_key} if req.api_key else {}
         with httpx.Client(verify=False, timeout=5.0) as c:
@@ -681,6 +707,8 @@ def create_server(req: ServerRequest):
         api_url = (req.api_url or "").strip().rstrip("/")
         if api_url and not api_url.startswith(("http://", "https://")):
             api_url = "http://" + api_url
+        if api_url:
+            _reject_unsafe_worker_url(api_url)
         s = Server(name=name, ip=ip, description=req.description or "",
                    group_id=req.group_id, pool_length=req.length,
                    api_url=api_url, api_key=req.api_key or "")

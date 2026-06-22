@@ -7,6 +7,7 @@
    ============================================================================ */
 import type { LogLine, StatsSnapshot, StreamMessage, StreamTopic } from "./types";
 import { MOCK_ENABLED, mockApi } from "./mock";
+import { getApiKey } from "./api";
 
 type Handler<T = unknown> = (data: T) => void;
 type StatusHandler = (connected: boolean) => void;
@@ -62,7 +63,12 @@ class StreamClient {
   private connect() {
     this.closedByUser = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${location.host}/ws`;
+    // Pass the console's API key on the WS handshake (browsers can't set custom
+    // headers on a WebSocket, so it travels as a query param). The server
+    // validates it before accepting — the /ws streams are no longer open.
+    const key = getApiKey();
+    const qs = key ? `?api_key=${encodeURIComponent(key)}` : "";
+    const url = `${proto}://${location.host}/ws${qs}`;
     try {
       this.ws = new WebSocket(url);
     } catch {

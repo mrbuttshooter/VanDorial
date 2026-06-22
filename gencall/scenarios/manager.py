@@ -24,6 +24,25 @@ def _is_safe_name(name: str) -> bool:
     return bool(name) and ".." not in name and _SAFE_NAME.match(name) is not None
 
 
+# SIPp runs a scenario's <exec command="..."/> / int_cmd as a SHELL command, so a
+# saved custom scenario that the test runner later executes is remote code
+# execution. Custom scenarios only ever need the media/rtp exec forms
+# (rtp_stream, play_pcap_audio), so reject the shell-exec attributes outright.
+_DANGEROUS_EXEC = re.compile(r"<exec\b[^>]*\b(command|int_cmd)\s*=", re.IGNORECASE)
+
+
+def reject_dangerous_scenario(content: str) -> None:
+    """Raise ValueError if ``content`` contains a shell-executing SIPp action.
+
+    Blocks ``<exec command=...>`` / ``<exec int_cmd=...>`` (arbitrary command
+    execution on the worker). The benign media forms (``rtp_stream``,
+    ``play_pcap_audio``) are left alone."""
+    if _DANGEROUS_EXEC.search(content or ""):
+        raise ValueError(
+            "scenario rejected: <exec command=...>/<exec int_cmd=...> is not "
+            "allowed (it runs shell commands on the worker)")
+
+
 class ScenarioManager:
     """Manages SIP test scenarios for SIPp."""
 
@@ -91,6 +110,7 @@ class ScenarioManager:
             raise ValueError(
                 "invalid scenario name (use letters, digits, '_', '-', '.'; "
                 "no path separators or '..')")
+        reject_dangerous_scenario(content)
         os.makedirs(self.custom_dir, exist_ok=True)
         path = os.path.join(self.custom_dir, f"{name}.xml")
         with open(path, "w") as f:

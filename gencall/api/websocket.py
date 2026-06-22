@@ -475,8 +475,27 @@ async def _handle_client_message(client: WSClient, raw: str) -> dict:
 router = APIRouter(tags=["websocket"])
 
 
+async def _ws_authorized(ws: WebSocket) -> bool:
+    """Validate the API key on a WebSocket handshake before streaming data.
+
+    Browsers can't set headers on a WS, so the console passes the key as the
+    ``api_key`` query param (header also accepted for non-browser clients). When
+    no key store is configured (no DB) the app already runs auth-disabled, so we
+    mirror that degraded mode and allow — otherwise a valid key is required, so
+    the live /ws streams are no longer open to anyone who can reach the port."""
+    from gencall.api import routes as _routes
+    gw = getattr(_routes, "gateway", None)
+    if gw is None:
+        return True
+    key = ws.query_params.get("api_key") or ws.headers.get("x-api-key")
+    return bool(key and gw.keys.validate_key(key))
+
+
 @router.websocket("/ws")
 async def websocket_main(ws: WebSocket):
+    if not await _ws_authorized(ws):
+        await ws.close(code=1008)  # policy violation — bad/missing key
+        return
     """
     Main WebSocket endpoint. Clients send JSON commands to manage subscriptions.
 
@@ -506,6 +525,9 @@ async def websocket_main(ws: WebSocket):
 @router.websocket("/ws/stats")
 async def websocket_stats(ws: WebSocket):
     """Convenience endpoint: auto-subscribes to stats."""
+    if not await _ws_authorized(ws):
+        await ws.close(code=1008)
+        return
     client = await manager.connect(ws)
     client.subscriptions.add(StreamTopic.STATS)
     await manager.subscribe(ws, "stats")
@@ -525,6 +547,9 @@ async def websocket_stats(ws: WebSocket):
 @router.websocket("/ws/loops")
 async def websocket_loops(ws: WebSocket):
     """Convenience endpoint: auto-subscribes to the loop_stats stream (§4.3)."""
+    if not await _ws_authorized(ws):
+        await ws.close(code=1008)
+        return
     client = await manager.connect(ws)
     client.subscriptions.add(StreamTopic.LOOPS)
     await manager.subscribe(ws, "loops")

@@ -259,10 +259,25 @@ async def _handle_client_message(client: WSClient, raw: str) -> dict:
 router = APIRouter(tags=["controller-websocket"])
 
 
+async def _ws_authorized(ws: WebSocket) -> bool:
+    """Validate the API key on the controller WS handshake (key via the
+    ``api_key`` query param; header also accepted). Mirrors the worker hub —
+    the fleet streams are no longer open to anyone who can reach the port."""
+    from gencall.api import routes as _routes
+    gw = getattr(_routes, "gateway", None)
+    if gw is None:
+        return True
+    key = ws.query_params.get("api_key") or ws.headers.get("x-api-key")
+    return bool(key and gw.keys.validate_key(key))
+
+
 @router.websocket("/ws")
 async def websocket_main(ws: WebSocket):
     """Controller WebSocket. Clients send JSON commands to manage subscriptions
     over the fleet topics (fleet_stats, node_status, fleet_events, logs)."""
+    if not await _ws_authorized(ws):
+        await ws.close(code=1008)
+        return
     client = await manager.connect(ws)
     try:
         while True:
