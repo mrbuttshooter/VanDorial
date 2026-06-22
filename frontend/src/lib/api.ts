@@ -13,9 +13,11 @@ import type {
   GeneratePoolRequest,
   GroupStartResult,
   Health,
+  LoginResult,
   LoopCampaign,
   LoopPreset,
   LoopPresetRequest,
+  MeResult,
   NodeGroup,
   NodeGroupRequest,
   RunPresetRequest,
@@ -71,6 +73,28 @@ export function setApiKey(key: string | null): void {
   }
 }
 
+/* ---- Auth-required signal ------------------------------------------------
+   When request() hits an unrecoverable 401 it clears the stored token and
+   fires this so the root can drop back to the Login page without a reload.
+   A plain callback set keeps it dependency-free and idiomatic for this app. */
+type AuthListener = () => void;
+const authListeners = new Set<AuthListener>();
+
+export function onAuthRequired(fn: AuthListener): () => void {
+  authListeners.add(fn);
+  return () => authListeners.delete(fn);
+}
+
+function signalAuthRequired(): void {
+  setApiKey(null);
+  for (const fn of authListeners) fn();
+}
+
+/** Explicitly drop to the Login page (e.g. after the operator logs out). */
+export function requireAuth(): void {
+  signalAuthRequired();
+}
+
 /* Console auto-auth: ask the controller for the console's API key at startup so
    ANY browser that opens /console is authenticated — the key no longer has to
    be pasted into each browser by hand. The backend serves it from
@@ -92,7 +116,6 @@ export async function bootstrapApiKey(): Promise<void> {
 async function request<T>(
   path: string,
   init?: Omit<RequestInit, "body"> & { body?: unknown },
-  _retry = false,
 ): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   const apiKey = getApiKey();
@@ -113,14 +136,14 @@ async function request<T>(
     throw new ApiError(0, `Network unreachable: ${String(networkErr)}`);
   }
 
-  // Self-heal a rotated console key: on 401, re-fetch the controller's current
-  // key once (the worker mints a fresh one each boot) and retry. Without this a
-  // worker restart leaves every open tab polling with a stale key — 401 forever
-  // until the user manually clears localStorage. Skip for the bootstrap call
-  // itself and only retry once to avoid a loop.
-  if (res.status === 401 && !_retry && !path.includes("/api/console/bootstrap")) {
-    await bootstrapApiKey();
-    if (getApiKey()) return request<T>(path, init, true);
+  // A 401 from a normal data call means the stored token is gone/expired. The
+  // backend now requires a real login (bootstrap may 404 once a user exists), so
+  // we no longer loop on bootstrap here — that would mask the need to log in.
+  // Clear the token and surface the Login page via the auth signal. The auth
+  // endpoints (/api/auth/*) handle their own 401s and must NOT trip this, or the
+  // startup probe + login form would clear themselves mid-flight.
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    signalAuthRequired();
   }
 
   if (!res.ok) {
@@ -167,6 +190,51 @@ function call<T>(real: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
 }
 
 export const api = {
+  // ---- Auth (gencall/api/auth.py) ----
+  // The returned token IS the API key, so login stores it under the same slot
+  // every other call reads from. In mock mode there is no backend, so accept
+  // any credentials and stash a dummy token to keep the demo working offline.
+  login: (username: string, password: string) =>
+    call<LoginResult>(
+      async () => {
+        const res = await request<LoginResult>("/api/auth/login", {
+          method: "POST",
+          body: { username, password },
+        });
+        setApiKey(res.token);
+        return res;
+      },
+      async () => {
+        setApiKey("mock-session-token");
+        return {
+          token: "mock-session-token",
+          username,
+          expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+        };
+      },
+    ),
+  /** Invalidate the session server-side, then drop the local token. */
+  logout: () =>
+    call<{ status: string }>(
+      async () => {
+        try {
+          return await request<{ status: string }>("/api/auth/logout", { method: "POST" });
+        } finally {
+          setApiKey(null);
+        }
+      },
+      async () => {
+        setApiKey(null);
+        return { status: "ok" };
+      },
+    ),
+  /** Identify the current session; used to verify a stored token on boot. */
+  me: () =>
+    call<MeResult>(
+      () => request("/api/auth/me"),
+      async () => ({ username: "demo", key_id: "mock" }),
+    ),
+
   // ---- System ----
   health: () => call<Health>(() => request("/api/health"), mockApi.health),
 

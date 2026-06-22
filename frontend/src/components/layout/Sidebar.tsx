@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import styles from "./layout.module.css";
 import {
@@ -8,7 +9,10 @@ import {
   IconLoop,
   IconHistory,
   IconSettings,
+  IconPower,
 } from "../icons";
+import { api, requireAuth } from "@/lib/api";
+import { useToast } from "../ui/Toast";
 
 interface NavItem {
   to: string;
@@ -50,6 +54,35 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
 ];
 
 export function Sidebar({ activeTests }: { activeTests: number }) {
+  const toast = useToast();
+  const [username, setUsername] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .me()
+      .then((me) => alive && setUsername(me.username))
+      .catch(() => {
+        /* token may be gone; the auth gate handles the bounce to login */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const logout = async () => {
+    setLoggingOut(true);
+    try {
+      await api.logout();
+      toast.info("Signed out.");
+    } catch {
+      /* best effort — clear locally regardless */
+    } finally {
+      requireAuth();
+    }
+  };
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brand}>
@@ -87,6 +120,21 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
       </nav>
 
       <div className={styles.sidebarFoot}>
+        <div className={styles.sidebarUser}>
+          <span className={styles.sidebarUserName}>
+            {username ? `Signed in · ${username}` : "Signed in"}
+          </span>
+          <button
+            type="button"
+            className={styles.logout}
+            onClick={logout}
+            disabled={loggingOut}
+            title="Sign out"
+          >
+            <IconPower width={14} height={14} />
+            <span>Logout</span>
+          </button>
+        </div>
         <span>GenCall v2.0 · SIP traffic generator</span>
         <span>build · console 2.1.0</span>
         <span>Done by Sergio &amp; Joey</span>

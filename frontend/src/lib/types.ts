@@ -577,3 +577,18 @@ export interface LogLine {
   source: string;
   message: string;
 }
+
+/* ---- Auth (gencall/api/auth.py) ----
+   The login token is presented to the backend exactly like an API key
+   (X-API-Key header / ?api_key= on the WebSocket), so it is stored under the
+   same localStorage slot and the rest of the app needs no changes. */
+export interface LoginResult {
+  token: string;
+  username: string;
+  expires_at: string;
+}
+
+export interface MeResult {
+  username: string;
+  key_id: string;
+}
