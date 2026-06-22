@@ -15,6 +15,7 @@ the same ``require_api_key`` dependency the rest of the worker API uses.
 """
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -159,6 +160,21 @@ class StartLoopRequest(BaseModel):
         # to UDP (which could send a TLS-intended campaign in cleartext).
         return validate_transport(v)
 
+    @field_validator("local_ip")
+    @classmethod
+    def _check_local_ip(cls, v: str) -> str:
+        # local_ip becomes SIPp's -i bind address; a non-IP value is a
+        # misconfiguration. "" is allowed (OS-routed / node supplies the IP).
+        import ipaddress
+        s = (v or "").strip()
+        if not s:
+            return s
+        try:
+            ipaddress.ip_address(s)
+        except ValueError:
+            raise ValueError(f"local_ip {s!r} is not a valid IP address")
+        return s
+
 
 # The eight diurnal-profile fields carried from a start request through to the
 # engine's start_campaign (Phase 2 shaper). Kept in one place so the local call
@@ -167,6 +183,30 @@ _PROFILE_FIELDS = (
     "profile_enabled", "profile_preset", "night_floor", "ramp_up_start",
     "plateau_start", "plateau_end", "ramp_down_end", "tz_offset",
 )
+
+
+def _pool_base_dir() -> str:
+    """Directory the number-pool generator writes into (gen_loop_csv default)."""
+    import tempfile
+    return os.path.realpath(os.path.join(tempfile.gettempdir(), "gencall_numbers"))
+
+
+def _validate_pool_csv_path(csv_path: str) -> str:
+    """Return a safe, existing pool CSV path or raise HTTPException(422).
+
+    A directly-supplied ``csv_path`` flows to SIPp's ``-inf``; without this an
+    authenticated caller could point the injector at any file on the box. We
+    require the resolved real path to live under the generated-pools directory
+    and to actually exist."""
+    base = _pool_base_dir()
+    real = os.path.realpath((csv_path or "").strip())
+    if os.path.commonpath([real, base]) != base:
+        raise HTTPException(
+            422, "csv_path must be a generated pool file (under the pools "
+            "directory); generate one via /api/loops/generate")
+    if not os.path.isfile(real):
+        raise HTTPException(422, f"csv_path {csv_path!r} does not exist")
+    return real
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -226,6 +266,12 @@ def start_loop(req: StartLoopRequest):
             if isinstance(campaign, dict):
                 campaign["remote"] = node["api_url"]
             return {"status": "started", "campaign": campaign}
+    elif csv_path:
+        # Direct csv_path (no node): it is handed to SIPp's -inf, so an arbitrary
+        # path would let an authenticated caller point the injector at any file on
+        # the box. Contain it to the generated-pools directory (where
+        # /api/loops/generate writes) and require it to exist.
+        csv_path = _validate_pool_csv_path(csv_path)
 
     try:
         campaign = _engine().start_campaign(
@@ -274,8 +320,11 @@ class TrafficCalcProfile(BaseModel):
 
 
 class TrafficCalcRequest(BaseModel):
-    target_minutes: int = Field(ge=0)
-    acd_s: float = Field(gt=0)
+    # Upper bounds keep a sizing request from overflowing the curve math /
+    # returning absurd CPS; a day is 1440 minutes so a year of minutes is a
+    # generous ceiling, and an ACD over a day is never a real call.
+    target_minutes: int = Field(ge=0, le=525_600_000)
+    acd_s: float = Field(gt=0, le=86_400)
     profile: TrafficCalcProfile = TrafficCalcProfile()
 
 
@@ -1224,7 +1273,9 @@ class GenerateNumbersRequest(BaseModel):
     dest_code: str = ""
     # Dial FIXED only: exclude every mobile/other breakout under the dest code.
     dest_fixed_only: bool = False
-    count: int = Field(default=500000, ge=1, le=5_000_000)
+    # Pool generation is synchronous; cap matches ServerRequest/GeneratePoolRequest
+    # so one request can't pin a thread + RAM building an oversized pool.
+    count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=11, ge=4, le=18)
     seed: Optional[int] = None
 

@@ -12,13 +12,14 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Header, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gencall.core.sipp_engine import (
     SIPpEngine, SIPpInstance, SIPpMode, SIPpTransport, SIPpState
 )
 from gencall.core.stats import StatsEngine
 from gencall.core.api_gateway import APIGateway
+from gencall.api.loop_validation import validate_transport
 from gencall.scenarios.manager import ScenarioManager
 from gencall.db.models import Database, Connector, Scenario, Server, TestRun, User
 
@@ -72,6 +73,11 @@ def require_api_key(request: Request,
 
     api_key = gateway.keys.validate_key(x_api_key)
     if not api_key:
+        # Log the rejection (IP + path) so brute-force / probing on the key
+        # surface in the audit trail; the key material itself is never logged.
+        ip = request.client.host if request.client else ""
+        logger.warning("auth: rejected request from %s to %s %s (invalid/revoked key)",
+                       ip or "?", request.method, request.url.path)
         raise HTTPException(401, "Invalid or revoked API key")
 
     if not gateway.rate_limiter.check(api_key.key_id, api_key.rate_limit):
@@ -99,7 +105,10 @@ class StartTestRequest(BaseModel):
     csv_file: str = ""
     auth_user: str = ""
     auth_pass: str = ""
-    extra_args: str = ""
+    # NOTE: a free-form `extra_args` field used to be appended verbatim to the
+    # SIPp command line — an argument-injection vector (e.g. -trace_msg to dump
+    # to an attacker path, or other flags). It has been removed; the structured
+    # fields above are the only knobs exposed over the API.
 
 
 class UpdateRateRequest(BaseModel):
@@ -116,6 +125,25 @@ class ConnectorRequest(BaseModel):
     transport: str = "udp"
     auth_user: str = ""
     auth_pass: str = ""
+
+
+def _validate_ip_literal(v: str, *, allow_blank: bool) -> str:
+    """Validator helper: ``v`` must be a bare IP literal (v4/v6).
+
+    The source IP becomes SIPp's ``-i`` bind address and is used as the
+    one-loop-per-IP key, so a non-IP value is a misconfiguration. ``allow_blank``
+    permits "" (meaning OS-routed / unset)."""
+    import ipaddress
+    s = (v or "").strip()
+    if not s:
+        if allow_blank:
+            return s
+        raise ValueError("ip is required")
+    try:
+        ipaddress.ip_address(s)
+    except ValueError:
+        raise ValueError(f"{s!r} is not a valid IP address")
+    return s
 
 
 class ServerRequest(BaseModel):
@@ -145,6 +173,11 @@ class ServerRequest(BaseModel):
     # could pin a request thread + RAM. 2M is plenty for a random-draw pool.
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=11, ge=4, le=18)
+
+    @field_validator("ip")
+    @classmethod
+    def _check_ip(cls, v: str) -> str:
+        return _validate_ip_literal(v, allow_blank=False)
 
 
 class GeneratePoolRequest(BaseModel):
@@ -177,8 +210,18 @@ def start_test(req: StartTestRequest):
     if not scenario_path:
         raise HTTPException(404, f"Scenario '{req.scenario}' not found")
 
+    # Transport must be a known value rather than silently downgrading to UDP
+    # (which could send a TLS-intended test in cleartext). Unlike loop campaigns,
+    # the ad-hoc test endpoint does NOT block private/internal remote_host: manual
+    # tests legitimately target internal SIP gateways/lab IPs. This endpoint is
+    # authenticated; the SSRF surface is documented as a residual.
+    try:
+        norm_transport = validate_transport(req.transport)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
     transport_map = {"udp": SIPpTransport.UDP, "tcp": SIPpTransport.TCP, "tls": SIPpTransport.TLS}
-    transport = transport_map.get(req.transport.lower(), SIPpTransport.UDP)
+    transport = transport_map.get(norm_transport, SIPpTransport.UDP)
 
     instance_id = req.name or f"test-{uuid.uuid4().hex[:8]}"
 
@@ -197,7 +240,6 @@ def start_test(req: StartTestRequest):
         csv_file=req.csv_file,
         auth_user=req.auth_user,
         auth_pass=req.auth_pass,
-        extra_args=req.extra_args,
     )
 
     success = engine.start_instance(instance)
@@ -799,6 +841,8 @@ def update_server(server_id: int, req: ServerUpdate):
             u = req.api_url.strip().rstrip("/")
             if u and not u.startswith(("http://", "https://")):
                 u = "http://" + u
+            if u:
+                _reject_unsafe_worker_url(u)  # SSRF guard (parity with create_server)
             s.api_url = u
         if req.api_key:
             s.api_key = req.api_key

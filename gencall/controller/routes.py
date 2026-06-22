@@ -28,7 +28,9 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request, Response
 from pydantic import BaseModel
 
 # Reuse the worker's auth dependency verbatim (contract + design §6).
-from gencall.api.routes import require_api_key
+# `_reject_unsafe_worker_url` is the SSRF guard: the controller fetches/POSTs to
+# a node's `address`, so block link-local/metadata targets there too.
+from gencall.api.routes import require_api_key, _reject_unsafe_worker_url
 
 from gencall.controller.models import Node, Group, FleetRun
 from gencall.controller.node_client import NodeClient
@@ -246,9 +248,11 @@ def list_nodes():
 def create_node(req: NodeCreate):
     session = _require_db().get_session()
     try:
+        address = req.address.rstrip("/")
+        _reject_unsafe_worker_url(address)
         node = Node(
             name=req.name,
-            address=req.address.rstrip("/"),
+            address=address,
             group_id=req.group_id,
             api_key=req.api_key,
             enabled=req.enabled,
@@ -257,6 +261,9 @@ def create_node(req: NodeCreate):
         session.commit()
         session.refresh(node)
         return _node_view(node, _group_name_map(session))
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as exc:
         session.rollback()
         raise HTTPException(400, str(exc))
@@ -274,7 +281,9 @@ def update_node(node_id: int, req: NodeUpdate):
         if req.name is not None:
             node.name = req.name
         if req.address is not None:
-            node.address = req.address.rstrip("/")
+            address = req.address.rstrip("/")
+            _reject_unsafe_worker_url(address)
+            node.address = address
         if req.group_id is not None:
             node.group_id = req.group_id
         if req.api_key is not None:
