@@ -12,8 +12,10 @@
 #   2. Caps [retention] call_records_days at 1 in the live config (never RAISES
 #      it — a lower operator value is respected) and ensures the disk-saving loop
 #      knob [loops] sipp_trace_err exists (off).
-#   3. Installs a daily cron that sweeps ORPHANED SIPp temp logs + old release
-#      bundles from /tmp (only files >1 day old, so active logs are untouched).
+#   3. Installs a daily cron that sweeps ORPHANED SIPp temp artifacts from /tmp:
+#      the leaked per-run -inf pools (gencall_loop_*.csv, the big ones), rtp
+#      scenarios, trace logs, stats + old release bundles. Only files >1 day old
+#      AND not held open by a process, so an active loop is never disturbed.
 #   4. Grows the root LVM volume into any unused disk/VG space. The Ubuntu
 #      autoinstall image leaves the root LV at ~10G even on a bigger disk (and
 #      the partition short of the disk end), so boxes ship with GBs stranded.
@@ -73,17 +75,31 @@ PY
   fi
 fi
 
-# 3) Daily sweep of orphaned SIPp temp logs + old bundles in /tmp -------------
-# Only deletes files older than 1 day, so a running loop's live logs are spared;
-# this is the safety net for crash-orphans that the in-app cleanup missed.
+# 3) Daily sweep of orphaned SIPp temp artifacts + old bundles in /tmp --------
+# The engine writes a fresh per-run SIPp -inf pool file (gencall_loop_*.csv,
+# ~17 MB each) on EVERY campaign start / auto-resume / adaptive-pool restart and
+# never unlinks the superseded ones, so a busy box leaks tens of GB of them into
+# /tmp. The earlier sweep missed that filename (it only knew the logs/stats), so
+# we add it here. Two safety rails keep this from ever touching a LIVE loop:
+#   * -mtime +1  — only files older than a day, and
+#   * fuser      — skip any file a process still holds open.
+# The durable node pools live under /tmp/gencall_numbers/ (a subdir, not matched
+# here), so regeneration on resume still works after a sweep.
 cat > /etc/cron.daily/gencall-tmp-sweep <<'EOF'
 #!/bin/sh
-# GenCall: reap stale SIPp temp logs + old release bundles (>1 day old).
+# GenCall: reap stale SIPp temp artifacts (>1 day old) not held open by any
+# process — generated -inf pools, rtp scenarios, trace logs, stats, old bundles.
 find /tmp -maxdepth 1 -mtime +1 \( \
-     -name 'loop_uac_*_*.log'   -o -name 'loop_uas_*_*.log'  -o \
-     -name 'gencall_uac_rtp_*'  -o -name 'gencall_sipp_*.csv' -o \
-     -name 'gencall_sipp_*.calllog' -o -name 'VanDorial-*.tar.gz' \
-   \) -delete 2>/dev/null || true
+     -name 'gencall_loop_*.csv'     -o -name 'gencall_uac_rtp_*'    -o \
+     -name 'loop_uac_*_*.log'       -o -name 'loop_uas_*_*.log'     -o \
+     -name 'gencall_sipp_*.csv'     -o -name 'gencall_sipp_*.calllog' -o \
+     -name 'VanDorial-*.tar.gz' \
+   \) -print 2>/dev/null | while IFS= read -r f; do
+     # Still open by a running SIPp/loop? Leave it. (If fuser is absent it
+     # returns non-zero and we fall back to deleting the >1-day-old file.)
+     fuser -s "$f" 2>/dev/null && continue
+     rm -f "$f" 2>/dev/null || true
+   done
 EOF
 chmod 0755 /etc/cron.daily/gencall-tmp-sweep
 say "installed /etc/cron.daily/gencall-tmp-sweep"
