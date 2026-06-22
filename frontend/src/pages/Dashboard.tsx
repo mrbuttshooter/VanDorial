@@ -36,6 +36,25 @@ export function Dashboard() {
     [tests.data],
   );
 
+  // Fleet-wide loops: this box + every remote worker (so the controller's
+  // dashboard isn't empty when the loops actually run on other boxes). Polled.
+  const loops = useAsync(() => api.listLoopsFleet(), [], 5000);
+  const runningLoops = useMemo(
+    () => (loops.data?.campaigns ?? []).filter((c) => c.status === "running"),
+    [loops.data],
+  );
+  const loopAgg = useMemo(() => {
+    let cps = 0, out = 0, ans = 0;
+    for (const c of runningLoops) {
+      cps += c.rate ?? 0;
+      out += c.loop_stats?.calls_out ?? 0;
+      ans += c.loop_stats?.answered_out ?? 0;
+    }
+    return { count: runningLoops.length, cps, out, ans, asr: out > 0 ? (ans / out) * 100 : 0 };
+  }, [runningLoops]);
+  const boxLabel = (b?: string) =>
+    !b || b === "local" ? "local" : b.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
+
   const successRate = latest?.success_rate ?? 100;
 
   return (
@@ -87,6 +106,82 @@ export function Dashboard() {
           spark={rt.slice(-40)}
         />
       </div>
+
+      <Panel
+        title={`Fleet Loops — Running (${loopAgg.count})`}
+        flush
+        actions={
+          <span className="hud-label">
+            {`${num(loopAgg.cps, 1)} cps · ${int(loopAgg.out)} out · ${num(loopAgg.asr, 1)}% ASR`}
+          </span>
+        }
+      >
+        {loops.loading && !loops.data ? (
+          <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
+            <Spinner />
+          </div>
+        ) : runningLoops.length === 0 ? (
+          <EmptyState
+            mark="○"
+            title="No loops running across the fleet"
+            hint="Start a loop campaign on any node; running loops from every box show here."
+            action={
+              <Link to="/loops">
+                <Button variant="primary" size="sm">
+                  New loop campaign
+                </Button>
+              </Link>
+            }
+          />
+        ) : (
+          <div className={uiStyles.tableWrap}>
+            <table className={uiStyles.table}>
+              <thead>
+                <tr>
+                  <th>Box</th>
+                  <th>Campaign</th>
+                  <th>Target</th>
+                  <th className={uiStyles.numCell}>CPS</th>
+                  <th className={uiStyles.numCell}>Calls Out</th>
+                  <th className={uiStyles.numCell}>Answered</th>
+                  <th className={uiStyles.numCell}>ASR</th>
+                  <th>State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runningLoops.map((c) => {
+                  const out = c.loop_stats?.calls_out ?? 0;
+                  const ans = c.loop_stats?.answered_out ?? 0;
+                  const asr = out > 0 ? (ans / out) * 100 : 0;
+                  return (
+                    <tr key={`${c.box ?? "local"}:${c.id}`}>
+                      <td style={{ color: "var(--cyan)" }}>{boxLabel(c.box)}</td>
+                      <td style={{ color: "var(--text-bright)", fontWeight: 600 }}>{c.name}</td>
+                      <td style={{ color: "var(--text-muted)" }}>
+                        {c.dest_host}:{c.dest_port}
+                      </td>
+                      <td className={uiStyles.numCell}>{num(c.rate, 1)}</td>
+                      <td className={uiStyles.numCell}>{int(out)}</td>
+                      <td className={uiStyles.numCell}>{int(ans)}</td>
+                      <td
+                        className={uiStyles.numCell}
+                        style={{ color: asr >= 50 ? "var(--ok)" : "var(--amber)" }}
+                      >
+                        {pct(asr)}
+                      </td>
+                      <td>
+                        <Badge tone={statusTone(c.status)} pulse>
+                          {c.status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
 
       <div className={s.split}>
         <Panel
