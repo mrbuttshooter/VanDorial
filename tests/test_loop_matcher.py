@@ -490,3 +490,52 @@ def test_concurrent_campaigns_do_not_double_count_inbound(db):
     assert b_stats["calls_in_matched"] == 1
     assert a_stats["completion_pct"] == 100.0
     assert b_stats["completion_pct"] == 100.0
+
+
+# ── bounded incremental matching (memory-leak fix) ───────────────────────────
+
+
+def test_incremental_matching_is_cumulative_and_idempotent(db):
+    """The bounded matcher pairs only the still-UNMATCHED rows each pass (so it
+    never reloads a campaign's whole history — the GB leak), yet keeps the
+    cumulative totals lifetime-accurate and never re-pairs a matched call."""
+    m = LoopMatcher(db=db)
+
+    # Call 1 → pass 1: one matched pair, cumulative = 1.
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="o1",
+                   a_number="100", b_number="22460111", t_start_ms=1000,
+                   duration_ms=60000)
+    _insert_record(db, campaign_id=None, direction="in", call_uuid="i1",
+                   a_number="100", b_number="22460111", t_start_ms=1200,
+                   duration_ms=60000)
+    s1 = m.match_campaign(CID, match_key="exact")
+    assert s1["calls_out"] == 1
+    assert s1["calls_in_matched"] == 1
+    assert s1["minutes_in_ms"] == 60000
+    assert s1["completion_pct"] == 100.0
+
+    # Pass again with NO new data: nothing re-paired, cumulative unchanged.
+    s1b = m.match_campaign(CID, match_key="exact")
+    assert s1b["calls_in_matched"] == 1
+    assert s1b["minutes_in_ms"] == 60000
+
+    # Call 2 added → next pass: cumulative grows to 2 (call 1 not double-counted).
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="o2",
+                   a_number="101", b_number="22460222", t_start_ms=2000,
+                   duration_ms=30000)
+    _insert_record(db, campaign_id=None, direction="in", call_uuid="i2",
+                   a_number="101", b_number="22460222", t_start_ms=2200,
+                   duration_ms=30000)
+    s2 = m.match_campaign(CID, match_key="exact")
+    assert s2["calls_out"] == 2
+    assert s2["calls_in_matched"] == 2
+    assert s2["minutes_in_ms"] == 90000
+
+    # Pairing is durable on both legs (2 pairs x 2 legs = 4 stamped rows).
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        n = conn.execute(
+            text("SELECT COUNT(*) FROM call_records "
+                 "WHERE matched_record_id IS NOT NULL")
+        ).fetchone()[0]
+    assert n == 4

@@ -52,6 +52,16 @@ MIN_INTERVAL_S = 10.0
 # within this many seconds of the outbound call (design §4.3, default 1 h).
 DEFAULT_WINDOW_S = 3600
 
+# Memory bound: a matcher pass only pairs the still-UNMATCHED outbound calls
+# (matched ones are durable via call_records.matched_record_id and counted in
+# SQL), and never scans more than this many per pass. This is what keeps RSS
+# flat regardless of campaign age — the old code reloaded the campaign's ENTIRE
+# outbound history every pass and leaked to GBs over days.
+MAX_PAIR_SCAN = 20000
+# Cap the unmatched-pairs list embedded in each loop_stats snapshot so a loop
+# that never closes (e.g. all 408) can't bloat the row / WS payload unbounded.
+MAX_UNMATCHED_REPORT = 200
+
 # Delta histogram bucket edges in milliseconds (upper bounds; a final overflow
 # bucket catches anything larger). Tuned for the §1 reference deltas (0.25–1 s).
 _HIST_EDGES_MS = [0, 100, 250, 500, 750, 1000, 1500, 2000]
@@ -234,76 +244,154 @@ class LoopMatcher:
 
     # ── core matching (pure, DB-read) ────────────────────────────────────────
 
-    def _load_records(self, campaign_id, window_ms):
-        """Load this campaign's outbound + the inbound records in its window.
+    _COLS = (
+        "id", "campaign_id", "direction", "call_uuid", "a_number",
+        "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
+        "duration_ms", "final_code", "created_at",
+    )
 
-        Outbound records are scoped to the campaign. Inbound records carry no
-        campaign id (the answer side is shared across ALL concurrent campaigns),
-        so loading *every* inbound row would make each campaign sum the same
-        global inbound minutes — an N-times inflation of the commercial
-        minutes-in when several campaigns run at once. Instead we scope inbound
-        to the campaign's join window: an inbound call can only pair with (or be
-        attributed to) THIS campaign if it started within ``window_ms`` of one of
-        the campaign's outbound calls. So the relevant inbound band is::
+    def _pair_unmatched(self, campaign_id, match_key, window_ms):
+        """Pair this campaign's still-UNMATCHED answered outbound calls to inbound
+        legs, stamp ``matched_record_id`` on both sides (durable), and return
+        ``(matched_pairs, unmatched_out, in_dicts)``.
 
-            [ min(out.t_start_ms) - window_ms , max(out.t_start_ms) + window_ms ]
-
-        We push that floor/ceiling into SQL (``WHERE direction='in' AND
-        t_start_ms >= :floor AND t_start_ms <= :ceil``) so the DB returns only
-        the campaign-relevant inbound rows — both bounding the minutes-in to this
-        campaign's window AND avoiding a full-table scan every pass (backed by
-        the ix_call_records_dir_start index in migration 0003).
-
-        Returns ``(out_rows, in_rows)`` lists of dicts.
+        Only UNMATCHED rows are scanned (``matched_record_id IS NULL``) and the
+        scan is capped at ``MAX_PAIR_SCAN`` — matched pairs are already durable
+        and counted via SQL in ``_aggregate``, so a campaign that has run for days
+        never reloads its whole history (the GB-scale leak). Inbound is scoped to
+        the outbound wall-clock window so a shared UAS can't be double-counted.
         """
         from sqlalchemy import text
-
-        cols = (
-            "id", "campaign_id", "direction", "call_uuid", "a_number",
-            "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
-            "duration_ms", "final_code", "created_at",
-        )
-        sel = ", ".join(cols)
-        keys = list(cols)
-        with self.db.engine.connect() as conn:
+        sel = ", ".join(self._COLS)
+        keys = list(self._COLS)
+        with self.db.engine.begin() as conn:
             out_rows = conn.execute(
                 text(
                     f"SELECT {sel} FROM call_records "
-                    "WHERE campaign_id = :cid AND direction = 'out'"
+                    "WHERE campaign_id = :cid AND direction = 'out' "
+                    "AND matched_record_id IS NULL "
+                    "AND final_code >= 200 AND final_code < 300 "
+                    "ORDER BY id DESC LIMIT :lim"
                 ),
-                {"cid": campaign_id},
+                {"cid": campaign_id, "lim": MAX_PAIR_SCAN},
             ).fetchall()
             out_dicts = [dict(zip(keys, r)) for r in out_rows]
-
-            # Campaign window from the outbound rows' WALL-CLOCK time
-            # (created_at via _event_ms), NOT the SIPp [clock_tick] t_*_ms: those
-            # ticks are relative to each SIPp process's own start, so a fresh
-            # per-campaign UAC (tick ~ seconds) and the long-lived answer UAS
-            # (tick ~ tens of millions after hours up) are not comparable —
-            # comparing them rejected every real pair (calls_in_matched == 0).
-            # created_at is stamped by the single parser process, so it is the
-            # same clock on both legs.
+            if not out_dicts:
+                return [], [], []
             out_starts = [s for s in (_event_ms(o) for o in out_dicts) if s is not None]
             if not out_starts:
-                return out_dicts, []
+                return [], out_dicts, []
             floor_ms = min(out_starts) - window_ms
             ceil_ms = max(out_starts) + window_ms
 
-            # Scope inbound to the campaign's wall-clock window (range scan on the
-            # ix_call_records_created_at index). created_at is a UTC ISO-8601
-            # string so a lexicographic BETWEEN matches the chronological window;
-            # the precise per-call window test is re-applied numerically in
-            # match_campaign via _event_ms.
             in_rows = conn.execute(
                 text(
                     f"SELECT {sel} FROM call_records "
-                    "WHERE direction = 'in' "
-                    "AND created_at >= :floor AND created_at <= :ceil"
+                    "WHERE direction = 'in' AND matched_record_id IS NULL "
+                    "AND created_at >= :floor AND created_at <= :ceil "
+                    "ORDER BY id DESC LIMIT :lim"
                 ),
-                {"floor": _ms_to_iso(floor_ms), "ceil": _ms_to_iso(ceil_ms)},
+                {"floor": _ms_to_iso(floor_ms), "ceil": _ms_to_iso(ceil_ms),
+                 "lim": MAX_PAIR_SCAN},
             ).fetchall()
             in_dicts = [dict(zip(keys, r)) for r in in_rows]
-        return out_dicts, in_dicts
+
+            # Greedy nearest-in-time pairing by match value (same rule as before).
+            in_by_key = {}
+            for r in in_dicts:
+                mv = match_value(r["b_number"], match_key)
+                if mv is None:
+                    continue
+                in_by_key.setdefault(mv, []).append(r)
+            consumed = set()
+            matched_pairs = []
+            matched_out_ids = set()
+            for o in out_dicts:
+                mv = match_value(o["b_number"], match_key)
+                if mv is None:
+                    continue
+                candidates = in_by_key.get(mv)
+                if not candidates:
+                    continue
+                o_start = _event_ms(o)
+                best = None
+                best_dist = None
+                for cand in candidates:
+                    if cand["id"] in consumed:
+                        continue
+                    c_start = _event_ms(cand)
+                    if o_start is not None and c_start is not None:
+                        dist = abs(c_start - o_start)
+                        if dist > window_ms:
+                            continue
+                    else:
+                        dist = window_ms
+                    if best is None or dist < best_dist:
+                        best = cand
+                        best_dist = dist
+                if best is not None:
+                    consumed.add(best["id"])
+                    matched_pairs.append((o, best))
+                    matched_out_ids.add(o["id"])
+
+            # Durable stamp on both legs (idempotent; lets _aggregate count via SQL).
+            for o, i in matched_pairs:
+                conn.execute(
+                    text("UPDATE call_records SET matched_record_id = :other "
+                         "WHERE id = :id"), {"other": i["id"], "id": o["id"]})
+                conn.execute(
+                    text("UPDATE call_records SET matched_record_id = :other "
+                         "WHERE id = :id"), {"other": o["id"], "id": i["id"]})
+
+        unmatched_out = [o for o in out_dicts if o["id"] not in matched_out_ids]
+        return matched_pairs, unmatched_out, in_dicts
+
+    def _aggregate(self, campaign_id):
+        """Cumulative per-campaign totals via SQL aggregates — no row loading, so
+        cost is O(index) not O(rows). ``calls_in_matched`` / ``minutes_in_ms``
+        read the durable ``matched_record_id`` pairing (minutes-in is the matched
+        INBOUND legs only, JOIN-ed, so a shared UAS is never over-counted).
+        """
+        from sqlalchemy import text
+        with self.db.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*), "
+                    "COALESCE(SUM(CASE WHEN final_code>=200 AND final_code<300 "
+                    "  THEN 1 ELSE 0 END),0), "
+                    "COALESCE(SUM(CASE WHEN final_code>=200 AND final_code<300 "
+                    "  THEN COALESCE(duration_ms,0) ELSE 0 END),0), "
+                    "COALESCE(SUM(CASE WHEN matched_record_id IS NOT NULL "
+                    "  THEN 1 ELSE 0 END),0) "
+                    "FROM call_records WHERE campaign_id=:cid AND direction='out'"
+                ), {"cid": campaign_id},
+            ).fetchone()
+            calls_out, answered_out, minutes_out_ms, calls_in_matched = (
+                int(x or 0) for x in row)
+            min_in = conn.execute(
+                text(
+                    "SELECT COALESCE(SUM(i.duration_ms),0) FROM call_records o "
+                    "JOIN call_records i ON i.id = o.matched_record_id "
+                    "WHERE o.campaign_id=:cid AND o.direction='out' "
+                    "AND o.matched_record_id IS NOT NULL"
+                ), {"cid": campaign_id},
+            ).fetchone()
+            minutes_in_ms = int((min_in[0] if min_in else 0) or 0)
+            frows = conn.execute(
+                text(
+                    "SELECT final_code, COUNT(*) FROM call_records "
+                    "WHERE campaign_id=:cid AND direction='out' "
+                    "AND final_code IS NOT NULL "
+                    "AND NOT (final_code>=200 AND final_code<300) "
+                    "GROUP BY final_code"
+                ), {"cid": campaign_id},
+            ).fetchall()
+            failures_out = {str(c): int(n) for c, n in frows}
+        return {
+            "calls_out": calls_out, "answered_out": answered_out,
+            "minutes_out_ms": minutes_out_ms, "calls_in_matched": calls_in_matched,
+            "minutes_in_ms": minutes_in_ms, "failures_out": failures_out,
+        }
 
     def match_campaign(self, campaign_id, match_key="exact", window_s=None):
         """Match one campaign's records and return (and persist) its stats dict.
@@ -319,94 +407,47 @@ class LoopMatcher:
             return self._empty_stats(campaign_id)
 
         window_ms = (self.window_s if window_s is None else int(window_s)) * 1000
-        out_rows, in_rows = self._load_records(campaign_id, window_ms)
 
-        # ── outbound aggregates ──────────────────────────────────────────────
-        calls_out = len(out_rows)
-        answered_out_rows = [r for r in out_rows if _is_success_code(r["final_code"])]
-        answered_out = len(answered_out_rows)
-        minutes_out_ms = sum(r["duration_ms"] or 0 for r in answered_out_rows)
+        # 1) Pair only the still-UNMATCHED recent rows (bounded) and stamp the
+        #    durable matched_record_id on both legs. This is the whole leak fix:
+        #    we never reload the campaign's full history into Python anymore.
+        matched_pairs, unmatched_out, in_dicts = self._pair_unmatched(
+            campaign_id, match_key, window_ms)
 
-        # inbound minutes are summed AFTER the join (matched legs only) — see the
-        # module docstring on why a windowed "all inbound" sum over-counts when
-        # the answer side is shared across campaigns.
+        # 2) Cumulative totals via SQL aggregates over the durable pairing — these
+        #    stay lifetime-accurate (Minutes OUT/IN, Calls, completion) at O(index)
+        #    cost, reflecting the pairs just stamped in step 1.
+        agg = self._aggregate(campaign_id)
+        calls_out = agg["calls_out"]
+        answered_out = agg["answered_out"]
+        minutes_out_ms = agg["minutes_out_ms"]
+        calls_in_matched = agg["calls_in_matched"]
+        minutes_in_ms = agg["minutes_in_ms"]
+        failures_out = agg["failures_out"]
 
-        # ── number-pair join, windowed, greedy nearest by start time ──────────
-        # Index inbound by match value -> list of (t_start_ms, row), sorted by
-        # start so we can binary-search the nearest unconsumed candidate.
-        in_by_key = {}
-        for r in in_rows:
-            mv = match_value(r["b_number"], match_key)
-            if mv is None:
-                continue
-            in_by_key.setdefault(mv, []).append(r)
-        for rows in in_by_key.values():
-            rows.sort(key=lambda r: (_event_ms(r) if _event_ms(r) is not None else 0))
-
-        consumed_in_ids = set()
-        matched_pairs = []  # (out_row, in_row)
-        for o in answered_out_rows:
-            mv = match_value(o["b_number"], match_key)
-            if mv is None:
-                continue
-            candidates = in_by_key.get(mv)
-            if not candidates:
-                continue
-            o_start = _event_ms(o)
-            best = None
-            best_dist = None
-            for cand in candidates:
-                if cand["id"] in consumed_in_ids:
-                    continue
-                c_start = _event_ms(cand)
-                if o_start is not None and c_start is not None:
-                    dist = abs(c_start - o_start)
-                    if dist > window_ms:
-                        continue
-                else:
-                    # Missing a timestamp: cannot window-check; allow but rank
-                    # last so a properly-windowed candidate always wins.
-                    dist = window_ms
-                if best is None or dist < best_dist:
-                    best = cand
-                    best_dist = dist
-            if best is not None:
-                consumed_in_ids.add(best["id"])
-                matched_pairs.append((o, best))
-
-        calls_in_matched = len(matched_pairs)
-
-        # ── inbound minutes: matched legs only (campaign-attributed) ──────────
-        minutes_in_ms = sum((i["duration_ms"] or 0) for _, i in matched_pairs)
-
-        # ── per-call delta (in_ms - out_ms) over matched, answered pairs ──────
-        deltas = []
-        for o, i in matched_pairs:
-            o_dur = o["duration_ms"] or 0
-            i_dur = i["duration_ms"] or 0
-            deltas.append(i_dur - o_dur)
+        # 3) Per-call delta (in_ms - out_ms) over the pairs matched THIS pass — a
+        #    live latency sample (recent), which is what the dispute view wants.
+        deltas = [((i["duration_ms"] or 0) - (o["duration_ms"] or 0))
+                  for o, i in matched_pairs]
         deltas_sorted = sorted(deltas)
         delta_avg = (sum(deltas) / len(deltas)) if deltas else 0.0
         delta_p50 = _percentile(deltas_sorted, 50)
         delta_p95 = _percentile(deltas_sorted, 95)
 
-        # ── completion %: matched inbound / answered outbound ────────────────
+        # ── completion %: matched inbound / answered outbound (both cumulative) ─
         completion_pct = (
             (calls_in_matched / answered_out * 100.0) if answered_out else 0.0
         )
 
-        # ── unmatched pairs (answered outbound with no inbound return) ────────
-        matched_out_ids = {o["id"] for o, _ in matched_pairs}
+        # ── unmatched pairs: recent answered-out with no return yet, capped ────
         unmatched_pairs = [
             {"a_number": o["a_number"], "b_number": o["b_number"],
              "call_uuid": o["call_uuid"]}
-            for o in answered_out_rows
-            if o["id"] not in matched_out_ids
-        ]
+            for o in unmatched_out
+        ][:MAX_UNMATCHED_REPORT]
 
-        # ── failures by SIP code, outbound and inbound separately ─────────────
-        failures_out = self._failures_by_code(out_rows)
-        failures_in = self._failures_by_code(in_rows)
+        # ── inbound failures over the recent (unmatched) inbound window ────────
+        failures_in = self._failures_by_code(in_dicts)
 
         stats = {
             "campaign_id": campaign_id,
