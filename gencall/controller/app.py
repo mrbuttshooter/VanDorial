@@ -84,8 +84,11 @@ def create_controller_app(config: Config = None):
     from gencall.api import routes as worker_routes
     if db is not None:
         from gencall.core.api_gateway import APIGateway, APIKeyManager
+        from gencall.core.auth_users import UserManager, SessionManager
         gateway = APIGateway()
         gateway.keys = APIKeyManager(db=db)
+        gateway.users = UserManager(db=db)
+        gateway.sessions = SessionManager(db=db)
         worker_routes.gateway = gateway
 
         if gateway.keys.count_keys() == 0:
@@ -149,6 +152,11 @@ def create_controller_app(config: Config = None):
 
     app.include_router(controller_routes.router)
     app.include_router(controller_ws.router)
+
+    # Console login (account auth in front of the fleet console). Reuses the
+    # worker auth router; it reads the same gateway we wired above.
+    from gencall.api import auth as auth_api
+    app.include_router(auth_api.router)
 
     # ── Fleet discovery listener (opt-in: [fleet] discovery = true) ──────────
     # Auto-register workers that broadcast a beacon on the VLAN. The shared fleet

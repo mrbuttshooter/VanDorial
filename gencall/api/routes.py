@@ -72,13 +72,19 @@ def require_api_key(request: Request,
         raise HTTPException(401, "Missing API key (set the X-API-Key header)")
 
     api_key = gateway.keys.validate_key(x_api_key)
+    if api_key is None:
+        # Not a machine API key — try a console login session token. A logged-in
+        # user is represented by an APIKey-shaped principal so the rest of the
+        # request path (audit/rate-limit) is identical to a key.
+        api_key = _session_principal(x_api_key)
+
     if not api_key:
         # Log the rejection (IP + path) so brute-force / probing on the key
-        # surface in the audit trail; the key material itself is never logged.
+        # surface in the audit trail; the credential itself is never logged.
         ip = request.client.host if request.client else ""
-        logger.warning("auth: rejected request from %s to %s %s (invalid/revoked key)",
+        logger.warning("auth: rejected request from %s to %s %s (invalid/revoked credential)",
                        ip or "?", request.method, request.url.path)
-        raise HTTPException(401, "Invalid or revoked API key")
+        raise HTTPException(401, "Invalid or revoked credential")
 
     if not gateway.rate_limiter.check(api_key.key_id, api_key.rate_limit):
         raise HTTPException(429, "Rate limit exceeded")
@@ -86,6 +92,25 @@ def require_api_key(request: Request,
     ip = request.client.host if request.client else ""
     gateway.audit.log(api_key, action=f"{request.method} {request.url.path}", ip=ip)
     return api_key
+
+
+def _session_principal(token: str):
+    """Validate a console login session token and return an APIKey-shaped
+    principal for it, or None. Lets a browser session authenticate through the
+    same dependency as a machine API key (it is presented the same way)."""
+    if gateway is None or getattr(gateway, "sessions", None) is None:
+        return None
+    sess = gateway.sessions.validate(token)
+    if not sess:
+        return None
+    from gencall.core.api_gateway import APIKey
+    return APIKey(
+        key_id=f"session:{sess['username']}",
+        key_hash="",
+        name=sess["username"],
+        permissions=["read", "execute"],
+        rate_limit=600,
+    )
 
 
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
@@ -900,14 +925,20 @@ def get_test_history(limit: int = Query(default=50, ge=1, le=500)):
 
 @app.get("/api/console/bootstrap")
 def console_bootstrap():
-    """Hand the served console its API key so opening /console just works.
+    """Legacy console auto-auth — superseded by the login flow (/api/auth/login).
 
-    Deliberately UNAUTHENTICATED (like /api/health) — it is the one endpoint a
-    fresh browser can reach before it has a key. Only returns a key on a box
-    that serves the console (console_api_key set in main.py); otherwise 404, so
-    fleet workers and external-API deployments expose nothing. This is the
-    chosen trade-off: anyone who can open the console is authenticated; minting
-    of keys for programmatic callers is unchanged."""
+    Once ANY console user account exists, this 404s and the console must be
+    logged into. It still hands out the key ONLY while there are zero accounts,
+    so an upgraded box isn't locked out before an admin user is created (the
+    installer creates one). New installs always have a user, so this stays off."""
+    if gateway is not None and getattr(gateway, "users", None) is not None:
+        try:
+            if gateway.users.count_users() > 0:
+                raise HTTPException(404, "Login required (POST /api/auth/login)")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # DB hiccup: fall through to legacy behaviour rather than lock out
     if not console_api_key:
         raise HTTPException(404, "Console auto-auth not configured")
     return {"api_key": console_api_key}

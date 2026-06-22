@@ -268,7 +268,12 @@ async def _ws_authorized(ws: WebSocket) -> bool:
     if gw is None:
         return True
     key = ws.query_params.get("api_key") or ws.headers.get("x-api-key")
-    return bool(key and gw.keys.validate_key(key))
+    if not key:
+        return False
+    # Accept a machine API key OR a console login session token.
+    if gw.keys.validate_key(key):
+        return True
+    return _routes._session_principal(key) is not None
 
 
 @router.websocket("/ws")

@@ -33,14 +33,16 @@ from gencall.db.models import APIKey  # noqa: F401  (re-exported for table creat
 
 Base = declarative_base()
 
-# Bind the worker's APIKey table into THIS controller metadata so
-# ControllerDatabase.create_tables() also provisions the `api_keys` table the
-# APIKeyManager(db=...) expects. The worker's Base.metadata holds the Table
-# object; copy it into our metadata under the same name if not already present.
+# Bind the worker's shared auth tables into THIS controller metadata so
+# ControllerDatabase.create_tables() also provisions them: `api_keys` (the
+# APIKeyManager store), plus `users` + `login_sessions` (the console login
+# accounts/sessions). The worker's Base.metadata holds the Table objects; copy
+# each into our metadata under the same name if not already present.
 try:  # pragma: no cover - defensive; both metadatas are module-level constants
     from gencall.db.models import Base as _WorkerBase
-    if "api_keys" not in Base.metadata.tables and "api_keys" in _WorkerBase.metadata.tables:
-        _WorkerBase.metadata.tables["api_keys"].to_metadata(Base.metadata)
+    for _t in ("api_keys", "users", "login_sessions"):
+        if _t not in Base.metadata.tables and _t in _WorkerBase.metadata.tables:
+            _WorkerBase.metadata.tables[_t].to_metadata(Base.metadata)
 except Exception:  # pragma: no cover
     pass
 

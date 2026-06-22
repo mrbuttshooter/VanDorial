@@ -534,6 +534,12 @@ class APIGateway:
         self.audit = AuditLog()
         self.templates: dict[str, TestTemplate] = {}
         self._lock = threading.Lock()
+        # Console login layer (set in main.py / controller app when a DB exists).
+        # `users` authenticates people; `sessions` issues browser login tokens
+        # that the auth dependency validates alongside machine API keys. They
+        # stay None on boxes without a database (auth degrades to keys-only).
+        self.users = None        # gencall.core.auth_users.UserManager
+        self.sessions = None     # gencall.core.auth_users.SessionManager
 
     def add_template(self, template: TestTemplate):
         with self._lock:

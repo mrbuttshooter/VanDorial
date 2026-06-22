@@ -382,6 +382,25 @@ class APIKey(Base):
         }
 
 
+class LoginSession(Base):
+    """A browser login session for the console.
+
+    Created when a user authenticates via /api/auth/login; the raw session token
+    is shown once to that browser and only its SHA-256 hash is stored. The token
+    is presented like an API key (X-API-Key header / ws api_key param) and is
+    validated by the same auth dependency, but it expires and is per-user so it
+    can be revoked on logout without touching the long-lived fleet API keys.
+    """
+    __tablename__ = "login_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False)
+    username = Column(String(255), nullable=False)
+    created_at = Column(Float, default=0.0)   # epoch seconds
+    expires_at = Column(Float, default=0.0)   # epoch seconds
+
+
 class Database:
     """Database connection manager."""
 

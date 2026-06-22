@@ -150,8 +150,11 @@ def create_app(config_path: str = None):
     # (same degraded mode the app already uses for connectors/history).
     if db is not None:
         from gencall.core.api_gateway import APIGateway, APIKeyManager
+        from gencall.core.auth_users import UserManager, SessionManager
         gateway = APIGateway()
         gateway.keys = APIKeyManager(db=db)
+        gateway.users = UserManager(db=db)
+        gateway.sessions = SessionManager(db=db)
         routes.gateway = gateway
 
         if gateway.keys.count_keys() == 0:
@@ -187,6 +190,10 @@ def create_app(config_path: str = None):
         )
 
     app = routes.app
+
+    # ── Console login (account auth in front of the NOC console) ─────────────
+    from gencall.api import auth as auth_api
+    app.include_router(auth_api.router)
 
     # ── Loop subsystem (design §4.1 / §4.4) ──────────────────────────────────
     # The LoopEngine owns one persistent UAS (answer side, started on boot) and
@@ -441,14 +448,19 @@ def main():
         ssl_kwargs["ssl_certfile"] = config.ssl_cert
         ssl_kwargs["ssl_keyfile"] = config.ssl_key
 
+    # Reflect the actual scheme in the banner so the printed URLs are clickable
+    # whether the box runs plain HTTP or TLS.
+    scheme = "https" if ssl_kwargs else "http"
+    ws_scheme = "wss" if ssl_kwargs else "ws"
+
     banner = f"""
     ╔═══════════════════════════════════════════╗
     ║   GenCall v2.0 - SIP Traffic Generator    ║
     ║                                           ║
-    ║   Console:   http://{host}:{port:<5d}/console  ║
-    ║   API:       http://{host}:{port:<5d}/api      ║
-    ║   Streams:   ws://{host}:{port:<5d}/ws         ║
-    ║   Health:    http://{host}:{port:<5d}/api/health║
+    ║   Console:   {scheme}://{host}:{port:<5d}/console  ║
+    ║   API:       {scheme}://{host}:{port:<5d}/api      ║
+    ║   Streams:   {ws_scheme}://{host}:{port:<5d}/ws         ║
+    ║   Health:    {scheme}://{host}:{port:<5d}/api/health║
     ╚═══════════════════════════════════════════╝
     """
     try:
@@ -458,10 +470,10 @@ def main():
         # Fall back to plain ASCII rather than crashing on startup.
         print(
             f"\n  GenCall v2.0 - SIP Traffic Generator\n"
-            f"    Console: http://{host}:{port}/console\n"
-            f"    API:     http://{host}:{port}/api\n"
-            f"    Streams: ws://{host}:{port}/ws\n"
-            f"    Health:  http://{host}:{port}/api/health\n"
+            f"    Console: {scheme}://{host}:{port}/console\n"
+            f"    API:     {scheme}://{host}:{port}/api\n"
+            f"    Streams: {ws_scheme}://{host}:{port}/ws\n"
+            f"    Health:  {scheme}://{host}:{port}/api/health\n"
         )
 
     uvicorn.run(

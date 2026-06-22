@@ -3,6 +3,7 @@ GenCall CLI - Command-line tools for quick SIP testing without the web UI.
 """
 
 import argparse
+import os
 import sys
 import time
 import signal
@@ -139,6 +140,65 @@ def cmd_keys(args):
                   f"{str(k['enabled']):<8} {k['request_count']:<8}")
 
 
+def cmd_users(args):
+    """Manage console login accounts (create / list / delete / passwd).
+
+    Passwords come from --password, else $GENCALL_USER_PASSWORD, else an
+    interactive prompt — so the installer can pass one non-interactively without
+    it landing in shell history/argv when run by hand."""
+    import getpass
+    config = Config(args.config)
+    setup_logging(config)
+
+    from gencall.db.models import Database
+    from gencall.core.auth_users import UserManager
+
+    db = Database(config.db_url)
+    db.create_tables()
+    mgr = UserManager(db=db)
+
+    def _resolve_password() -> str:
+        pw = getattr(args, "password", "") or os.environ.get("GENCALL_USER_PASSWORD", "")
+        if pw:
+            return pw
+        pw = getpass.getpass("Password: ")
+        if pw != getpass.getpass("Confirm password: "):
+            print("Passwords do not match."); sys.exit(1)
+        return pw
+
+    if args.users_command == "create":
+        try:
+            user = mgr.create_user(args.username, _resolve_password())
+        except ValueError as e:
+            print(f"Error: {e}"); sys.exit(1)
+        print(f"Console user created: {user['username']} (id={user['id']})")
+    elif args.users_command == "passwd":
+        # Find the user id by username.
+        match = [u for u in mgr.list_users() if u["username"] == args.username]
+        if not match:
+            print(f"User {args.username!r} not found"); sys.exit(1)
+        try:
+            mgr.set_password(match[0]["id"], _resolve_password())
+        except ValueError as e:
+            print(f"Error: {e}"); sys.exit(1)
+        print(f"Password updated for {args.username}")
+    elif args.users_command == "delete":
+        match = [u for u in mgr.list_users() if u["username"] == args.username]
+        if not match:
+            print(f"User {args.username!r} not found"); sys.exit(1)
+        mgr.delete_user(match[0]["id"])
+        print(f"Deleted user {args.username}")
+    else:  # list (default)
+        users = mgr.list_users()
+        if not users:
+            print("No console users. Create one with: gencall users create <username>")
+            return
+        print(f"{'id':<5} {'username':<24} {'role':<12} {'enabled':<8}")
+        print("-" * 52)
+        for u in users:
+            print(f"{u['id']:<5} {u['username']:<24} {u['role']:<12} {str(u['enabled']):<8}")
+
+
 def cmd_server(args):
     """Start the GenCall web server."""
     from gencall.main import main as server_main
@@ -200,6 +260,26 @@ def main():
     k_revoke = keys_sub.add_parser("revoke", help="Revoke an API key")
     k_revoke.add_argument("key_id", help="The key_id to revoke")
 
+    # Users command (console login accounts)
+    users_parser = sub.add_parser("users", help="Manage console login accounts")
+    users_parser.add_argument("-c", "--config", default=None, help="Config file path")
+    users_sub = users_parser.add_subparsers(dest="users_command", help="User action")
+
+    u_create = users_sub.add_parser("create", help="Create a console login account")
+    u_create.add_argument("username", help="Login username")
+    u_create.add_argument("--password", default="",
+                          help="Password (else $GENCALL_USER_PASSWORD or prompt)")
+
+    u_passwd = users_sub.add_parser("passwd", help="Reset a user's password")
+    u_passwd.add_argument("username", help="Login username")
+    u_passwd.add_argument("--password", default="",
+                          help="New password (else $GENCALL_USER_PASSWORD or prompt)")
+
+    u_delete = users_sub.add_parser("delete", help="Delete a console account")
+    u_delete.add_argument("username", help="Login username")
+
+    users_sub.add_parser("list", help="List console accounts")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -210,6 +290,8 @@ def main():
         cmd_server(args)
     elif args.command == "keys":
         cmd_keys(args)
+    elif args.command == "users":
+        cmd_users(args)
     else:
         parser.print_help()
 
