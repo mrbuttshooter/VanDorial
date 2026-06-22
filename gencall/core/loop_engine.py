@@ -507,8 +507,13 @@ class LoopEngine:
             if not ok:
                 logger.error("adaptive pool: UAC restart failed for %s: %s",
                              campaign_id, instance.error_message or "unknown")
+                self._unlink_inf(resolved_csv)  # the just-built -inf is unused
                 return False
             self._register_logs(instance, campaign_id=campaign_id)
+            # Swap the tracked -inf to the new one and delete the superseded file.
+            old_inf = camp.get("inf_path")
+            camp["inf_path"] = resolved_csv
+            self._unlink_inf(old_inf)
             camp["csv_path"] = new_csv
             self._persist_campaign(camp)
             return True
@@ -698,6 +703,9 @@ class LoopEngine:
                 "dest_port": int(dest_port),
                 "transport": transport,
                 "csv_path": csv_path,
+                # The generated per-run SIPp -inf (gencall_loop_*.csv). Tracked so
+                # stop/replace can delete it instead of leaking it into /tmp.
+                "inf_path": resolved_csv,
                 # The rate the UAC is actually running at (the current hour's curve
                 # value for a profiled campaign; the request's nominal rate
                 # otherwise). The shaper steps this hourly.
@@ -773,6 +781,9 @@ class LoopEngine:
                 self._unregister_logs(inst)
             campaign["status"] = "stopped"
             campaign["stopped_at"] = _now_iso()
+            # The UAC is dead; delete its generated -inf instead of leaking it.
+            self._unlink_inf(campaign.get("inf_path"))
+            campaign["inf_path"] = None
             self._campaigns[campaign_id] = campaign
             self._update_campaign_status(
                 campaign_id, "stopped", stopped_at=campaign["stopped_at"]
@@ -1256,6 +1267,24 @@ class LoopEngine:
         except OSError:
             pass
         return path
+
+    @staticmethod
+    def _unlink_inf(path):
+        """Delete a generated SIPp ``-inf`` temp file (best-effort).
+
+        GUARDED: only removes our own ``gencall_loop_*.csv`` artifacts, so a node
+        pool (gencall_numbers/…) or any other path can never be deleted by a
+        mistracked field. This is the source-side cleanup for the per-run -inf
+        files the engine used to leak into /tmp (the daily cron only mops the
+        crash-orphans this misses)."""
+        try:
+            if not path:
+                return
+            base = os.path.basename(path)
+            if base.startswith("gencall_loop_") and base.endswith(".csv"):
+                os.unlink(path)
+        except OSError:
+            pass
 
     def _public_campaign(self, campaign: dict) -> dict:
         """Strip engine-internal keys for API responses."""
