@@ -53,6 +53,29 @@ case "$ROLE" in
 esac
 ok "role: $ROLE — dashboard/web app $([ "$SERVE_CONSOLE" = true ] && echo ENABLED || echo DISABLED)"
 
+# ── 0b. Transport: HTTP or HTTPS (self-signed, native uvicorn TLS) ────────────
+# The app serves TLS natively (uvicorn) when [web] ssl=true + ssl_cert/ssl_key are
+# set; we generate a self-signed cert below. Override non-interactively with
+# GENCALL_TLS=http|https. Default: http (preserves prior behavior).
+GENCALL_TLS="${GENCALL_TLS:-}"
+if [ -z "$GENCALL_TLS" ]; then
+  if [ -t 0 ]; then
+    printf '\n   Serve the web/API over HTTP or HTTPS?\n'
+    printf '     [p] http  — plain HTTP (default)\n'
+    printf '     [s] https — self-signed TLS cert generated for this box\n'
+    read -rp "   Transport [p/s] (default: p): " _tls || true
+    case "${_tls,,}" in s|https) GENCALL_TLS=https;; *) GENCALL_TLS=http;; esac
+  else
+    GENCALL_TLS=http
+  fi
+fi
+case "$GENCALL_TLS" in
+  http)  USE_TLS=false; SCHEME=http  ;;
+  https) USE_TLS=true;  SCHEME=https ;;
+  *) die "GENCALL_TLS must be 'http' or 'https' (got: $GENCALL_TLS)" ;;
+esac
+ok "transport: $SCHEME"
+
 # ── 1. System packages ────────────────────────────────────────────────────────
 say "Installing system packages (python, postgresql, SIPp build deps)"
 export DEBIAN_FRONTEND=noninteractive
@@ -159,6 +182,39 @@ set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
 # Headless worker => no console/web app + no live-stats WebSocket; controller => full console.
 set_cfg web serve_console "$SERVE_CONSOLE"
+
+# HTTPS: generate a self-signed cert (idempotent) and point [web] ssl at it.
+if [ "$USE_TLS" = true ]; then
+  CERT_DIR="$INSTALL_DIR/certs"
+  CERT="$CERT_DIR/gencall.crt"
+  KEY="$CERT_DIR/gencall.key"
+  mkdir -p "$CERT_DIR"; chmod 750 "$CERT_DIR"
+  if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+    ok "TLS cert already present ($CERT) — reusing"
+  else
+    # CN/SAN = the box's primary IP (falls back to hostname) so clients that pin
+    # the host match the cert. 2048-bit RSA, ~10 years.
+    HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$HOST_ADDR" ] || HOST_ADDR="$(hostname -f 2>/dev/null || hostname)"
+    if printf '%s' "$HOST_ADDR" | grep -qE '^[0-9]+(\.[0-9]+){3}$'; then
+      SAN="IP:$HOST_ADDR"
+    else
+      SAN="DNS:$HOST_ADDR"
+    fi
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout "$KEY" -out "$CERT" \
+      -subj "/CN=$HOST_ADDR" -addext "subjectAltName=$SAN" >/dev/null 2>&1 \
+      || die "openssl failed to generate the self-signed cert"
+    ok "generated self-signed TLS cert (CN=$HOST_ADDR, $SAN, 3650d)"
+  fi
+  # Tight perms — the key is owned by the service user that runs gencall.
+  chmod 600 "$KEY"; chmod 644 "$CERT"
+  chown "$GC_USER":"$GC_USER" "$KEY" "$CERT"
+  set_cfg web ssl true
+  set_cfg web ssl_cert "$CERT"
+  set_cfg web ssl_key "$KEY"
+  ok "TLS enabled in config ([web] ssl=true, cert=$CERT)"
+fi
 # Inbound trust whitelist is no longer set here — configure it from the
 # controller console (Configuration → Inbound Trust), which pushes it to every
 # worker at runtime. The HOST FIREWALL remains the real boundary (see docs).
@@ -179,6 +235,39 @@ if [ -n "$API_KEY" ]; then
   ok "API key minted (saved to $INSTALL_DIR/.api_key)"
 else
   warn "could not mint a key now — the worker mints one on first boot: journalctl -u gencall-worker | grep X-API-Key"
+fi
+
+# ── 6c. Initial console login account ─────────────────────────────────────────
+# The console now requires a login. Create one admin account at install time
+# (idempotent — only if no console users exist yet). Username: GENCALL_ADMIN_USER
+# (default admin). Password: GENCALL_ADMIN_PASSWORD, else a strong random one is
+# generated and printed once. The password is passed via GENCALL_USER_PASSWORD
+# env (NOT argv) so it never lands in ps/shell history. Min length 8.
+say "Creating initial console account"
+ADMIN_USER="${GENCALL_ADMIN_USER:-admin}"
+GC_ENV=(GENCALL_CONFIG="$CFG" GENCALL_DB_ENGINE=postgresql GENCALL_DATABASE_URL="$DB_URL")
+# Mirror the keys check: ask the CLI what already exists. `users list` prints a
+# table header ("username ... role ...") only when users exist; an empty install
+# prints "No console users." (which also contains the word "username"), so match
+# the header columns, not the bare word.
+if env "${GC_ENV[@]}" "$INSTALL_DIR/venv/bin/gencall" users list 2>/dev/null | grep -qE 'username[[:space:]]+role'; then
+  ok "console account(s) already exist — leaving them untouched"
+  ADMIN_PASSWORD=""
+else
+  ADMIN_PASSWORD="${GENCALL_ADMIN_PASSWORD:-}"
+  if [ -z "$ADMIN_PASSWORD" ]; then
+    ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"
+    GEN_PW=1
+  else
+    GEN_PW=0
+  fi
+  if env "${GC_ENV[@]}" GENCALL_USER_PASSWORD="$ADMIN_PASSWORD" \
+       "$INSTALL_DIR/venv/bin/gencall" users create "$ADMIN_USER" >/dev/null 2>&1; then
+    ok "console account '$ADMIN_USER' created"
+  else
+    warn "could not create the console account now — create one later: ${INSTALL_DIR}/venv/bin/gencall users create $ADMIN_USER"
+    ADMIN_PASSWORD=""
+  fi
 fi
 
 chown -R "$GC_USER":"$GC_USER" "$INSTALL_DIR"
@@ -241,7 +330,7 @@ warn "gencall-controller installed but NOT started (only needed for multi-box; e
 # ── 8. Health check + next steps ──────────────────────────────────────────────
 say "Health check"
 sleep 4
-if curl -fsS http://127.0.0.1:${PORT}/api/health >/dev/null 2>&1; then
+if curl -fskS "${SCHEME}://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
   ok "worker /api/health OK"
 else
   warn "worker not healthy yet — check:  journalctl -u gencall-worker -n 50 --no-pager"
@@ -258,14 +347,22 @@ else
 fi
 echo "   +----------------------------------------------------------------------"
 echo
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  echo "   +-- CONSOLE LOGIN (shown once) -----------------------------------------"
+  echo "   |  username:  ${ADMIN_USER}"
+  echo "   |  password:  ${ADMIN_PASSWORD}"
+  [ "${GEN_PW:-0}" = 1 ] && echo "   |  (auto-generated — save it now; it is NOT stored anywhere)"
+  echo "   +----------------------------------------------------------------------"
+  echo
+fi
 if [ "$ROLE" = controller ]; then
   echo "   Role: CONTROLLER — open the dashboard / web app at:"
-  echo "       http://<box-ip>:${PORT}/console/"
+  echo "       ${SCHEME}://<box-ip>:${PORT}/console/"
   echo "   Add your worker boxes on the Nodes page (their URL + their API key)."
 else
   echo "   Role: WORKER (headless — no dashboard / web app on this box)."
   echo "   Register it on the CONTROLLER: Nodes page -> Add node -> Runs on ="
-  echo "       http://<this-box-ip>:${PORT}   + the API key above."
+  echo "       ${SCHEME}://<this-box-ip>:${PORT}   + the API key above."
 fi
 echo
 echo "   FIREWALL (the REAL trust boundary): restrict UDP/5060 + ${RTP_LO}-${RTP_HI} to"

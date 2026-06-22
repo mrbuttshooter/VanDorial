@@ -91,6 +91,73 @@ if [ -f "$HARDEN" ]; then
   GENCALL_CFG="$INSTALL_DIR/etc/gencall.cfg" bash "$HARDEN" || say "disk hardening had a problem (non-fatal)"
 fi
 
+# 5c) ensure the console account + TLS cert exist (idempotent — NEVER clobber) --
+# A fresh code drop may introduce the console-login requirement / TLS option. We
+# make sure ONE admin account and (if TLS is configured) the cert file exist, but
+# we DO NOT reset passwords or regenerate certs on update. DB settings + the venv
+# are read from the live config / systemd unit so they match what the worker uses.
+CFG="$INSTALL_DIR/etc/gencall.cfg"
+BASE_DIR="$(dirname "$INSTALL_DIR")"            # e.g. /opt/gencall (venv + certs live here)
+GC_BIN="$BASE_DIR/venv/bin/gencall"
+[ -x "$GC_BIN" ] || GC_BIN="$INSTALL_DIR/venv/bin/gencall"
+# Pull GENCALL_* env (DB engine/URL) straight from the live worker unit so the CLI
+# touches the SAME database the service does.
+UNIT_ENV=()
+for u in gencall-worker gencall; do
+  if systemctl cat "${u}.service" >/dev/null 2>&1; then
+    while IFS= read -r _e; do UNIT_ENV+=("$_e"); done < <(
+      systemctl cat "${u}.service" 2>/dev/null \
+        | sed -n 's/^Environment=\(GENCALL_[A-Z_]*=.*\)$/\1/p')
+    break
+  fi
+done
+if [ -x "$GC_BIN" ] && [ -f "$CFG" ]; then
+  # Console account: create 'admin' only if NO console user exists yet.
+  if env GENCALL_CONFIG="$CFG" "${UNIT_ENV[@]}" "$GC_BIN" users list 2>/dev/null | grep -qE 'username[[:space:]]+role'; then
+    say "console account already present — not touched"
+  else
+    ADMIN_USER="${GENCALL_ADMIN_USER:-admin}"
+    ADMIN_PASSWORD="${GENCALL_ADMIN_PASSWORD:-}"
+    GEN_PW=0
+    if [ -z "$ADMIN_PASSWORD" ] && command -v openssl >/dev/null 2>&1; then
+      ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"; GEN_PW=1
+    fi
+    if [ -n "$ADMIN_PASSWORD" ] && env GENCALL_CONFIG="$CFG" "${UNIT_ENV[@]}" \
+         GENCALL_USER_PASSWORD="$ADMIN_PASSWORD" "$GC_BIN" users create "$ADMIN_USER" >/dev/null 2>&1; then
+      ok "created initial console account '$ADMIN_USER'"
+      echo "    +-- CONSOLE LOGIN (shown once) ---------------------------------------"
+      echo "    |  username:  ${ADMIN_USER}"
+      echo "    |  password:  ${ADMIN_PASSWORD}"
+      [ "$GEN_PW" = 1 ] && echo "    |  (auto-generated — save it now; it is NOT stored anywhere)"
+      echo "    +---------------------------------------------------------------------"
+    else
+      say "no console account and could not create one — make one later: $GC_BIN users create admin"
+    fi
+  fi
+  # TLS cert: if config has [web] ssl=true but the cert file is missing, generate
+  # it (idempotent). NEVER overwrite an existing cert.
+  if grep -qiE '^[[:space:]]*ssl[[:space:]]*=[[:space:]]*(true|1|yes)' "$CFG" 2>/dev/null; then
+    CERT="$BASE_DIR/certs/gencall.crt"; KEY="$BASE_DIR/certs/gencall.key"
+    if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+      say "TLS cert present — not regenerated"
+    elif command -v openssl >/dev/null 2>&1; then
+      mkdir -p "$BASE_DIR/certs"; chmod 750 "$BASE_DIR/certs"
+      HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+      [ -n "$HOST_ADDR" ] || HOST_ADDR="$(hostname -f 2>/dev/null || hostname)"
+      if printf '%s' "$HOST_ADDR" | grep -qE '^[0-9]+(\.[0-9]+){3}$'; then SAN="IP:$HOST_ADDR"; else SAN="DNS:$HOST_ADDR"; fi
+      if openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+           -keyout "$KEY" -out "$CERT" -subj "/CN=$HOST_ADDR" \
+           -addext "subjectAltName=$SAN" >/dev/null 2>&1; then
+        chmod 600 "$KEY"; chmod 644 "$CERT"
+        chown gencall:gencall "$KEY" "$CERT" 2>/dev/null || true
+        ok "generated missing TLS cert ($CERT)"
+      else
+        say "[web] ssl=true but cert generation failed — check openssl"
+      fi
+    fi
+  fi
+fi
+
 # 6) restart the worker (auto-detect the unit name) ------------------------
 UNIT=""
 for u in gencall-worker gencall gencall-controller; do

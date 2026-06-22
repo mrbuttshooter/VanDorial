@@ -34,6 +34,30 @@ docker info >/dev/null 2>&1 || die "Cannot talk to the Docker daemon. Are you in
 ok "Docker + Compose v2 present"
 COMPOSE="docker compose -f $COMPOSE_FILE"
 
+# ── 0b. Transport: HTTP or HTTPS (self-signed, native uvicorn TLS) ────────────
+# The app serves TLS natively when [web] ssl=true + ssl_cert/ssl_key are set; we
+# generate a self-signed cert under gencall/etc/certs (already bind-mounted into
+# the container at /opt/gencall/gencall/etc/certs). Override with
+# GENCALL_TLS=http|https. Default: http (preserves prior behavior).
+GENCALL_TLS="${GENCALL_TLS:-}"
+if [ -z "$GENCALL_TLS" ]; then
+  if [ -t 0 ]; then
+    printf '\n   Serve the web/API over HTTP or HTTPS?\n'
+    printf '     [p] http  — plain HTTP (default)\n'
+    printf '     [s] https — self-signed TLS cert generated for this box\n'
+    read -rp "   Transport [p/s] (default: p): " _tls || true
+    case "${_tls,,}" in s|https) GENCALL_TLS=https;; *) GENCALL_TLS=http;; esac
+  else
+    GENCALL_TLS=http
+  fi
+fi
+case "$GENCALL_TLS" in
+  http)  USE_TLS=false; SCHEME=http  ;;
+  https) USE_TLS=true;  SCHEME=https ;;
+  *) die "GENCALL_TLS must be 'http' or 'https' (got: $GENCALL_TLS)" ;;
+esac
+ok "transport: $SCHEME"
+
 # A tiny helper to set an INI key=value under a [section] in gencall.cfg, using
 # python3 (present on Ubuntu). Falls back to a clear manual instruction.
 set_cfg() {  # set_cfg <section> <key> <value>
@@ -92,6 +116,40 @@ set_cfg sip min_rtp_port "$RTP_LO"
 set_cfg sip max_rtp_port "$RTP_HI"
 ok "[sip] min/max_rtp_port = $RTP_LO / $RTP_HI"
 
+# ── 2b. HTTPS — self-signed cert (idempotent) ─────────────────────────────────
+# Cert lives in gencall/etc/certs/ (bind-mounted into the container). The config
+# references the CONTAINER path. Key is group-readable (mode 640, group root) so
+# the non-root container user (UID 1001, group root) can read it without being
+# world-readable. We do NOT regenerate an existing cert.
+if [ "$USE_TLS" = true ]; then
+  command -v openssl >/dev/null 2>&1 || die "GENCALL_TLS=https needs openssl on the host."
+  HOST_CERT_DIR="gencall/etc/certs"
+  CERT="$HOST_CERT_DIR/gencall.crt"
+  KEY="$HOST_CERT_DIR/gencall.key"
+  CTR_CERT="/opt/gencall/gencall/etc/certs/gencall.crt"
+  CTR_KEY="/opt/gencall/gencall/etc/certs/gencall.key"
+  mkdir -p "$HOST_CERT_DIR"
+  if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+    ok "TLS cert already present ($CERT) — reusing"
+  else
+    HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$HOST_ADDR" ] || HOST_ADDR="$(hostname -f 2>/dev/null || hostname)"
+    if printf '%s' "$HOST_ADDR" | grep -qE '^[0-9]+(\.[0-9]+){3}$'; then SAN="IP:$HOST_ADDR"; else SAN="DNS:$HOST_ADDR"; fi
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout "$KEY" -out "$CERT" -subj "/CN=$HOST_ADDR" \
+      -addext "subjectAltName=$SAN" >/dev/null 2>&1 \
+      || die "openssl failed to generate the self-signed cert"
+    ok "generated self-signed TLS cert (CN=$HOST_ADDR, $SAN, 3650d)"
+  fi
+  # Group root + 640 so the container's non-root user (group root) can read the
+  # bind-mounted key, without it being world-readable.
+  chmod 644 "$CERT"; chmod 640 "$KEY"; chgrp 0 "$KEY" "$CERT" 2>/dev/null || true
+  set_cfg web ssl true
+  set_cfg web ssl_cert "$CTR_CERT"
+  set_cfg web ssl_key "$CTR_KEY"
+  ok "TLS enabled in config ([web] ssl=true, cert=$CTR_CERT)"
+fi
+
 # Inbound trust whitelist is no longer set here — configure it from the
 # controller console (Configuration → Inbound Trust), which pushes it to every
 # worker at runtime. The HOST FIREWALL remains the real boundary (see docs).
@@ -131,11 +189,49 @@ if $COMPOSE exec -T gencall tcpdump --version >/dev/null 2>&1; then
 else
   warn "tcpdump not found in the worker image — on-demand Trace capture will be unavailable; rebuild the image ('$COMPOSE build') or check '$COMPOSE logs gencall'."
 fi
-curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1 && ok "worker  /api/health OK" || warn "worker health not responding yet — check '$COMPOSE logs gencall'"
-curl -fsS http://127.0.0.1:8090/api/health >/dev/null 2>&1 && ok "controller /api/health OK" || warn "controller health not responding yet — check '$COMPOSE logs controller'"
+curl -fskS "${SCHEME}://127.0.0.1:8080/api/health" >/dev/null 2>&1 && ok "worker  /api/health OK" || warn "worker health not responding yet — check '$COMPOSE logs gencall'"
+curl -fskS "${SCHEME}://127.0.0.1:8090/api/health" >/dev/null 2>&1 && ok "controller /api/health OK" || warn "controller health not responding yet — check '$COMPOSE logs controller'"
+
+# ── 5b. Initial console login account ─────────────────────────────────────────
+# The console (served by the CONTROLLER) now requires a login. Create one admin
+# account in the controller's DB (idempotent — only if none exists). Username:
+# GENCALL_ADMIN_USER (default admin). Password: GENCALL_ADMIN_PASSWORD, else a
+# strong random one, printed once below. Passed via GENCALL_USER_PASSWORD env
+# (NOT argv) so it never lands in ps. Min length 8.
+say "Creating initial console account (controller)"
+ADMIN_USER="${GENCALL_ADMIN_USER:-admin}"
+if $COMPOSE exec -T controller gencall users list 2>/dev/null | grep -qE 'username[[:space:]]+role'; then
+  ok "console account(s) already exist — leaving them untouched"
+  ADMIN_PASSWORD=""
+else
+  ADMIN_PASSWORD="${GENCALL_ADMIN_PASSWORD:-}"
+  GEN_PW=0
+  if [ -z "$ADMIN_PASSWORD" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"; GEN_PW=1
+    else
+      ADMIN_PASSWORD="$($COMPOSE exec -T controller python3 -c 'import secrets;print(secrets.token_urlsafe(16))' 2>/dev/null | tr -d '\r')"; GEN_PW=1
+    fi
+  fi
+  if [ -n "$ADMIN_PASSWORD" ] && $COMPOSE exec -T -e GENCALL_USER_PASSWORD="$ADMIN_PASSWORD" \
+       controller gencall users create "$ADMIN_USER" >/dev/null 2>&1; then
+    ok "console account '$ADMIN_USER' created"
+  else
+    warn "could not create the console account now — create one later: $COMPOSE exec controller gencall users create $ADMIN_USER"
+    ADMIN_PASSWORD=""
+  fi
+fi
 
 # ── 6. Where to go next ───────────────────────────────────────────────────────
 say "Almost there — two things YOU must still do"
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  echo "   +-- CONSOLE LOGIN (shown once) -----------------------------------------"
+  echo "   |  username:  ${ADMIN_USER}"
+  echo "   |  password:  ${ADMIN_PASSWORD}"
+  [ "${GEN_PW:-0}" = 1 ] && echo "   |  (auto-generated — save it now; it is NOT stored anywhere)"
+  echo "   +----------------------------------------------------------------------"
+  echo
+fi
 cat <<EOF
    1) API KEY: the worker minted an admin key on first boot. Grab it with:
         $COMPOSE logs gencall | grep -A1 'X-API-Key'
@@ -147,6 +243,6 @@ cat <<EOF
 
    Then prove the real-SIPp call path on the box:
         ./deploy/smoke-loopback.sh
-   And open the console:  http://<box>:8090/console/  → the Loops page.
+   And open the console:  ${SCHEME}://<box>:8090/console/  → the Loops page.
 EOF
 ok "install.sh finished"
