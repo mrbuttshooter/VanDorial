@@ -8,7 +8,6 @@ import {
   IconLoop,
   IconHistory,
   IconSettings,
-  IconBolt,
 } from "../icons";
 
 interface NavItem {
@@ -30,10 +29,11 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Operations",
     items: [
       { to: "/", label: "Dashboard", icon: IconGauge },
-      { to: "/campaigns", label: "Campaigns", icon: IconBolt },
+      // Hidden from the nav for now (demo) — routes still exist, just not shown.
+      // { to: "/campaigns", label: "Campaigns", icon: IconBolt },
       { to: "/loops", label: "Loops", icon: IconLoop },
       { to: "/scenarios", label: "Scenarios", icon: IconLayers },
-      { to: "/connectors", label: "Connectors", icon: IconPlug },
+      // { to: "/connectors", label: "Connectors", icon: IconPlug },
     ],
   },
   {

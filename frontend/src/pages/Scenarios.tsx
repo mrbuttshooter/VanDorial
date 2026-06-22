@@ -72,7 +72,13 @@ export function Scenarios() {
     }
   };
 
-  const scenarios = list.data?.scenarios ?? [];
+  // Show only the loop scenarios for now (demo) — the generic SIP test
+  // scenarios (basic_call, options_ping, stress_test, …) aren't used by the
+  // loop product, so hide them from the UI to avoid confusion. Remove this
+  // filter to show every scenario again.
+  const scenarios = (list.data?.scenarios ?? []).filter((sc) =>
+    sc.name.toLowerCase().includes("loop"),
+  );
 
   return (
     <>
