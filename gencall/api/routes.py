@@ -25,10 +25,17 @@ from gencall.db.models import Database, Connector, Scenario, Server, TestRun, Us
 
 logger = logging.getLogger("gencall.api")
 
+# Interactive docs (/docs, /redoc, /openapi.json) enumerate every endpoint to an
+# unauthenticated caller. Off by default; opt in with GENCALL_ENABLE_DOCS=1 for
+# dev. (Pentest 2.2.2 — anonymous API recon.)
+_DOCS_ENABLED = os.environ.get("GENCALL_ENABLE_DOCS", "").lower() in ("1", "true", "yes")
 app = FastAPI(
     title="GenCall API",
     description="GenCall SIP Traffic Generator - REST API",
     version="2.2.2",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
 
 # Defense-in-depth response headers (clickjacking / MIME-sniff / CSP) on every
@@ -250,6 +257,16 @@ def start_test(req: StartTestRequest):
     except ValueError as e:
         raise HTTPException(422, str(e))
 
+    # Contain csv_file exactly like loop pools: an authenticated caller must not
+    # be able to point SIPp's -inf at an arbitrary file on the box. Mirror the
+    # loops guard (realpath must live under the generated-pools dir). Lazy import
+    # avoids a circular dependency with the loops router. (Pentest 2.2.2 M1.)
+    if req.csv_file:
+        from gencall.api.loops import _validate_pool_csv_path
+        safe_csv = _validate_pool_csv_path(req.csv_file)
+    else:
+        safe_csv = ""
+
     transport_map = {"udp": SIPpTransport.UDP, "tcp": SIPpTransport.TCP, "tls": SIPpTransport.TLS}
     transport = transport_map.get(norm_transport, SIPpTransport.UDP)
 
@@ -267,7 +284,7 @@ def start_test(req: StartTestRequest):
         max_calls=req.max_calls,
         call_limit=req.call_limit,
         duration=req.duration,
-        csv_file=req.csv_file,
+        csv_file=safe_csv,
         auth_user=req.auth_user,
         auth_pass=req.auth_pass,
     )
@@ -494,7 +511,8 @@ def create_connector(req: ConnectorRequest):
         return {"status": "created", "connector": c.to_dict()}
     except Exception as e:
         session.rollback()
-        raise HTTPException(400, str(e))
+        logger.warning("connector create failed: %s", e)  # detail to logs, not client
+        raise HTTPException(400, "could not create connector (check the inputs)")
     finally:
         session.close()
 
@@ -797,7 +815,8 @@ def create_server(req: ServerRequest):
         raise
     except Exception as e:
         session.rollback()
-        raise HTTPException(400, f"could not create server (duplicate name?): {e}")
+        logger.warning("server create failed: %s", e)  # detail to logs, not client
+        raise HTTPException(400, "could not create server (duplicate name or invalid input)")
     finally:
         session.close()
 
@@ -883,7 +902,8 @@ def update_server(server_id: int, req: ServerUpdate):
         raise
     except Exception as e:
         session.rollback()
-        raise HTTPException(400, str(e))
+        logger.warning("server update failed: %s", e)  # detail to logs, not client
+        raise HTTPException(400, "could not update server (check the inputs)")
     finally:
         session.close()
 
@@ -938,12 +958,15 @@ def console_bootstrap():
     installer creates one). New installs always have a user, so this stays off."""
     if gateway is not None and getattr(gateway, "users", None) is not None:
         try:
-            if gateway.users.count_users() > 0:
-                raise HTTPException(404, "Login required (POST /api/auth/login)")
+            users_exist = gateway.users.count_users() > 0
         except HTTPException:
             raise
         except Exception:
-            pass  # DB hiccup: fall through to legacy behaviour rather than lock out
+            # FAIL CLOSED on a DB error: never hand an unauthenticated caller a
+            # live key just because the user-count query hiccuped (pentest 2.2.2).
+            raise HTTPException(503, "auth state unavailable")
+        if users_exist:
+            raise HTTPException(404, "Login required (POST /api/auth/login)")
     if not console_api_key:
         raise HTTPException(404, "Console auto-auth not configured")
     return {"api_key": console_api_key}

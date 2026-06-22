@@ -30,9 +30,12 @@ def test_parse_rejects_wrong_token():
     assert d.parse_beacon(raw, "secret") is not None
 
 
-def test_parse_empty_token_accepts_any():
+def test_parse_empty_token_rejects_all():
+    # Pentest 2.2.2 M5: an empty expected_token used to mean "accept any",
+    # enabling rogue-node registration. It now refuses to auto-register without
+    # a configured fleet token.
     raw = d.encode_beacon(d.build_beacon("whatever", "http://10.0.0.9:8080"))
-    assert d.parse_beacon(raw, "") is not None  # open VLAN
+    assert d.parse_beacon(raw, "") is None
 
 
 def test_parse_rejects_garbage_and_foreign():

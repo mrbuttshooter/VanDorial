@@ -65,7 +65,12 @@ def parse_beacon(data: bytes, expected_token: str) -> Optional[dict]:
         return None
     if not isinstance(b, dict) or b.get("magic") != BEACON_MAGIC:
         return None
-    if expected_token and b.get("token") != expected_token:
+    # A beacon MUST carry the matching fleet token. An empty expected_token (no
+    # [fleet] token set) previously meant "accept any" — letting any host on the
+    # VLAN auto-register as a node, receive pushed trust config/keys, or poison an
+    # existing node's api_key. Refuse to auto-register without a token instead
+    # (pentest 2.2.2 M5). Set [fleet] token on every box to use discovery.
+    if not expected_token or b.get("token") != expected_token:
         return None
     address = (b.get("address") or "").strip()
     if not address:

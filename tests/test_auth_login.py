@@ -95,7 +95,7 @@ def client(db, monkeypatch):
     gw.users = UserManager(db=db)
     gw.sessions = SessionManager(db=db)
     monkeypatch.setattr(routes, "gateway", gw)
-    auth._fail_log.clear()  # reset the per-IP throttle between tests
+    auth._reset_throttle()  # reset the per-IP/per-account throttle between tests
     gw.users.create_user("admin", "supersecret")
 
     app = FastAPI()

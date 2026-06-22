@@ -75,6 +75,28 @@ def verify_password(password: str, encoded: str) -> bool:
 _DUMMY_PASSWORD_HASH = hash_password("gencall-login-timing-equalizer")
 
 
+# A short denylist of the most common/guessable passwords. Not exhaustive — the
+# goal is to reject the obvious credential-stuffing targets, paired with the
+# 8-char minimum and a low-diversity check. (Pentest 2.2.2: weak-password policy.)
+_COMMON_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789",
+    "1234567890", "qwerty123", "qwertyuiop", "11111111", "00000000",
+    "iloveyou", "admin123", "administrator", "letmein1", "welcome1",
+    "changeme", "passw0rd", "p@ssw0rd", "gencall1", "vandorial",
+}
+
+
+def _reject_weak_password(password: str) -> None:
+    """Raise ValueError if the password is too short, too common, or too uniform."""
+    pw = password or ""
+    if len(pw) < 8:
+        raise ValueError("password must be at least 8 characters")
+    if pw.lower() in _COMMON_PASSWORDS:
+        raise ValueError("password is too common — choose something less guessable")
+    if len(set(pw)) <= 2:
+        raise ValueError("password is not complex enough (too few distinct characters)")
+
+
 # ─── Users ───────────────────────────────────────────────────────────────────
 
 class UserManager:
@@ -99,8 +121,7 @@ class UserManager:
         username = (username or "").strip()
         if not username:
             raise ValueError("username is required")
-        if len(password or "") < 8:
-            raise ValueError("password must be at least 8 characters")
+        _reject_weak_password(password)
         session = self.db.get_session()
         try:
             if session.query(User).filter_by(username=username).first():
@@ -140,27 +161,32 @@ class UserManager:
             session.close()
 
     def set_password(self, user_id: int, password: str) -> bool:
-        from gencall.db.models import User
-        if len(password or "") < 8:
-            raise ValueError("password must be at least 8 characters")
+        from gencall.db.models import User, LoginSession
+        _reject_weak_password(password)
         session = self.db.get_session()
         try:
             u = session.query(User).filter_by(id=user_id).first()
             if not u:
                 return False
             u.password_hash = hash_password(password)
+            # Revoke every live session for this user so a changed password
+            # actually locks out anyone holding an old token (pentest 2.2.2 H2).
+            session.query(LoginSession).filter_by(user_id=user_id).delete()
             session.commit()
             return True
         finally:
             session.close()
 
     def delete_user(self, user_id: int) -> bool:
-        from gencall.db.models import User
+        from gencall.db.models import User, LoginSession
         session = self.db.get_session()
         try:
             u = session.query(User).filter_by(id=user_id).first()
             if not u:
                 return False
+            # Drop the user's live sessions too, else a deleted user's token
+            # keeps working until expiry (pentest 2.2.2 H2).
+            session.query(LoginSession).filter_by(user_id=user_id).delete()
             session.delete(u)
             session.commit()
             logger.info("console user deleted: %s", u.username)
@@ -204,7 +230,7 @@ class SessionManager:
         """Return {user_id, username, expires_at} for a live token, else None."""
         if not raw_token:
             return None
-        from gencall.db.models import LoginSession
+        from gencall.db.models import LoginSession, User
         session = self.db.get_session()
         try:
             row = session.query(LoginSession).filter_by(
@@ -213,6 +239,14 @@ class SessionManager:
                 return None
             if row.expires_at and row.expires_at < time.time():
                 # Expired: drop it so the table self-cleans on use.
+                session.delete(row)
+                session.commit()
+                return None
+            # Re-check the account still exists and is enabled — so disabling or
+            # deleting a user kills their live sessions immediately, not just at
+            # expiry (pentest 2.2.2 H2).
+            user = session.query(User).filter_by(id=row.user_id).first()
+            if user is None or not user.enabled:
                 session.delete(row)
                 session.commit()
                 return None

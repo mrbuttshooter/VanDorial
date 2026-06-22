@@ -144,10 +144,15 @@ def create_controller_app(config: Config = None):
     controller_routes.aggregator = aggregator
 
     # ── FastAPI app ─────────────────────────────────────────────────────────
+    # Docs off by default (anonymous API recon); opt in with GENCALL_ENABLE_DOCS=1.
+    _docs = os.environ.get("GENCALL_ENABLE_DOCS", "").lower() in ("1", "true", "yes")
     app = FastAPI(
         title="VanDorial Fleet Controller API",
         description="VanDorial fleet control-plane for GenCall workers",
         version="2.0.0",
+        docs_url="/docs" if _docs else None,
+        redoc_url="/redoc" if _docs else None,
+        openapi_url="/openapi.json" if _docs else None,
     )
 
     app.include_router(controller_routes.router)

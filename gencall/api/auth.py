@@ -30,27 +30,57 @@ logger = logging.getLogger("gencall.api.auth")
 router = APIRouter(tags=["auth"])
 
 
-# ─── Brute-force throttle (per client IP) ────────────────────────────────────
+# ─── Brute-force throttle (per client IP AND per account) ────────────────────
+# Tracked on two axes so a single IP can't grind one account (per-IP) AND a
+# distributed/credential-stuffing attack from many IPs against one username is
+# still slowed (per-account). Both maps are size-capped and self-pruning so a
+# flood of unique IPs can't grow them without bound (memory-DoS). (Pentest 2.2.2.)
 
 _MAX_FAILS = 5
 _FAIL_WINDOW_S = 300
-_fail_log: dict[str, deque] = defaultdict(deque)
+_MAX_TRACKED = 4096           # hard cap on distinct keys held per map
+_fail_ip: dict[str, deque] = defaultdict(deque)
+_fail_user: dict[str, deque] = defaultdict(deque)
 
 
-def _too_many_failures(ip: str) -> bool:
-    dq = _fail_log[ip]
+def _prune(log: dict) -> None:
+    """Drop keys whose failure window has fully elapsed (bounds memory)."""
+    now = time.time()
+    for k in list(log.keys()):
+        dq = log[k]
+        while dq and now - dq[0] > _FAIL_WINDOW_S:
+            dq.popleft()
+        if not dq:
+            del log[k]
+
+
+def _too_many(log: dict, key: str) -> bool:
+    dq = log[key]
     now = time.time()
     while dq and now - dq[0] > _FAIL_WINDOW_S:
         dq.popleft()
+    if not dq:
+        log.pop(key, None)
+        return False
     return len(dq) >= _MAX_FAILS
 
 
-def _record_failure(ip: str) -> None:
-    _fail_log[ip].append(time.time())
+def _record(log: dict, key: str) -> None:
+    if key not in log and len(log) >= _MAX_TRACKED:
+        _prune(log)
+        if len(log) >= _MAX_TRACKED:
+            return  # at capacity — refuse to grow further rather than OOM
+    log[key].append(time.time())
 
 
-def _clear_failures(ip: str) -> None:
-    _fail_log.pop(ip, None)
+def _clear(log: dict, key: str) -> None:
+    log.pop(key, None)
+
+
+def _reset_throttle() -> None:
+    """Test helper: clear all throttle state."""
+    _fail_ip.clear()
+    _fail_user.clear()
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
@@ -85,16 +115,19 @@ def login(req: LoginRequest, request: Request):
     """Authenticate a user and issue a session token."""
     gw = _gateway()
     ip = request.client.host if request.client else "?"
-    if _too_many_failures(ip):
+    uname = (req.username or "").strip().lower()
+    if _too_many(_fail_ip, ip) or _too_many(_fail_user, uname):
         raise HTTPException(429, "Too many failed logins — try again later")
 
     user = gw.users.verify(req.username, req.password)
     if not user:
-        _record_failure(ip)
+        _record(_fail_ip, ip)
+        _record(_fail_user, uname)
         logger.warning("auth: failed login for %r from %s", req.username, ip)
         raise HTTPException(401, "Invalid username or password")
 
-    _clear_failures(ip)
+    _clear(_fail_ip, ip)
+    _clear(_fail_user, uname)
     token, expires_at = gw.sessions.create(user["id"], user["username"])
     logger.info("auth: login %s from %s", user["username"], ip)
     return {"token": token, "username": user["username"], "expires_at": expires_at}
