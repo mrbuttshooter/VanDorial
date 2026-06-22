@@ -441,18 +441,31 @@ def list_loops_fleet():
         pass
 
     import httpx
-    for api_url, api_key in workers.items():
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _fetch_worker_runs(item):
+        api_url, api_key = item
+        runs = []
         try:
-            with httpx.Client(verify=False, timeout=8.0) as cl:
+            with httpx.Client(verify=False, timeout=4.0) as cl:
                 r = cl.get(api_url.rstrip("/") + "/api/loops/history",
                            headers={"X-API-Key": api_key} if api_key else {})
             if r.status_code == 200:
                 for run in (r.json() or {}).get("runs", []):
                     run = dict(run)
                     run["box"] = api_url
-                    out.append(run)
+                    runs.append(run)
         except Exception:
             logger.debug("fleet loops fetch failed for %s", api_url, exc_info=True)
+        return runs
+
+    # Poll workers CONCURRENTLY with a short per-worker timeout, so a single dead
+    # or slow worker can no longer stall the whole loops view for its full
+    # timeout (the old serial loop made one unreachable box cost ~8 s every load).
+    if workers:
+        with ThreadPoolExecutor(max_workers=min(8, len(workers))) as ex:
+            for runs in ex.map(_fetch_worker_runs, list(workers.items())):
+                out.extend(runs)
 
     out.sort(key=lambda c: (c.get("created_at") or ""), reverse=True)
     return {"campaigns": out}
