@@ -158,6 +158,10 @@ def create_controller_app(config: Config = None):
     from gencall.api import auth as auth_api
     app.include_router(auth_api.router)
 
+    # Defense-in-depth response headers on the controller console + API too.
+    from gencall.api.security_headers import install_security_headers
+    install_security_headers(app)
+
     # ── Fleet discovery listener (opt-in: [fleet] discovery = true) ──────────
     # Auto-register workers that broadcast a beacon on the VLAN. The shared fleet
     # token both filters foreign beacons and becomes the api_key the controller

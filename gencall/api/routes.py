@@ -31,6 +31,11 @@ app = FastAPI(
     version="2.2.1",
 )
 
+# Defense-in-depth response headers (clickjacking / MIME-sniff / CSP) on every
+# response, including the served console.
+from gencall.api.security_headers import install_security_headers
+install_security_headers(app)
+
 # These get set during app startup
 engine: Optional[SIPpEngine] = None
 stats: Optional[StatsEngine] = None
