@@ -72,7 +72,7 @@ def create_app(config_path: str = None):
     setup_logging(config)
 
     logger.info("=" * 60)
-    logger.info("  GenCall v2.2.0 - SIP Traffic Generator")
+    logger.info("  GenCall v2.2.1 - SIP Traffic Generator")
     logger.info("=" * 60)
 
     # Initialize components
