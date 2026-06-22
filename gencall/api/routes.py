@@ -28,7 +28,7 @@ logger = logging.getLogger("gencall.api")
 app = FastAPI(
     title="GenCall API",
     description="GenCall SIP Traffic Generator - REST API",
-    version="2.2.1",
+    version="2.2.2",
 )
 
 # Defense-in-depth response headers (clickjacking / MIME-sniff / CSP) on every
@@ -954,7 +954,7 @@ def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "2.2.1",
+        "version": "2.2.2",
         "name": "GenCall",
         "active_tests": len([i for i in engine.instances.values()
                              if i.state == SIPpState.RUNNING]) if engine else 0,
