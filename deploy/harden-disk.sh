@@ -43,8 +43,7 @@ fi
 
 # 2) Harden the config (cap retention, ensure trace-err is off) ---------------
 # Uses python3's configparser (always present — GenCall needs python3 anyway).
-# Preserves a LOWER operator retention value; only pulls a dangerous-high one
-# (e.g. the old 30-day default) down to 7.
+# Preserves a LOWER operator retention value; only pulls a higher one down to 1.
 if [ -f "$CFG" ]; then
   if python3 - "$CFG" <<'PY'
 import configparser, sys
@@ -68,7 +67,7 @@ with open(p, "w") as f:
     c.write(f)
 PY
   then
-    say "config hardened (retention call_records_days<=7, sipp_trace_err present)"
+    say "config hardened (retention call_records_days<=1, sipp_trace_err present)"
   else
     say "WARN: could not harden $CFG (left unchanged)"
   fi
@@ -144,3 +143,41 @@ grow_root() {
   say "root volume now: $(df -h / | awk 'NR==2{print $2" total, "$4" free"}')"
 }
 grow_root || say "root grow had a problem (non-fatal)"
+
+# 5) Weekly DB VACUUM — return freed pages to the OS ------------------------
+# Retention DELETEs rows but SQLite never shrinks the file on its own, so a box
+# can sit on a giant mostly-empty DB even while pruning works (observed: a 15 GB
+# file holding only ~196k live rows). A weekly VACUUM rebuilds the file to its
+# live size. Guarded: only runs when there's real bloat to reclaim AND room for
+# the rebuild, finds the worker's actual DB wherever it lives, and uses the venv
+# python (no sqlite3 CLI needed). VACUUM briefly write-locks the DB; a busy
+# timeout lets it wait for a gap rather than fighting the live worker.
+VENV_PY=/opt/gencall/venv/bin/python3
+[ -x "$VENV_PY" ] || VENV_PY=$(command -v python3 || true)
+if [ -n "$VENV_PY" ]; then
+  cat > /etc/cron.weekly/gencall-vacuum <<EOF
+#!/bin/sh
+# GenCall: weekly VACUUM so pruned-but-not-shrunk DBs return space to disk.
+$VENV_PY - <<'PY'
+import sqlite3, os, glob, shutil
+MIN_BLOAT = 200 * 1024 * 1024   # only bother if >200 MB is reclaimable
+for db in sorted(set(glob.glob('/opt/gencall/**/*.db', recursive=True))):
+    try:
+        size = os.path.getsize(db)
+        free = shutil.disk_usage(os.path.dirname(db)).free
+        c = sqlite3.connect(db, timeout=120)
+        pc = c.execute('PRAGMA freelist_count').fetchone()[0]
+        ps = c.execute('PRAGMA page_size').fetchone()[0]
+        reclaimable = pc * ps
+        # Need free space for the rebuilt copy (~live size = size - reclaimable).
+        if reclaimable > MIN_BLOAT and free > (size - reclaimable) + 64 * 1024 * 1024:
+            c.execute('VACUUM')
+            print('vacuumed', db, 'reclaimed ~%d MB' % (reclaimable // 1048576))
+        c.close()
+    except Exception as e:
+        print('skip', db, e)
+PY
+EOF
+  chmod 0755 /etc/cron.weekly/gencall-vacuum
+  say "installed /etc/cron.weekly/gencall-vacuum"
+fi
