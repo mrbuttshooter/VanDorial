@@ -97,7 +97,12 @@ command -v openssl >/dev/null 2>&1 || die "openssl not on PATH (needed to genera
 CERT_DIR="$BASE_DIR/certs"
 CERT="$CERT_DIR/gencall.crt"
 KEY="$CERT_DIR/gencall.key"
-mkdir -p "$CERT_DIR"; chmod 750 "$CERT_DIR"
+# The non-root service user must be able to TRAVERSE this dir and READ the key,
+# or uvicorn dies with PermissionError and systemd crash-loops the worker. Own
+# the dir by the service user (750 lets the owner traverse; others can't peek).
+mkdir -p "$CERT_DIR"
+chown "$GC_USER":"$GC_USER" "$CERT_DIR" 2>/dev/null || true
+chmod 750 "$CERT_DIR"
 
 if [ -f "$CERT" ] && [ -f "$KEY" ]; then
   ok "TLS cert already present ($CERT) — reusing (delete it to regenerate)"
@@ -120,6 +125,18 @@ else
 fi
 chmod 600 "$KEY"; chmod 644 "$CERT"
 chown "$GC_USER":"$GC_USER" "$KEY" "$CERT" 2>/dev/null || warn "could not chown cert to $GC_USER (continuing)"
+
+# Pre-flight: PROVE the service user can actually read the key BEFORE we flip the
+# config + restart. If it can't, leave the box on HTTP (don't crash-loop it).
+if [ "$GC_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+  if ! runuser -u "$GC_USER" -- test -r "$KEY" 2>/dev/null; then
+    die "service user '$GC_USER' cannot read $KEY — fix perms/ownership; config left on HTTP"
+  fi
+elif [ "$GC_USER" != "root" ]; then
+  if ! sudo -u "$GC_USER" test -r "$KEY" 2>/dev/null; then
+    die "service user '$GC_USER' cannot read $KEY — fix perms/ownership; config left on HTTP"
+  fi
+fi
 
 # ── 4. Point the config at it and restart ────────────────────────────────────
 set_cfg web ssl true

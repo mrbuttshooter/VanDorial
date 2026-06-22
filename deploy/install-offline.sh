@@ -170,7 +170,11 @@ if [ "$USE_TLS" = true ]; then
   CERT_DIR="$INSTALL_DIR/certs"
   CERT="$CERT_DIR/gencall.crt"
   KEY="$CERT_DIR/gencall.key"
-  mkdir -p "$CERT_DIR"; chmod 750 "$CERT_DIR"
+  mkdir -p "$CERT_DIR"
+  # Service user must own/traverse this dir to read the key (else uvicorn dies
+  # with PermissionError and systemd crash-loops the worker).
+  chown "$GC_USER":"$GC_USER" "$CERT_DIR" 2>/dev/null || true
+  chmod 750 "$CERT_DIR"
   if [ -f "$CERT" ] && [ -f "$KEY" ]; then
     ok "TLS cert already present ($CERT) — reusing"
   else

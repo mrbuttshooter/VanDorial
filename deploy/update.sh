@@ -141,7 +141,11 @@ if [ -x "$GC_BIN" ] && [ -f "$CFG" ]; then
     if [ -f "$CERT" ] && [ -f "$KEY" ]; then
       say "TLS cert present — not regenerated"
     elif command -v openssl >/dev/null 2>&1; then
-      mkdir -p "$BASE_DIR/certs"; chmod 750 "$BASE_DIR/certs"
+      mkdir -p "$BASE_DIR/certs"
+      # Own the dir by the service user so it can TRAVERSE it to read the key
+      # (else uvicorn dies PermissionError and systemd crash-loops the worker).
+      chown gencall:gencall "$BASE_DIR/certs" 2>/dev/null || true
+      chmod 750 "$BASE_DIR/certs"
       HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
       [ -n "$HOST_ADDR" ] || HOST_ADDR="$(hostname -f 2>/dev/null || hostname)"
       if printf '%s' "$HOST_ADDR" | grep -qE '^[0-9]+(\.[0-9]+){3}$'; then SAN="IP:$HOST_ADDR"; else SAN="DNS:$HOST_ADDR"; fi
