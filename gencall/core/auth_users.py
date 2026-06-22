@@ -69,6 +69,12 @@ def verify_password(password: str, encoded: str) -> bool:
     return hmac.compare_digest(dk, expected)
 
 
+# A fixed, valid-format hash used only to spend the SAME PBKDF2 time on logins
+# for unknown/disabled users as for real ones — otherwise the response latency
+# reveals whether a username exists (an enumeration oracle).
+_DUMMY_PASSWORD_HASH = hash_password("gencall-login-timing-equalizer")
+
+
 # ─── Users ───────────────────────────────────────────────────────────────────
 
 class UserManager:
@@ -115,6 +121,9 @@ class UserManager:
         try:
             u = session.query(User).filter_by(username=(username or "").strip()).first()
             if not u or not u.enabled:
+                # Spend the same PBKDF2 time as a real check so login latency
+                # can't be used to tell whether the username exists.
+                verify_password(password, _DUMMY_PASSWORD_HASH)
                 return None
             if not verify_password(password, u.password_hash):
                 return None
