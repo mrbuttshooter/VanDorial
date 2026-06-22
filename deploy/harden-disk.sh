@@ -9,7 +9,7 @@
 # then 500'd). This sets the guards that keep that from happening:
 #
 #   1. Caps journald (SystemMaxUse) so the system journal can't grow unbounded.
-#   2. Caps [retention] call_records_days at 7 in the live config (never RAISES
+#   2. Caps [retention] call_records_days at 1 in the live config (never RAISES
 #      it — a lower operator value is respected) and ensures the disk-saving loop
 #      knob [loops] sipp_trace_err exists (off).
 #   3. Installs a daily cron that sweeps ORPHANED SIPp temp logs + old release
@@ -55,12 +55,12 @@ def ensure(sec, key, val):
     if not c.has_section(sec):
         c.add_section(sec)
     c.set(sec, key, val)
-days = 7
+days = 1
 if c.has_option("retention", "call_records_days"):
     try:
-        days = min(7, int(c.get("retention", "call_records_days")))
+        days = min(1, int(c.get("retention", "call_records_days")))
     except ValueError:
-        days = 7
+        days = 1
 ensure("retention", "call_records_days", str(days))
 if not c.has_option("loops", "sipp_trace_err"):
     ensure("loops", "sipp_trace_err", "false")

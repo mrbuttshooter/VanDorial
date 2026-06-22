@@ -479,6 +479,7 @@ def fleet_resources():
     per box, so two IPs sharing one box don't poll it twice."""
     from gencall.api.routes import _box_resources
     import httpx
+    from concurrent.futures import ThreadPoolExecutor
 
     nodes = []
     try:
@@ -497,6 +498,36 @@ def fleet_resources():
     local: Optional[dict] = None        # this box, computed once on demand
     cache: dict = {}                    # api_url -> resources dict (with online/error)
 
+    # Pre-fetch every DISTINCT remote worker's /api/resources CONCURRENTLY with a
+    # short timeout, so a slow/dead worker can't serialize the whole fleet view.
+    # This was the main reason the controller console was slow to load: the old
+    # code polled each worker one-by-one at 6 s, so a few sluggish/full boxes
+    # (e.g. one swapping or disk-full) added up to many seconds every page load.
+    remotes: dict = {}
+    for n in nodes:
+        u = n.get("api_url") or ""
+        if u and u not in remotes:
+            remotes[u] = n.get("api_key")
+
+    def _fetch_res(item):
+        api_url, api_key = item
+        try:
+            headers = {"X-API-Key": api_key} if api_key else {}
+            with httpx.Client(verify=False, timeout=4.0) as cl:
+                r = cl.get(api_url.rstrip("/") + "/api/resources", headers=headers)
+            if r.status_code == 200:
+                d = dict(r.json() or {})
+                d["online"] = True
+                return api_url, d
+            return api_url, {"online": False, "error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            return api_url, {"online": False, "error": str(e)}
+
+    if remotes:
+        with ThreadPoolExecutor(max_workers=min(8, len(remotes))) as ex:
+            for api_url, d in ex.map(_fetch_res, list(remotes.items())):
+                cache[api_url] = d
+
     out = []
     for n in nodes:
         api_url = n.get("api_url") or ""
@@ -506,20 +537,7 @@ def fleet_resources():
                 local["online"] = True
             res = dict(local)
         else:
-            if api_url not in cache:
-                try:
-                    headers = {"X-API-Key": n["api_key"]} if n.get("api_key") else {}
-                    with httpx.Client(verify=False, timeout=6.0) as cl:
-                        r = cl.get(api_url.rstrip("/") + "/api/resources", headers=headers)
-                    if r.status_code == 200:
-                        d = dict(r.json() or {})
-                        d["online"] = True
-                        cache[api_url] = d
-                    else:
-                        cache[api_url] = {"online": False, "error": f"HTTP {r.status_code}"}
-                except Exception as e:
-                    cache[api_url] = {"online": False, "error": str(e)}
-            res = dict(cache[api_url])
+            res = dict(cache.get(api_url, {"online": False, "error": "unreachable"}))
         out.append({
             "id": n.get("id"),
             "ip": n.get("ip"),

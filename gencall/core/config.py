@@ -488,11 +488,12 @@ class Config:
     def retention_call_records_days(self):
         """Delete call_records older than this many days (0 disables pruning).
 
-        Default 7 (was 30): a loop box writes ~400k rows/day, so 30 days grew the
-        SQLite DB to multiple GB and filled small disks. 7 days is plenty for
-        diagnostics; lower it further ([retention] call_records_days = 2) on a
-        high-volume worker, or raise it on a dedicated archive box."""
-        return self.getint("retention", "call_records_days", 7)
+        Default 1 (was 7→30): a loop box writes ~400k rows/day, so even a week
+        grew the SQLite DB to multiple GB and filled small disks (a box hit a
+        15 GB phantom file). 1 day is plenty for live diagnostics; billing owns
+        the authoritative records, so we don't keep history here. Raise it only
+        on a dedicated archive box."""
+        return self.getint("retention", "call_records_days", 1)
 
     @property
     def retention_interval_hours(self):
