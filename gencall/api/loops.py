@@ -311,12 +311,20 @@ class FleetCaptureReq(BaseModel):
 
 
 def _worker_key(box: str) -> str:
-    """The api_key for the worker whose api_url == box (for proxying), or ""."""
+    """The api_key for the worker whose api_url == box (for proxying).
+
+    Rejects a ``box`` that is not a REGISTERED node's api_url with 400 — without
+    this, an (authenticated) caller could set ``box`` to an arbitrary URL and the
+    controller would proxy a request there (SSRF). Only known fleet workers are
+    valid proxy targets. A registered worker with no key legitimately returns "".
+    """
     from gencall.db.models import Server
     session = _db().get_session()
     try:
         s = session.query(Server).filter_by(api_url=box).first()
-        return s.api_key if s else ""
+        if s is None:
+            raise HTTPException(400, f"unknown worker box {box!r} (not a registered node)")
+        return s.api_key or ""
     finally:
         session.close()
 

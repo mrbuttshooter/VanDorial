@@ -5,11 +5,23 @@ Manages SIPp XML scenarios - built-in templates and custom scenarios.
 
 import os
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger("gencall.scenarios")
 
 SCENARIO_DIR = os.path.join(os.path.dirname(__file__), "templates")
+
+# Scenario names map onto "<name>.xml" files, so a name MUST be a bare filename
+# token — no path separators, no "..", no leading dot. Without this an API caller
+# could read/overwrite/delete arbitrary .xml files (e.g. the loop_uac.xml
+# template) via name="../../../path". Names are simple identifiers in practice.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _is_safe_name(name: str) -> bool:
+    """True iff ``name`` is a safe bare scenario identifier (no traversal)."""
+    return bool(name) and ".." not in name and _SAFE_NAME.match(name) is not None
 
 
 class ScenarioManager:
@@ -55,6 +67,8 @@ class ScenarioManager:
         """Get the file path for a named scenario."""
         if name in self._builtin:
             return self._builtin[name]
+        if not _is_safe_name(name):
+            return None
         if self.custom_dir:
             custom_path = os.path.join(self.custom_dir, f"{name}.xml")
             if os.path.exists(custom_path):
@@ -73,6 +87,10 @@ class ScenarioManager:
         """Save a custom scenario XML file."""
         if not self.custom_dir:
             raise ValueError("No custom scenario directory configured")
+        if not _is_safe_name(name):
+            raise ValueError(
+                "invalid scenario name (use letters, digits, '_', '-', '.'; "
+                "no path separators or '..')")
         os.makedirs(self.custom_dir, exist_ok=True)
         path = os.path.join(self.custom_dir, f"{name}.xml")
         with open(path, "w") as f:
@@ -83,6 +101,8 @@ class ScenarioManager:
     def delete_custom_scenario(self, name: str) -> bool:
         """Delete a custom scenario."""
         if not self.custom_dir:
+            return False
+        if not _is_safe_name(name):
             return False
         path = os.path.join(self.custom_dir, f"{name}.xml")
         if os.path.exists(path):

@@ -27,7 +27,9 @@ import time
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+
+from gencall.api.routes import require_api_key
 
 logger = logging.getLogger("gencall.controller.ws")
 
@@ -275,7 +277,7 @@ async def websocket_main(ws: WebSocket):
         await manager.disconnect_client(client)
 
 
-@router.get("/api/ws/status")
+@router.get("/api/ws/status", dependencies=[Depends(require_api_key)])
 async def ws_status():
     return manager.to_dict()
 
