@@ -231,6 +231,10 @@ def start_loop(req: StartLoopRequest):
     except ValueError as e:
         raise HTTPException(422, str(e))
 
+    # Diurnal-profile fields handed to the engine. When the run targets a node and
+    # is profiled, tz_offset is auto-derived from the node's drop zone below.
+    profile_params = {f: getattr(req, f) for f in _PROFILE_FIELDS}
+
     # Resolve the node ("each IP one loop"): its source IP and number pool drive
     # the campaign. This is how the UI launches — pick a node, it carries both.
     local_ip = req.local_ip
@@ -245,6 +249,13 @@ def start_loop(req: StartLoopRequest):
             raise HTTPException(
                 422, f"Node '{node['name']}' has no number pool — generate one first"
             )
+        # Auto-timezone (see _start_on_member): profiled campaigns follow the
+        # destination market's local daypart — derive tz_offset from the node's
+        # drop zone; the manual value is kept for unknown zones.
+        if profile_params.get("profile_enabled") and node.get("dest_zone"):
+            from gencall.core import tz_offsets
+            profile_params["tz_offset"] = tz_offsets.offset_for_zone(
+                node["dest_zone"], profile_params.get("tz_offset", 0) or 0)
         # REMOTE node (one controller, many workers): run the loop ON its worker.
         if node.get("api_url"):
             payload = {
@@ -255,7 +266,7 @@ def start_loop(req: StartLoopRequest):
                 "duration_max_s": req.duration_max_s, "match_key": req.match_key,
                 "target_calls": req.target_calls, "target_minutes": req.target_minutes,
                 "rtp": req.rtp, "rtp_loop": req.rtp_loop,
-                **{f: getattr(req, f) for f in _PROFILE_FIELDS},
+                **profile_params,
             }
             try:
                 res = _worker_post(node["api_url"], node.get("api_key", ""),
@@ -292,7 +303,7 @@ def start_loop(req: StartLoopRequest):
             node_id=req.node_id,
             rtp=req.rtp,
             rtp_loop=req.rtp_loop,
-            **{f: getattr(req, f) for f in _PROFILE_FIELDS},
+            **profile_params,
         )
     except IPBusy as e:
         raise HTTPException(409, str(e))
@@ -1093,6 +1104,14 @@ def _start_on_member(name: str, params: dict, member: dict) -> dict:
         return {**base, "ok": False, "skipped": "disabled"}
     if not member.get("csv_path"):
         return {**base, "ok": False, "skipped": "no number pool"}
+    # Auto-timezone: a profiled campaign follows the destination market's local
+    # daypart, so derive tz_offset from the node's drop zone (overriding the
+    # preset's manual value; unknown zones keep it). Per-member copy so a group
+    # run never leaks one member's offset onto the next.
+    if params.get("profile_enabled") and member.get("dest_zone"):
+        from gencall.core import tz_offsets
+        params = {**params, "tz_offset": tz_offsets.offset_for_zone(
+            member["dest_zone"], params.get("tz_offset", 0) or 0)}
     # REMOTE member: start the loop on its worker.
     if member.get("api_url"):
         payload = {"name": name, "local_ip": member["ip"],
@@ -1226,7 +1245,8 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
                 raise HTTPException(404, f"Node {req.node_id} not found")
             members = [{"id": n.id, "name": n.name, "ip": n.ip,
                         "csv_path": n.csv_path, "enabled": n.enabled,
-                        "api_url": n.api_url, "api_key": n.api_key}]
+                        "api_url": n.api_url, "api_key": n.api_key,
+                        "dest_zone": n.dest_zone}]
         elif req.group_id is not None:
             g = session.query(NodeGroup).filter_by(id=req.group_id).first()
             if not g:
@@ -1235,7 +1255,8 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
             members = [
                 {"id": m.id, "name": m.name, "ip": m.ip,
                  "csv_path": m.csv_path, "enabled": m.enabled,
-                 "api_url": m.api_url, "api_key": m.api_key}
+                 "api_url": m.api_url, "api_key": m.api_key,
+                 "dest_zone": m.dest_zone}
                 for m in session.query(Server).filter_by(group_id=g.id).all()
                 if wanted is None or m.id in wanted
             ]

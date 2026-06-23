@@ -641,8 +641,10 @@ class LoopEngine:
                     "ramp_down_end": int(ramp_down_end),
                     "tz_offset": int(tz_offset),
                 }
+                # GMT-anchored: the curve follows UTC and tz_offset rotates it to
+                # the destination market's local daypart (not the box's clock).
                 hour_rate = self._shaper_target_rate(
-                    profile_view, _time.localtime().tm_hour)
+                    profile_view, _time.gmtime().tm_hour)
                 if hour_rate > 0:
                     effective_rate = hour_rate
 
@@ -922,7 +924,7 @@ class LoopEngine:
         import time as _time
         while not self._shaper_stop.is_set():
             try:
-                hour = _time.localtime().tm_hour
+                hour = _time.gmtime().tm_hour  # GMT-anchored curve (tz_offset shifts it)
                 # Snapshot the items so a concurrent start/stop can't mutate the
                 # dict mid-iteration.
                 for cid, campaign in list(self._campaigns.items()):
