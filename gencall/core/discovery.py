@@ -54,8 +54,9 @@ def parse_beacon(data: bytes, expected_token: str) -> Optional[dict]:
     (``address``/``hostname``/``version``) or None if it is not a valid beacon
     for our fleet (bad JSON, wrong magic, token mismatch, or no address).
 
-    An empty ``expected_token`` means "accept any token" (open VLAN); set a token
-    on every box to reject foreign/forged beacons.
+    An empty ``expected_token`` rejects ALL beacons (fail closed): set ``[fleet]
+    token`` on every box to use discovery, so foreign/forged beacons can't
+    auto-register a node on an open VLAN.
     """
     if not data or len(data) > MAX_BEACON_BYTES:
         return None
@@ -65,7 +66,9 @@ def parse_beacon(data: bytes, expected_token: str) -> Optional[dict]:
         return None
     if not isinstance(b, dict) or b.get("magic") != BEACON_MAGIC:
         return None
-    if expected_token and b.get("token") != expected_token:
+    # Fail CLOSED: with no fleet token configured, reject EVERY beacon rather than
+    # "accept any" — discovery must not auto-register foreign/forged nodes.
+    if not expected_token or b.get("token") != expected_token:
         return None
     address = (b.get("address") or "").strip()
     if not address:

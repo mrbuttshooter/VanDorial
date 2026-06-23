@@ -202,6 +202,49 @@ def _node_client(node: Node) -> NodeClient:
     return NodeClient(node.address, node.api_key, verify=verify_tls)
 
 
+class FleetTrustBody(BaseModel):
+    ips: list[str] = []
+    drop_untrusted: bool = False
+
+
+@router.post("/api/fleet/trust", dependencies=[Depends(require_api_key)])
+async def push_fleet_trust(body: FleetTrustBody):
+    """Push the inbound trust whitelist to EVERY enabled node (controller fan-out).
+
+    Set the whitelist + drop flag once here and it is applied to each worker's
+    ``POST /api/config/trust``. Control-plane only — it never touches a call.
+    Empty ``ips`` = allow-all (the per-worker default; leave it off until you want
+    to enforce trusted inbound sources, e.g. when selling to a client)."""
+    import ipaddress
+    for tok in body.ips:
+        try:
+            ipaddress.ip_network(tok.strip(), strict=False)
+        except ValueError:
+            raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
+    ips = [t.strip() for t in body.ips if t.strip()]
+    if db is None:
+        raise HTTPException(503, "controller database not configured")
+    session = db.get_session()
+    try:
+        targets = [(n.id, n.name, _node_client(n))
+                   for n in session.query(Node).all() if n.enabled]
+    finally:
+        session.close()
+
+    async def _push(nid, name, client):
+        try:
+            res = await client.set_trust_whitelist(ips, body.drop_untrusted)
+            return {"node_id": nid, "node": name, "ok": True, "trust": res}
+        except Exception as e:  # node offline / refused — reported, not fatal
+            return {"node_id": nid, "node": name, "ok": False, "error": str(e)}
+
+    results = list(await asyncio.gather(
+        *[_push(nid, name, c) for nid, name, c in targets]))
+    applied = sum(1 for r in results if r.get("ok"))
+    return {"status": "pushed", "applied": applied, "total": len(results),
+            "ips": ips, "drop_untrusted": body.drop_untrusted, "results": results}
+
+
 async def _probe_health(node: Node) -> dict:
     """Probe a node's health and persist it. Returns the health dict (with
     derived 'online')."""

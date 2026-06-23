@@ -24,23 +24,47 @@ def _is_safe_name(name: str) -> bool:
     return bool(name) and ".." not in name and _SAFE_NAME.match(name) is not None
 
 
-# SIPp runs a scenario's <exec command="..."/> / int_cmd as a SHELL command, so a
-# saved custom scenario that the test runner later executes is remote code
-# execution. Custom scenarios only ever need the media/rtp exec forms
-# (rtp_stream, play_pcap_audio), so reject the shell-exec attributes outright.
-_DANGEROUS_EXEC = re.compile(r"<exec\b[^>]*\b(command|int_cmd)\s*=", re.IGNORECASE)
+# A SIPp <exec> action carrying a worker-exec verb (the "command"/"int_cmd"
+# attributes) runs arbitrary code on the worker, so a saved custom scenario that
+# the test runner later executes would be remote code execution. Custom scenarios
+# only ever need the media/rtp exec forms (rtp_stream, play_pcap_audio), so the
+# worker-exec verbs are refused.
+#
+# The decision is made on a REAL XML parse, not a text regex: a regex over raw
+# text is defeated by a literal '>' inside an earlier attribute value (XML allows
+# it there), which smuggles a verb past a ``[^>]*`` guard. To keep the parse
+# itself safe (XXE / entity expansion) we refuse any DOCTYPE/ENTITY first, then
+# parse with the stdlib (it does not fetch external entities) and walk every
+# <exec> element.
+import xml.etree.ElementTree as _ET
+
+_DOCTYPE_OR_ENTITY = re.compile(r"<!\s*(DOCTYPE|ENTITY)\b", re.IGNORECASE)
+_EXEC_SHELL_ATTRS = ("command", "int_cmd")
 
 
 def reject_dangerous_scenario(content: str) -> None:
-    """Raise ValueError if ``content`` contains a shell-executing SIPp action.
+    """Raise ValueError if ``content`` contains a worker-executing SIPp action.
 
-    Blocks ``<exec command=...>`` / ``<exec int_cmd=...>`` (arbitrary command
-    execution on the worker). The benign media forms (``rtp_stream``,
-    ``play_pcap_audio``) are left alone."""
-    if _DANGEROUS_EXEC.search(content or ""):
+    Blocks an <exec> element carrying a worker-exec verb (``command`` /
+    ``int_cmd`` — arbitrary code execution on the worker). The benign media forms
+    (``rtp_stream``, ``play_pcap_audio``) are left alone. Decided on a real XML
+    parse, so it cannot be smuggled past with a literal '>' in an attribute
+    value."""
+    text = content or ""
+    if _DOCTYPE_OR_ENTITY.search(text):
         raise ValueError(
-            "scenario rejected: <exec command=...>/<exec int_cmd=...> is not "
-            "allowed (it runs shell commands on the worker)")
+            "scenario rejected: DOCTYPE/ENTITY declarations are not allowed")
+    try:
+        root = _ET.fromstring(text)
+    except _ET.ParseError as e:
+        raise ValueError(f"scenario rejected: not well-formed XML ({e})")
+    for el in root.iter():
+        if el.tag.rsplit("}", 1)[-1].lower() == "exec":
+            for attr in el.attrib:
+                if attr.rsplit("}", 1)[-1].lower() in _EXEC_SHELL_ATTRS:
+                    raise ValueError(
+                        "scenario rejected: an <exec> command/int_cmd attribute "
+                        "is not allowed — it executes arbitrary code on the worker")
 
 
 class ScenarioManager:

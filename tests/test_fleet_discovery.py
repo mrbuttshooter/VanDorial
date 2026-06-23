@@ -30,9 +30,14 @@ def test_parse_rejects_wrong_token():
     assert d.parse_beacon(raw, "secret") is not None
 
 
-def test_parse_empty_token_accepts_any():
+def test_parse_empty_token_rejects_all():
+    # Fail closed (v2.2.6): with no fleet token configured, every beacon is
+    # rejected — discovery must not auto-register foreign/forged nodes.
     raw = d.encode_beacon(d.build_beacon("whatever", "http://10.0.0.9:8080"))
-    assert d.parse_beacon(raw, "") is not None  # open VLAN
+    assert d.parse_beacon(raw, "") is None
+    # a matching token still parses normally
+    raw2 = d.encode_beacon(d.build_beacon("tok", "http://10.0.0.9:8080"))
+    assert d.parse_beacon(raw2, "tok") is not None
 
 
 def test_parse_rejects_garbage_and_foreign():

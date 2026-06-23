@@ -81,3 +81,58 @@ def test_sipp_command_log_redacts_credentials():
     red = " ".join(_redact_cmd(cmd))
     assert "s3cr3t" not in red and "alice" not in red
     assert cmd[5] == "s3cr3t"             # original argv NOT mutated (engine sends real creds)
+
+
+# ── Wave 2 #2: scenario-RCE filter decides on a real XML parse (regex bypass) ──
+
+from gencall.scenarios.manager import reject_dangerous_scenario
+
+_SHELL_ATTR = "command"   # the <exec> attribute SIPp would run as a shell verb
+
+
+def _exec_scn(attrs):
+    return f"<scenario><exec {attrs}/></scenario>"
+
+
+def test_scenario_rejects_shell_exec_attr():
+    with pytest.raises(ValueError):
+        reject_dangerous_scenario(_exec_scn(f'{_SHELL_ATTR}="id"'))
+
+
+def test_scenario_rejects_shell_attr_smuggled_past_gt():
+    # Old regex bypass: a literal '>' inside an earlier attribute value let the
+    # shell attr slip past the denylist. A real XML parse catches it.
+    with pytest.raises(ValueError):
+        reject_dangerous_scenario(_exec_scn(f'rtp_stream="x>y" {_SHELL_ATTR}="x"'))
+
+
+def test_scenario_allows_benign_media_exec():
+    reject_dangerous_scenario(_exec_scn('play_pcap_audio="a.pcap"'))   # no raise
+
+
+def test_scenario_rejects_doctype_entity():
+    with pytest.raises(ValueError):
+        reject_dangerous_scenario('<!DOCTYPE x [<!ENTITY a "b">]><scenario/>')
+
+
+# ── Wave 2 #10: discovery fails CLOSED with no fleet token (no "accept any") ───
+
+from gencall.core.discovery import parse_beacon, encode_beacon, build_beacon
+
+_ADDR = "http://10.0.0.9:8080"
+
+
+def test_discovery_rejects_beacons_when_no_token_configured():
+    beacon = encode_beacon(build_beacon("", _ADDR, "h", "v"))
+    assert parse_beacon(beacon, "") is None          # empty token now REJECTS (was accept-any)
+
+
+def test_discovery_accepts_matching_token():
+    beacon = encode_beacon(build_beacon("fleet-tok", _ADDR, "h", "v"))
+    out = parse_beacon(beacon, "fleet-tok")
+    assert out is not None and out["address"] == _ADDR
+
+
+def test_discovery_rejects_wrong_token():
+    beacon = encode_beacon(build_beacon("wrong", _ADDR, "h", "v"))
+    assert parse_beacon(beacon, "fleet-tok") is None

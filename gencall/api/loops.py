@@ -661,7 +661,11 @@ def loop_pool_stats(campaign_id: str):
     plen = getattr(cfg, "loops_adaptive_prefix_len", 6)
     min_attempts = getattr(cfg, "loops_adaptive_min_attempts", 30)
     min_asr = getattr(cfg, "loops_adaptive_min_asr", 0.5)
-    stats = po.prefix_asr(eng.db, campaign_id, plen)
+    # Bound the scan: this endpoint reads call_records (a high-growth table), so
+    # score only the most recent calls, never the whole multi-100k-row history —
+    # otherwise repeatedly opening this view is a memory/CPU DoS. The adaptive
+    # optimizer's own scoring is unchanged; this is display only.
+    stats = po.prefix_asr(eng.db, campaign_id, plen, recent_limit=50000)
     keep, drop, undecided = po.classify_prefixes(stats, min_attempts, min_asr)
     label = {**{p: "keep" for p in keep}, **{p: "drop" for p in drop},
              **{p: "undecided" for p in undecided}}
