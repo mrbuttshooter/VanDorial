@@ -479,14 +479,14 @@ async def _ws_authorized(ws: WebSocket) -> bool:
     """Validate the API key on a WebSocket handshake before streaming data.
 
     Browsers can't set headers on a WS, so the console passes the key as the
-    ``api_key`` query param (header also accepted for non-browser clients). When
-    no key store is configured (no DB) the app already runs auth-disabled, so we
-    mirror that degraded mode and allow — otherwise a valid key is required, so
-    the live /ws streams are no longer open to anyone who can reach the port."""
+    ``api_key`` query param (header also accepted for non-browser clients). A
+    valid key/session is always required; with no key store configured we fail
+    CLOSED (mirroring the REST 503), so a DB/gateway outage can't open the live
+    /ws streams to anyone who can reach the port."""
     from gencall.api import routes as _routes
     gw = getattr(_routes, "gateway", None)
     if gw is None:
-        return True
+        return False  # fail closed — a missing key store is not "auth disabled"
     key = ws.query_params.get("api_key") or ws.headers.get("x-api-key")
     if not key:
         return False

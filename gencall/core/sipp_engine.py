@@ -19,6 +19,19 @@ from gencall.core.config import Config
 
 logger = logging.getLogger("gencall.sipp")
 
+
+def _redact_cmd(cmd):
+    """A copy of a SIPp argv with -au/-ap credential VALUES masked, for safe
+    logging. The REAL (unredacted) command is what gets executed — this only
+    sanitizes the log line so SIP auth passwords never land in gencall.log /
+    journald. The call on the wire is unchanged."""
+    out = list(cmd)
+    for i, tok in enumerate(out):
+        if tok in ("-ap", "-au") and i + 1 < len(out):
+            out[i + 1] = "***"
+    return out
+
+
 # os.setsid / os.killpg / os.getpgid are POSIX-only. On Windows (and any other
 # non-POSIX platform) they are absent, so we detect support once and fall back to
 # plain process control there. This keeps Unix behavior (start SIPp in its own
@@ -391,7 +404,7 @@ class SIPpEngine:
 
         try:
             cmd = instance.build_command(self.config)
-            logger.info("Starting SIPp: %s", " ".join(cmd))
+            logger.info("Starting SIPp: %s", " ".join(_redact_cmd(cmd)))
 
             popen_kwargs = {
                 "stdout": subprocess.DEVNULL,

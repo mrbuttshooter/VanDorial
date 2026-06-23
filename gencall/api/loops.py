@@ -227,7 +227,9 @@ def start_loop(req: StartLoopRequest):
         raise HTTPException(422, str(e))
     # OOM guard: rate/channel upper bounds.
     try:
-        validate_caps(req.rate, req.max_concurrent, config)
+        validate_caps(req.rate, req.max_concurrent, config,
+                      duration_s=req.duration_s, duration_max_s=req.duration_max_s,
+                      target_calls=req.target_calls, target_minutes=req.target_minutes)
     except ValueError as e:
         raise HTTPException(422, str(e))
 
@@ -944,7 +946,9 @@ def start_node_group(group_id: int, req: GroupStartRequest = Body(default=None))
         # Validate the shared destination + caps ONCE before fanning out.
         try:
             validate_dest_host(g.dest_host, config.loops_dest_allowlist)
-            validate_caps(g.rate, g.max_concurrent, config)
+            validate_caps(g.rate, g.max_concurrent, config,
+                          duration_s=g.duration_s, duration_max_s=g.duration_max_s,
+                          target_calls=g.target_calls, target_minutes=g.target_minutes)
         except (DestHostError, ValueError) as e:
             raise HTTPException(422, str(e))
         # Snapshot everything needed as plain values BEFORE closing the session
@@ -1216,7 +1220,9 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
         # Validate the destination + caps ONCE before launching.
         try:
             validate_dest_host(params["dest_host"], config.loops_dest_allowlist)
-            validate_caps(params["rate"], params["max_concurrent"], config)
+            validate_caps(params["rate"], params["max_concurrent"], config,
+                          duration_s=params.get("duration_s"), duration_max_s=params.get("duration_max_s"),
+                          target_calls=params.get("target_calls"), target_minutes=params.get("target_minutes"))
         except (DestHostError, ValueError) as e:
             raise HTTPException(422, str(e))
         # Resolve the target(s): a single node, or a group's (optionally subset) members.

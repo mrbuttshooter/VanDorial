@@ -21,6 +21,7 @@ from gencall.core.stats import StatsEngine
 from gencall.core.api_gateway import APIGateway
 from gencall.api.loop_validation import validate_transport
 from gencall.scenarios.manager import ScenarioManager
+from gencall import __version__
 from gencall.db.models import Database, Connector, Scenario, Server, TestRun, User
 
 logger = logging.getLogger("gencall.api")
@@ -28,7 +29,10 @@ logger = logging.getLogger("gencall.api")
 app = FastAPI(
     title="GenCall API",
     description="GenCall SIP Traffic Generator - REST API",
-    version="2.2.2",
+    version=__version__,
+    # Don't serve the interactive docs / OpenAPI schema unauthenticated — they map
+    # the whole API surface to any network peer. The console doesn't use them.
+    docs_url=None, redoc_url=None, openapi_url=None,
 )
 
 # Defense-in-depth response headers (clickjacking / MIME-sniff / CSP) on every
@@ -929,13 +933,13 @@ def get_test_history(limit: int = Query(default=50, ge=1, le=500)):
 # ─── System ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/console/bootstrap")
-def console_bootstrap():
+def console_bootstrap(request: Request):
     """Legacy console auto-auth — superseded by the login flow (/api/auth/login).
 
-    Once ANY console user account exists, this 404s and the console must be
-    logged into. It still hands out the key ONLY while there are zero accounts,
-    so an upgraded box isn't locked out before an admin user is created (the
-    installer creates one). New installs always have a user, so this stays off."""
+    404s once ANY console user account exists. In the residual zero-user window it
+    still mints the key, but ONLY for a loopback caller (so an exposed/0-user box
+    cannot hand admin to the network), and a DB error fails CLOSED instead of
+    handing out the key."""
     if gateway is not None and getattr(gateway, "users", None) is not None:
         try:
             if gateway.users.count_users() > 0:
@@ -943,9 +947,14 @@ def console_bootstrap():
         except HTTPException:
             raise
         except Exception:
-            pass  # DB hiccup: fall through to legacy behaviour rather than lock out
+            # DB hiccup: fail CLOSED — never fall through to handing out a key.
+            raise HTTPException(503, "auth temporarily unavailable")
     if not console_api_key:
         raise HTTPException(404, "Console auto-auth not configured")
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            404, "Console bootstrap is local-only — create a user: gencall users create admin")
     return {"api_key": console_api_key}
 
 
@@ -954,7 +963,7 @@ def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "2.2.2",
+        "version": __version__,
         "name": "GenCall",
         "active_tests": len([i for i in engine.instances.values()
                              if i.state == SIPpState.RUNNING]) if engine else 0,

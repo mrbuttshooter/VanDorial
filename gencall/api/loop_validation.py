@@ -132,11 +132,23 @@ def validate_transport(transport: str) -> str:
     return t
 
 
-def validate_caps(rate: float, max_concurrent: int, config) -> None:
-    """Bound rate + per-campaign channels against config caps. Raises ValueError.
+# Generous run-target ceilings — a real campaign never hits them; they only stop
+# runaway/abusive values that would pin channels or exhaust the box. They do NOT
+# change what a valid campaign sends on the wire.
+_MAX_TARGET_MINUTES = 525_600_000   # a year of minutes
+_MAX_TARGET_CALLS = 2_000_000_000
 
-    Negatives/zero are already rejected by the pydantic model; this enforces the
-    upper bounds (which depend on runtime config and so cannot live on the model).
+
+def validate_caps(rate: float, max_concurrent: int, config, *,
+                  duration_s: int = None, duration_max_s: int = None,
+                  target_calls: int = None, target_minutes: int = None) -> None:
+    """Bound rate + per-campaign channels (and, when given, hold duration + run
+    targets) against config caps. Raises ValueError.
+
+    Upper bounds only — the pydantic model already rejects negatives/zero; these
+    ceilings are generous (a real campaign never hits them) and only stop runaway
+    values that would pin all channels or exhaust the box. Never alters what a
+    valid campaign sends on the wire.
     """
     max_rate = config.loops_max_rate_cps
     if rate > max_rate:
@@ -148,4 +160,19 @@ def validate_caps(rate: float, max_concurrent: int, config) -> None:
         raise ValueError(
             f"max_concurrent {max_concurrent} exceeds the per-campaign "
             f"channel cap of {max_channels}"
+        )
+    max_dur = config.loops_max_duration_s
+    for label, val in (("duration_s", duration_s),
+                       ("duration_max_s", duration_max_s)):
+        if val is not None and val > max_dur:
+            raise ValueError(
+                f"{label} {val}s exceeds the per-call hold cap of {max_dur}s"
+            )
+    if target_minutes is not None and target_minutes > _MAX_TARGET_MINUTES:
+        raise ValueError(
+            f"target_minutes {target_minutes} exceeds the cap of {_MAX_TARGET_MINUTES}"
+        )
+    if target_calls is not None and target_calls > _MAX_TARGET_CALLS:
+        raise ValueError(
+            f"target_calls {target_calls} exceeds the cap of {_MAX_TARGET_CALLS}"
         )

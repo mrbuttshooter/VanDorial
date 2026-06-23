@@ -177,11 +177,19 @@ def test_bootstrap_disabled_once_a_user_exists(db, monkeypatch):
     monkeypatch.setattr(routes, "gateway", gw)
     monkeypatch.setattr(routes, "console_api_key", "gc_demo_key")
 
-    # zero users -> bootstrap still works (don't lock out an upgraded box)
-    assert routes.console_bootstrap() == {"api_key": "gc_demo_key"}
+    import types
+    local = types.SimpleNamespace(client=types.SimpleNamespace(host="127.0.0.1"))
+    remote = types.SimpleNamespace(client=types.SimpleNamespace(host="10.0.0.9"))
 
-    # once a user exists -> bootstrap is disabled
+    # zero users + loopback -> key (don't lock out a LOCAL upgrade)
+    assert routes.console_bootstrap(local) == {"api_key": "gc_demo_key"}
+    # zero users + network caller -> refused (never hand admin to the network)
+    with pytest.raises(HTTPException) as ei:
+        routes.console_bootstrap(remote)
+    assert ei.value.status_code == 404
+
+    # once a user exists -> bootstrap is disabled for everyone
     gw.users.create_user("admin", "supersecret")
     with pytest.raises(HTTPException) as ei:
-        routes.console_bootstrap()
+        routes.console_bootstrap(local)
     assert ei.value.status_code == 404

@@ -266,7 +266,7 @@ async def _ws_authorized(ws: WebSocket) -> bool:
     from gencall.api import routes as _routes
     gw = getattr(_routes, "gateway", None)
     if gw is None:
-        return True
+        return False  # fail closed (no key store) — mirror the REST 503
     key = ws.query_params.get("api_key") or ws.headers.get("x-api-key")
     if not key:
         return False

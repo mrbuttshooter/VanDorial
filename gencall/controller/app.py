@@ -148,6 +148,7 @@ def create_controller_app(config: Config = None):
         title="VanDorial Fleet Controller API",
         description="VanDorial fleet control-plane for GenCall workers",
         version="2.0.0",
+        docs_url=None, redoc_url=None, openapi_url=None,
     )
 
     app.include_router(controller_routes.router)
