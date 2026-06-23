@@ -393,6 +393,34 @@ class LoopMatcher:
             "minutes_in_ms": minutes_in_ms, "failures_out": failures_out,
         }
 
+    def minutes_out_today_ms(self, campaign_id) -> int:
+        """Answered-outbound minutes (ms) since 00:00 GMT today — the per-GMT-day
+        figure the UI's daily target bar measures against.
+
+        Computed live, never snapshotted: a per-day value would go stale across
+        the GMT-midnight rollover. Mirrors _aggregate's answered-outbound sum with
+        a ``created_at >= today-00:00-UTC`` floor (created_at is a UTC ISO-8601
+        string, so a lexical ``>=`` is a chronological one)."""
+        if self.db is None:
+            return 0
+        floor = datetime.datetime.now(datetime.timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).isoformat()
+        from sqlalchemy import text
+        try:
+            with self.db.engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT COALESCE(SUM(CASE WHEN final_code>=200 AND "
+                         "final_code<300 THEN COALESCE(duration_ms,0) ELSE 0 END),0) "
+                         "FROM call_records WHERE campaign_id=:cid "
+                         "AND direction='out' AND created_at >= :floor"),
+                    {"cid": campaign_id, "floor": floor},
+                ).fetchone()
+            return int((row[0] if row else 0) or 0)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not compute today's minutes for %s: %s",
+                           campaign_id, e)
+            return 0
+
     def match_campaign(self, campaign_id, match_key="exact", window_s=None):
         """Match one campaign's records and return (and persist) its stats dict.
 
@@ -619,6 +647,7 @@ class LoopMatcher:
             "calls_out": row[2],
             "answered_out": row[3],
             "minutes_out_ms": row[4],
+            "minutes_out_today_ms": self.minutes_out_today_ms(row[0]),
             "calls_in_matched": row[5],
             "minutes_in_ms": row[6],
             "completion_pct": row[7],

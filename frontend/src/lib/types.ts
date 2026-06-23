@@ -176,6 +176,9 @@ export interface LoopStats {
   calls_out: number;
   answered_out: number;
   minutes_out_ms: number;
+  /** Answered-outbound minutes since 00:00 GMT today — what the daily target bar
+      measures against (resets each GMT day). Absent on older worker payloads. */
+  minutes_out_today_ms?: number;
   calls_in_matched: number;
   minutes_in_ms: number;
   completion_pct: number;

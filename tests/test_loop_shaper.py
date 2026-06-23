@@ -271,7 +271,7 @@ def test_shaper_sets_initial_rate_to_current_hour(loop_engine):
     request's nominal rate), so it reads as organic from the first minute."""
     import time as _time
     eng = loop_engine
-    hour = _time.localtime().tm_hour
+    hour = _time.gmtime().tm_hour
     c = eng.start_campaign(dest_host="203.0.113.10", rate=1.0, max_concurrent=200,
                            duration_s=120, local_ip="",
                            profile_enabled=True, target_minutes=1_000_000,
@@ -285,4 +285,33 @@ def test_shaper_sets_initial_rate_to_current_hour(loop_engine):
     assert abs(eng._campaigns[cid]["rate"] - expected) < 1e-6
     inst = eng.engine.get_instance(iid)
     assert abs(inst.call_rate - expected) < 1e-6
+    eng.stop_campaign(cid)
+
+
+def test_shaper_initial_rate_anchored_to_gmt_not_local(loop_engine, monkeypatch):
+    """The diurnal curve follows GMT, not the box's local clock: when UTC hour
+    and local hour differ, a profiled campaign starts at the UTC hour's rate.
+    (Regression for "the trend takes effect on box-local time, not GMT".)"""
+    import time as _t
+    eng = loop_engine
+    tmpl = _t.gmtime(0)  # a valid struct_time to clone wday/yday from
+
+    def _at(h):
+        return _t.struct_time((2026, 6, 23, h, 0, 0, tmpl.tm_wday, tmpl.tm_yday, 0))
+
+    monkeypatch.setattr(_t, "gmtime", lambda *a: _at(2))       # UTC 02:00 (night trough)
+    monkeypatch.setattr(_t, "localtime", lambda *a: _at(14))   # local 14:00 (plateau peak)
+
+    c = eng.start_campaign(dest_host="203.0.113.10", rate=1.0, max_concurrent=200,
+                           duration_s=120, local_ip="",
+                           profile_enabled=True, target_minutes=1_000_000,
+                           night_floor=0.25)
+    cid = c["id"]
+    gmt_rate = eng._shaper_target_rate(eng._campaigns[cid], hour=2)
+    local_rate = eng._shaper_target_rate(eng._campaigns[cid], hour=14)
+    assert gmt_rate != local_rate  # sanity: the curve bends between these hours
+    iid = eng._campaigns[cid]["instance_id"]
+    _wait_running(eng.engine, iid)
+    # Initial UAC rate must match the GMT (02:00) curve value, not local (14:00).
+    assert abs(eng._campaigns[cid]["rate"] - gmt_rate) < 1e-6
     eng.stop_campaign(cid)

@@ -539,3 +539,51 @@ def test_incremental_matching_is_cumulative_and_idempotent(db):
                  "WHERE matched_record_id IS NOT NULL")
         ).fetchone()[0]
     assert n == 4
+
+
+# ── daily target: answered-outbound minutes since 00:00 GMT (resets each day) ─
+
+
+def test_minutes_out_today_ms_windows_to_gmt_day(db):
+    """The daily target measures answered-outbound minutes since 00:00 GMT today;
+    earlier GMT days are excluded, so the target bar resets at GMT midnight."""
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    today = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
+    two_days_ago = (now - _dt.timedelta(days=2)).isoformat()
+    # Two answered-outbound today: 120 s + 60 s = 180000 ms.
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="t1",
+                   a_number="1", b_number="222001", t_start_ms=1000,
+                   duration_ms=120000, created_at=today)
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="t2",
+                   a_number="1", b_number="222002", t_start_ms=2000,
+                   duration_ms=60000, created_at=today)
+    # Answered-outbound two days ago — excluded by the GMT-day window.
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="old",
+                   a_number="1", b_number="222003", t_start_ms=3000,
+                   duration_ms=999000, created_at=two_days_ago)
+    # A non-2xx today — never "answered", so excluded.
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="fail",
+                   a_number="1", b_number="222004", t_start_ms=4000,
+                   duration_ms=0, final_code=503, created_at=today)
+    assert LoopMatcher(db=db).minutes_out_today_ms(CID) == 180000
+
+
+def test_minutes_out_today_ms_no_db_is_zero():
+    assert LoopMatcher(db=None).minutes_out_today_ms("x") == 0
+
+
+def test_latest_stats_includes_minutes_out_today(db):
+    """latest_stats() (what GET /api/loops/{id} reads) carries the live daily
+    figure the target bar measures against."""
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone.utc).replace(
+        hour=10, minute=0, second=0, microsecond=0).isoformat()
+    _insert_record(db, campaign_id=CID, direction="out", call_uuid="o1",
+                   a_number="1", b_number="333001", t_start_ms=1000,
+                   duration_ms=45000, created_at=today)
+    m = LoopMatcher(db=db)
+    m.match_campaign(CID, match_key="exact")
+    latest = m.latest_stats(CID)
+    assert latest is not None
+    assert latest["minutes_out_today_ms"] == 45000

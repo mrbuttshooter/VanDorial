@@ -133,7 +133,9 @@ function targetProgress(c: LoopCampaign, st: LoopStats | undefined): number | nu
     return Math.min(100, (done / c.target_calls) * 100);
   }
   if (c.target_minutes && c.target_minutes > 0) {
-    const done = minutes(st?.minutes_out_ms);
+    // Daily target: progress is minutes done since 00:00 GMT today (resets each
+    // GMT day), not lifetime. Falls back to lifetime on older worker payloads.
+    const done = minutes(st?.minutes_out_today_ms ?? st?.minutes_out_ms);
     return Math.min(100, (done / c.target_minutes) * 100);
   }
   return null;
