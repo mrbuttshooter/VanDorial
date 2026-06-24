@@ -975,7 +975,13 @@ class LoopEngine:
         cols = ("id", "name", "status", "node_id", "local_ip", "dest_host",
                 "dest_port", "transport", "csv_path", "rate", "max_concurrent",
                 "duration_mode", "duration_s", "duration_max_s", "match_key",
-                "target_calls", "target_minutes")
+                "target_calls", "target_minutes",
+                # Diurnal profile, so a resumed campaign keeps its trend instead of
+                # silently reverting to a flat loop. (rtp/rtp_loop are start-params,
+                # not persisted columns, so they can't be restored here.)
+                "profile_enabled", "profile_preset", "night_floor",
+                "ramp_up_start", "plateau_start", "plateau_end",
+                "ramp_down_end", "tz_offset")
         try:
             with self.db.engine.connect() as conn:
                 rows = conn.execute(text(
@@ -1021,6 +1027,19 @@ class LoopEngine:
                     target_minutes=int(c.get("target_minutes") or 0),
                     local_ip=c.get("local_ip") or "",
                     node_id=c.get("node_id"),
+                    profile_enabled=bool(c.get("profile_enabled")),
+                    profile_preset=c.get("profile_preset") or "diurnal",
+                    night_floor=(float(c["night_floor"])
+                                 if c.get("night_floor") is not None else 0.25),
+                    ramp_up_start=(int(c["ramp_up_start"])
+                                   if c.get("ramp_up_start") is not None else 6),
+                    plateau_start=(int(c["plateau_start"])
+                                   if c.get("plateau_start") is not None else 9),
+                    plateau_end=(int(c["plateau_end"])
+                                 if c.get("plateau_end") is not None else 18),
+                    ramp_down_end=(int(c["ramp_down_end"])
+                                   if c.get("ramp_down_end") is not None else 22),
+                    tz_offset=int(c.get("tz_offset") or 0),
                 )
                 resumed.append(new.get("id"))
                 logger.info("resume: %s (%s) -> %s", old_id, c.get("name"),

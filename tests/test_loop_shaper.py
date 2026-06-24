@@ -315,3 +315,28 @@ def test_shaper_initial_rate_anchored_to_gmt_not_local(loop_engine, monkeypatch)
     # Initial UAC rate must match the GMT (02:00) curve value, not local (14:00).
     assert abs(eng._campaigns[cid]["rate"] - gmt_rate) < 1e-6
     eng.stop_campaign(cid)
+
+
+def test_resume_preserves_diurnal_profile(loop_engine, db):
+    """Regression: a profiled campaign that was running before a restart resumes
+    STILL profiled. resume_interrupted used to omit the profile columns, so every
+    restart/deploy silently re-launched loops flat (profile_enabled defaulted to
+    False)."""
+    from sqlalchemy import text
+    with db.engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO loop_campaigns "
+            "(id,name,status,dest_host,dest_port,rate,duration_s,target_minutes,"
+            " profile_enabled,night_floor,tz_offset,created_at) VALUES "
+            "('old-1','SA','running','203.0.113.10',5060,1.0,120,1000000,"
+            " 1,0.25,2,'2026-01-01T00:00:00+00:00')"))
+    eng = loop_engine
+    eng._resolve_resume_csv = lambda c: "/tmp/resume_test.csv"   # pretend a pool exists
+    rec = {}
+    eng.start_campaign = lambda **kw: (rec.update(kw) or {"id": "new-1"})
+    eng.resume_interrupted()
+    # The resumed campaign carries the diurnal profile (not flattened).
+    assert rec.get("profile_enabled") is True
+    assert rec.get("target_minutes") == 1_000_000
+    assert rec.get("tz_offset") == 2
+    assert abs(rec.get("night_floor", 0) - 0.25) < 1e-9
