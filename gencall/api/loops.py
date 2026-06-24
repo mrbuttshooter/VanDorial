@@ -1439,3 +1439,74 @@ def set_trust_config(body: TrustConfigBody):
             raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
     call_parser.set_trust([t.strip() for t in body.ips if t.strip()], body.drop_untrusted)
     return {"status": "applied", **call_parser.get_trust()}
+
+
+# ─── Fleet-wide trust (console Config page): apply here + fan out to remotes ──
+# The console's "Inbound Trust Whitelist" panel manages the list here and we push
+# it to every remote worker. Control-plane only — never touches a call.
+
+class FleetTrustBody(BaseModel):
+    enabled: bool = False
+    ips: list[str] = []
+    drop_untrusted: bool = False
+
+
+def _local_fleet_trust() -> dict:
+    """This worker's current trust shaped as the console's FleetTrust."""
+    t = call_parser.get_trust() if call_parser is not None else {}
+    ips = list(t.get("ips") or [])
+    return {"enabled": bool(ips), "ips": ips,
+            "drop_untrusted": bool(t.get("drop_untrusted"))}
+
+
+@router.get("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
+def get_fleet_trust():
+    """Fleet-wide inbound trust view for the console = this worker's whitelist.
+    ``enabled`` = the list is non-empty (being enforced)."""
+    if call_parser is None:
+        raise HTTPException(503, "call-record parser not configured on this worker")
+    return _local_fleet_trust()
+
+
+@router.post("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
+def set_fleet_trust(body: FleetTrustBody):
+    """Apply the inbound trust whitelist on THIS worker and push it to every
+    remote worker (Server rows with an api_url). ``enabled=false`` => allow-all
+    (an empty list is applied/pushed)."""
+    import ipaddress
+    if call_parser is None:
+        raise HTTPException(503, "call-record parser not configured on this worker")
+    for tok in body.ips:
+        try:
+            ipaddress.ip_network((tok or "").strip(), strict=False)
+        except ValueError:
+            raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
+    ips = [t.strip() for t in body.ips if t.strip()]
+    # enabled=false => allow-all: apply/push an empty list with no dropping.
+    eff_ips = ips if body.enabled else []
+    eff_drop = bool(body.drop_untrusted) if body.enabled else False
+
+    call_parser.set_trust(eff_ips, eff_drop)
+    results = [{"address": "local", "ok": True, "error": None}]
+
+    db = getattr(_engine(), "db", None)
+    if db is not None:
+        from gencall.db.models import Server
+        session = db.get_session()
+        try:
+            remotes = [(s.api_url, s.api_key) for s in session.query(Server).all()
+                       if (s.api_url or "").strip() and s.enabled]
+        finally:
+            session.close()
+        for api_url, api_key in remotes:
+            try:
+                _worker_post(api_url, api_key or "", "/api/config/trust",
+                             {"ips": eff_ips, "drop_untrusted": eff_drop})
+                results.append({"address": api_url, "ok": True, "error": None})
+            except Exception as e:
+                results.append({"address": api_url, "ok": False, "error": str(e)})
+
+    pushed = sum(1 for r in results if r["ok"])
+    return {"enabled": bool(body.enabled), "ips": ips,
+            "drop_untrusted": bool(body.drop_untrusted), "pushed": pushed,
+            "results": results}

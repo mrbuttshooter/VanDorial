@@ -203,46 +203,60 @@ def _node_client(node: Node) -> NodeClient:
 
 
 class FleetTrustBody(BaseModel):
+    enabled: bool = False
     ips: list[str] = []
     drop_untrusted: bool = False
 
 
-@router.post("/api/fleet/trust", dependencies=[Depends(require_api_key)])
-async def push_fleet_trust(body: FleetTrustBody):
-    """Push the inbound trust whitelist to EVERY enabled node (controller fan-out).
+@router.get("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
+def get_fleet_trust():
+    """The persisted fleet-wide inbound trust config (FleetSettings singleton)."""
+    if db is None:
+        raise HTTPException(503, "controller database not configured")
+    return db.get_fleet_trust()
 
-    Set the whitelist + drop flag once here and it is applied to each worker's
-    ``POST /api/config/trust``. Control-plane only — it never touches a call.
-    Empty ``ips`` = allow-all (the per-worker default; leave it off until you want
-    to enforce trusted inbound sources, e.g. when selling to a client)."""
+
+@router.post("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
+async def set_fleet_trust(body: FleetTrustBody):
+    """Persist the fleet trust config and push the EFFECTIVE list to every enabled
+    node's /api/config/trust. ``enabled=false`` => allow-all pushed (empty list),
+    but the saved list is kept for the UI. Control-plane only — never touches a
+    call."""
     import ipaddress
     for tok in body.ips:
         try:
-            ipaddress.ip_network(tok.strip(), strict=False)
+            ipaddress.ip_network((tok or "").strip(), strict=False)
         except ValueError:
             raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
-    ips = [t.strip() for t in body.ips if t.strip()]
     if db is None:
         raise HTTPException(503, "controller database not configured")
+    ips = [t.strip() for t in body.ips if t.strip()]
+    # Persist the full config (the list is kept even when disabled, for the UI).
+    db.set_fleet_trust(bool(body.enabled), ips, bool(body.drop_untrusted))
+    # The EFFECTIVE push: disabled => allow-all (empty list, no dropping).
+    eff_ips = ips if body.enabled else []
+    eff_drop = bool(body.drop_untrusted) if body.enabled else False
+
     session = db.get_session()
     try:
-        targets = [(n.id, n.name, _node_client(n))
+        targets = [(n.address, _node_client(n))
                    for n in session.query(Node).all() if n.enabled]
     finally:
         session.close()
 
-    async def _push(nid, name, client):
+    async def _push(address, client):
         try:
-            res = await client.set_trust_whitelist(ips, body.drop_untrusted)
-            return {"node_id": nid, "node": name, "ok": True, "trust": res}
+            await client.set_trust_whitelist(eff_ips, eff_drop)
+            return {"address": address, "ok": True, "error": None}
         except Exception as e:  # node offline / refused — reported, not fatal
-            return {"node_id": nid, "node": name, "ok": False, "error": str(e)}
+            return {"address": address, "ok": False, "error": str(e)}
 
-    results = list(await asyncio.gather(
-        *[_push(nid, name, c) for nid, name, c in targets]))
-    applied = sum(1 for r in results if r.get("ok"))
-    return {"status": "pushed", "applied": applied, "total": len(results),
-            "ips": ips, "drop_untrusted": body.drop_untrusted, "results": results}
+    results = list(await asyncio.gather(*[_push(a, c) for a, c in targets]))
+    pushed = sum(1 for r in results if r["ok"])
+    saved = db.get_fleet_trust()
+    return {"enabled": saved["enabled"], "ips": saved["ips"],
+            "drop_untrusted": saved["drop_untrusted"], "pushed": pushed,
+            "results": results}
 
 
 async def _probe_health(node: Node) -> dict:

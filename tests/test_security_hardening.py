@@ -136,3 +136,43 @@ def test_discovery_accepts_matching_token():
 def test_discovery_rejects_wrong_token():
     beacon = encode_beacon(build_beacon("wrong", _ADDR, "h", "v"))
     assert parse_beacon(beacon, "fleet-tok") is None
+
+
+# ── Whitelist GUI backend: worker /api/fleet/config/trust (the Config panel) ──
+
+import types as _types_mod
+
+
+class _FakeParser:
+    def __init__(self, ips=None, drop=False):
+        self._t = {"ips": list(ips or []), "drop_untrusted": bool(drop)}
+
+    def get_trust(self):
+        return dict(self._t)
+
+    def set_trust(self, ips, drop):
+        self._t = {"ips": list(ips), "drop_untrusted": bool(drop)}
+
+
+def test_fleet_trust_apply_and_get(monkeypatch):
+    from gencall.api import loops as loops_api
+    fake = _FakeParser()
+    monkeypatch.setattr(loops_api, "call_parser", fake)
+    monkeypatch.setattr(loops_api, "loop_engine", _types_mod.SimpleNamespace(db=None))
+    res = loops_api.set_fleet_trust(
+        loops_api.FleetTrustBody(enabled=True, ips=["203.0.113.0/24"], drop_untrusted=True))
+    assert res["enabled"] is True and res["pushed"] == 1
+    assert fake.get_trust() == {"ips": ["203.0.113.0/24"], "drop_untrusted": True}
+    got = loops_api.get_fleet_trust()
+    assert got["enabled"] is True and got["ips"] == ["203.0.113.0/24"]
+
+
+def test_fleet_trust_disabled_is_allow_all(monkeypatch):
+    from gencall.api import loops as loops_api
+    fake = _FakeParser(ips=["1.2.3.4"], drop=True)
+    monkeypatch.setattr(loops_api, "call_parser", fake)
+    monkeypatch.setattr(loops_api, "loop_engine", _types_mod.SimpleNamespace(db=None))
+    loops_api.set_fleet_trust(
+        loops_api.FleetTrustBody(enabled=False, ips=["1.2.3.4"], drop_untrusted=True))
+    assert fake.get_trust()["ips"] == []        # disabled => allow-all pushed
+    assert loops_api.get_fleet_trust()["enabled"] is False
