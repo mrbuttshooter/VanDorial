@@ -768,6 +768,27 @@ def check_worker(req: CheckWorkerRequest):
         return {"address": url, "online": False, "version": None, "error": str(e)}
 
 
+def _push_trust_to_new_worker(api_url: str, api_key: str) -> None:
+    """Best-effort: push THIS box's current inbound-trust whitelist to a freshly
+    registered REMOTE worker, so it enforces the same list immediately instead of
+    staying allow-all until the next trust save. No-op when there's no api_url (a
+    local node) or no whitelist is in force. Never raises."""
+    if not (api_url or "").strip():
+        return
+    try:
+        from gencall.api import loops as _loops
+        if _loops.call_parser is None:
+            return
+        t = _loops.call_parser.get_trust()
+        if not (t.get("ips") or t.get("drop_untrusted")):
+            return  # nothing being enforced — leave the new worker at its default
+        _loops._worker_post(api_url, api_key or "", "/api/config/trust",
+                            {"ips": t.get("ips", []),
+                             "drop_untrusted": bool(t.get("drop_untrusted"))})
+    except Exception as e:  # offline / refused — log, never fail the create
+        logger.warning("could not push trust to new worker %s: %s", api_url, e)
+
+
 @app.post("/api/servers", dependencies=[Depends(require_api_key)])
 def create_server(req: ServerRequest):
     """Register a node (a source IP). If origin_zone + dest_zone are supplied,
@@ -795,7 +816,10 @@ def create_server(req: ServerRequest):
                                 dest_fixed_only=req.dest_fixed_only)
         session.add(s)
         session.commit()
-        return {"status": "created", "server": s.to_dict()}
+        result = s.to_dict()
+        new_api_url, new_api_key = s.api_url, s.api_key
+        _push_trust_to_new_worker(new_api_url, new_api_key)
+        return {"status": "created", "server": result}
     except HTTPException:
         session.rollback()
         raise

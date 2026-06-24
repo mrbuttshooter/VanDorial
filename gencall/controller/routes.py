@@ -881,61 +881,10 @@ def _empty() -> dict:
     return empty_snapshot()
 
 
-# ─── Fleet inbound trust whitelist (design §4.1 / §5.3) ─────────────────────────
-
-class FleetTrustBody(BaseModel):
-    enabled: bool = False
-    ips: list[str] = []
-    drop_untrusted: bool = False
-
-
-@router.get("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
-def get_fleet_trust():
-    """The persisted fleet-wide inbound trust whitelist (the singleton row)."""
-    return _require_db().get_fleet_trust()
-
-
-@router.post("/api/fleet/config/trust", dependencies=[Depends(require_api_key)])
-async def set_fleet_trust(body: FleetTrustBody):
-    """Persist the fleet trust whitelist and push it to every enabled worker.
-
-    Pushes the EFFECTIVE list (the saved list when enabled, else an empty
-    allow-all list) to each enabled node via NodeClient.set_trust_whitelist,
-    mirroring the fleet loop-launch fan-out. Returns the saved config plus a
-    per-node push result."""
-    import ipaddress
-
-    database = _require_db()
-    # Validate IPs/CIDRs before persisting (surface as 422, like the worker).
-    for tok in body.ips:
-        try:
-            ipaddress.ip_network((tok or "").strip(), strict=False)
-        except ValueError:
-            raise HTTPException(422, f"invalid IP/CIDR: {tok!r}")
-
-    database.set_fleet_trust(body.enabled, body.ips, body.drop_untrusted)
-    effective = database.effective_fleet_ips()
-
-    # Enumerate enabled nodes and snapshot (address, api_key) before any await so
-    # the async pushes never touch a live SQLAlchemy session (same discipline as
-    # the launch fan-out path).
-    session = database.get_session()
-    try:
-        targets = [(n.address, n.api_key)
-                   for n in session.query(Node).filter_by(enabled=True).all()]
-    finally:
-        session.close()
-
-    results = []
-    for addr, key in targets:
-        client = NodeClient(addr, key, verify=verify_tls)
-        try:
-            await client.set_trust_whitelist(effective, body.drop_untrusted)
-            results.append({"address": addr, "ok": True, "error": None})
-        except Exception as exc:
-            results.append({"address": addr, "ok": False, "error": str(exc)})
-
-    return {**database.get_fleet_trust(), "pushed": len(results), "results": results}
+# ─── Fleet inbound trust whitelist ────────────────────────────────────────────
+# GET/POST /api/fleet/config/trust is defined earlier in this module. A duplicate
+# definition lived here and was removed (FastAPI used the first registration, so
+# this copy was dead code — see git history).
 
 
 # ─── Single-node passthrough proxy ──────────────────────────────────────────────

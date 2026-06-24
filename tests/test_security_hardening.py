@@ -176,3 +176,38 @@ def test_fleet_trust_disabled_is_allow_all(monkeypatch):
         loops_api.FleetTrustBody(enabled=False, ips=["1.2.3.4"], drop_untrusted=True))
     assert fake.get_trust()["ips"] == []        # disabled => allow-all pushed
     assert loops_api.get_fleet_trust()["enabled"] is False
+
+
+# ── New-node trust push: a freshly-added remote worker gets the current list ──
+
+def test_new_worker_gets_current_trust(monkeypatch):
+    from gencall.api import routes as routes_api
+    from gencall.api import loops as loops_api
+    pushed = []
+
+    class _P:
+        def get_trust(self):
+            return {"ips": ["203.0.113.0/24"], "drop_untrusted": True}
+
+    monkeypatch.setattr(loops_api, "call_parser", _P())
+    monkeypatch.setattr(loops_api, "_worker_post",
+                        lambda url, key, path, body: pushed.append((url, path, body)))
+    routes_api._push_trust_to_new_worker("http://worker-2:8080", "k")
+    assert pushed == [("http://worker-2:8080", "/api/config/trust",
+                       {"ips": ["203.0.113.0/24"], "drop_untrusted": True})]
+
+
+def test_new_worker_no_push_when_nothing_enforced(monkeypatch):
+    from gencall.api import routes as routes_api
+    from gencall.api import loops as loops_api
+    pushed = []
+
+    class _P:
+        def get_trust(self):
+            return {"ips": [], "drop_untrusted": False}
+
+    monkeypatch.setattr(loops_api, "call_parser", _P())
+    monkeypatch.setattr(loops_api, "_worker_post", lambda *a: pushed.append(a))
+    routes_api._push_trust_to_new_worker("http://worker-2:8080", "k")  # whitelist off
+    routes_api._push_trust_to_new_worker("", "")                        # local node
+    assert pushed == []
