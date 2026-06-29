@@ -178,6 +178,11 @@ class SIPpInstance:
     # -trace_logs so the file the parser reads is the file SIPp writes.
     log_file: str = field(default="", repr=False)
     _run_dir: str = field(default="", repr=False)
+    # SIPp's startup stderr is captured to this per-instance file so a launch
+    # failure is self-explanatory (the actual reason — unwritable cwd, bind
+    # conflict, missing -inf file — instead of a dead-end "see -trace_err file").
+    # Set in start_instance; removed by _cleanup_instance_files.
+    _stderr_file: str = field(default="", repr=False)
     error_message: str = ""
 
     def log_file_candidates(self) -> list:
@@ -198,6 +203,21 @@ class SIPpInstance:
             stem = os.path.splitext(os.path.basename(self.scenario_file))[0]
             out.append(os.path.join(self._run_dir, f"{stem}_{pid}_logs.log"))
         return out
+
+    def stderr_tail(self, max_lines: int = 4) -> str:
+        """Last few non-empty lines of the captured SIPp stderr (the real
+        startup error), or '' if none. Used to make a launch failure
+        self-explanatory in error_message / the log instead of pointing at a
+        -trace_err file that is off by default and cleaned up on stop."""
+        path = getattr(self, "_stderr_file", "")
+        if not path:
+            return ""
+        try:
+            with open(path, "r", errors="replace") as fh:
+                lines = [ln.strip() for ln in fh if ln.strip()]
+        except OSError:
+            return ""
+        return " | ".join(lines[-max_lines:])
 
     def build_command(self, config: Config) -> list:
         """Build the SIPp command line arguments."""
@@ -406,12 +426,25 @@ class SIPpEngine:
             cmd = instance.build_command(self.config)
             logger.info("Starting SIPp: %s", " ".join(_redact_cmd(cmd)))
 
+            # Capture SIPp's stderr to a small per-instance FILE (not a PIPE: an
+            # unread pipe can fill its kernel buffer and deadlock a busy run).
+            # A startup failure then carries the real reason instead of a
+            # dead-end "see -trace_err file" — the exact gap that once hid a
+            # broken shaper relaunch (unwritable cwd) for days. Falls back to
+            # DEVNULL if the file can't be opened.
+            stderr_target = subprocess.DEVNULL
+            stderr_fh = None
+            run_dir = getattr(instance, "_run_dir", "") or tempfile.gettempdir()
+            try:
+                instance._stderr_file = os.path.join(
+                    run_dir, f"gencall_sipp_{instance.id}.stderr")
+                stderr_fh = open(instance._stderr_file, "w+b")
+                stderr_target = stderr_fh
+            except OSError:
+                instance._stderr_file = ""
             popen_kwargs = {
                 "stdout": subprocess.DEVNULL,
-                # SIPp writes its own error file via -trace_err; an unread stderr
-                # PIPE can fill its kernel buffer and deadlock a busy run, so we
-                # discard it here rather than holding a pipe we never drain.
-                "stderr": subprocess.DEVNULL,
+                "stderr": stderr_target,
             }
             # Run SIPp with the stats dir as cwd so its self-named per-call log
             # (<scenario>_<pid>_logs.log) lands in a directory we can resolve
@@ -424,19 +457,27 @@ class SIPpEngine:
                 # whole process group (graceful SIGUSR1, then SIGKILL).
                 popen_kwargs["preexec_fn"] = os.setsid
             instance._process = subprocess.Popen(cmd, **popen_kwargs)
+            # Close the parent's copy of the stderr file; the child keeps its own.
+            # We read the file (not this handle) when reporting a failure.
+            if stderr_fh is not None:
+                try:
+                    stderr_fh.close()
+                except OSError:
+                    pass
 
             # Give it a moment to start. SIPp now runs in the FOREGROUND (no -bg),
             # so a still-alive child after this poll is the real dialer — not a
             # forked-and-exited daemon parent. An early exit here means a real
-            # startup failure (bad scenario, port in use, ...); SIPp's own
-            # -trace_err file holds the detail.
+            # startup failure (bad scenario, port in use, ...); the captured
+            # stderr tail names the actual cause.
             time.sleep(0.5)
             if instance._process.poll() is not None:
                 exit_code = instance._process.returncode
                 instance.state = SIPpState.ERROR
+                detail = instance.stderr_tail()
                 instance.error_message = (
-                    f"SIPp exited during startup (code {exit_code}); "
-                    f"see SIPp -trace_err file"
+                    f"SIPp exited during startup (code {exit_code})"
+                    + (f": {detail}" if detail else "; see SIPp -trace_err file")
                 )
                 logger.error("SIPp failed to start (exit %s): %s",
                              exit_code, instance.error_message)
@@ -571,6 +612,8 @@ class SIPpEngine:
             paths.append(os.path.splitext(instance._stats_file)[0] + ".calllog")
         if instance.log_file:
             paths.append(instance.log_file)
+        if getattr(instance, "_stderr_file", ""):
+            paths.append(instance._stderr_file)
         pid = getattr(instance._process, "pid", None)
         run_dir = getattr(instance, "_run_dir", "")
         if pid is not None and run_dir and instance.scenario_file:

@@ -135,8 +135,10 @@ def test_fixed_duration_does_not_pass_d_flag_via_engine(stub_sipp):
     assert "-d" not in cmd
 
 
-def test_start_instance_uses_devnull_stderr(stub_sipp, monkeypatch):
-    """Popen is launched with stderr discarded (no unread PIPE to deadlock on)."""
+def test_start_instance_captures_stderr_to_file(stub_sipp, monkeypatch):
+    """Popen captures SIPp stderr to a FILE (never a PIPE — an unread pipe can
+    deadlock a busy run), so a startup failure is diagnosable. stdout stays
+    discarded."""
     import subprocess
 
     from gencall.core.sipp_engine import SIPpEngine
@@ -156,8 +158,42 @@ def test_start_instance_uses_devnull_stderr(stub_sipp, monkeypatch):
         engine.start_instance(inst)
     finally:
         engine.stop_all()
-    assert captured.get("stderr") == subprocess.DEVNULL
+    # stdout still discarded; stderr is a real file handle (has a fileno), NOT a
+    # PIPE and NOT DEVNULL, and the instance remembers the path.
     assert captured.get("stdout") == subprocess.DEVNULL
+    assert captured.get("stderr") not in (subprocess.PIPE, subprocess.DEVNULL)
+    assert hasattr(captured.get("stderr"), "fileno")
+    assert inst._stderr_file and inst._stderr_file.endswith(".stderr")
+
+
+def test_startup_failure_reports_stderr_tail(stub_sipp, monkeypatch):
+    """A SIPp that dies at startup surfaces the captured stderr in error_message
+    (the real reason), not a dead-end 'see -trace_err file'."""
+    import subprocess
+
+    from gencall.core.sipp_engine import SIPpEngine
+
+    real_popen = subprocess.Popen
+
+    def dying_popen(cmd, **kwargs):
+        # Write a fatal line to the stderr file the engine handed us, then run a
+        # process that exits non-zero immediately — mimicking SIPp's bind/cwd
+        # failure.
+        fh = kwargs.get("stderr")
+        if hasattr(fh, "write"):
+            fh.write(b"Unable to create 'loop_uac_123_logs.log'\n")
+            fh.flush()
+        kwargs["stderr"] = subprocess.DEVNULL
+        return real_popen(["sh", "-c", "exit 1"], **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", dying_popen)
+    engine = SIPpEngine(config=stub_sipp.config)
+    inst = _instance(scenario_file="/tmp/scn.xml", max_calls=1)
+    ok = engine.start_instance(inst)
+    engine.stop_all()
+    assert ok is False
+    assert "Unable to create" in inst.error_message
+    assert "code 1" in inst.error_message
 
 
 def test_engine_assigns_unique_media_ports(stub_sipp):
