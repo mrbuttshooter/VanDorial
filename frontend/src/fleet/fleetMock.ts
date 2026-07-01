@@ -129,17 +129,17 @@ function makeNode(
 }
 
 const nodes: SimNode[] = [
-  makeNode("ny-gen-01", 1, 11),
-  makeNode("ny-gen-02", 1, 12),
-  makeNode("ny-gen-03", 1, 13),
+  makeNode("ny-gen-01", 1, 11, { running: true, targetRate: 180 }),
+  makeNode("ny-gen-02", 1, 12, { running: true, targetRate: 165 }),
+  makeNode("ny-gen-03", 1, 13, { running: true, targetRate: 172 }),
   makeNode("ny-gen-04", 1, 14, { enabled: false, online: false, last_seen: now() - 3600, version: null }),
-  makeNode("lon-gen-01", 2, 21),
-  makeNode("lon-gen-02", 2, 22),
-  makeNode("lon-gen-03", 2, 23),
-  makeNode("lon-gen-04", 2, 24),
-  makeNode("fra-gen-01", 3, 31),
+  makeNode("lon-gen-01", 2, 21, { running: true, targetRate: 210 }),
+  makeNode("lon-gen-02", 2, 22, { running: true, targetRate: 198 }),
+  makeNode("lon-gen-03", 2, 23, { running: true, targetRate: 205 }),
+  makeNode("lon-gen-04", 2, 24, { running: true, targetRate: 190 }),
+  makeNode("fra-gen-01", 3, 31, { running: true, targetRate: 240 }),
   makeNode("fra-gen-02", 3, 32, { online: false, error: "connect timeout (probe)", last_seen: now() - 240, version: null }),
-  makeNode("fra-gen-03", 3, 33),
+  makeNode("fra-gen-03", 3, 33, { running: true, targetRate: 232 }),
   makeNode("spare-gen-01", null, 41, { running: false }),
 ];
 
