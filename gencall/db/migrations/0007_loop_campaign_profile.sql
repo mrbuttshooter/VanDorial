@@ -6,7 +6,7 @@
 -- shape), and target_minutes (column from 0002) is the daily minutes target the
 -- per-hour rate is sized from. Each ADD COLUMN is its own statement so the
 -- migration runner applies them one at a time.
-ALTER TABLE loop_campaigns ADD COLUMN profile_enabled BOOLEAN DEFAULT 0;
+ALTER TABLE loop_campaigns ADD COLUMN profile_enabled BOOLEAN DEFAULT FALSE;
 ALTER TABLE loop_campaigns ADD COLUMN profile_preset VARCHAR(32) DEFAULT 'diurnal';
 ALTER TABLE loop_campaigns ADD COLUMN night_floor FLOAT DEFAULT 0.25;
 ALTER TABLE loop_campaigns ADD COLUMN ramp_up_start INTEGER DEFAULT 6;

@@ -132,18 +132,29 @@ def rebuild_pool_csv(
     """
     from gencall.scripts.gen_loop_csv import (
         resolve_deck_path, load_zones, gen_from_code, write_csv,
+        merge_zones, _overlay_zones, find_zone,
     )
 
     if not keep_prefixes:
         raise ValueError("rebuild_pool_csv: keep_prefixes is empty")
 
-    zones = load_zones(resolve_deck_path(deck_path))
+    # Resolve the origin exactly as pool CREATION does (generate_pool_file):
+    # merge the DB sale-zone overlay and use find_zone's case-insensitive /
+    # unique-substring match. A plain zones.get(origin_zone) exact-key lookup
+    # against the base deck alone silently returned no codes for an overlay-only
+    # or non-exact origin zone, so the adaptive rebuild raised "unknown origin
+    # zone" and the optimizer permanently no-op'd for those campaigns.
+    zones = merge_zones(load_zones(resolve_deck_path(deck_path)), _overlay_zones())
 
     # Origin codes: an explicit pin wins, else spread across the origin zone's codes.
     if origin_code:
         oad_codes = [origin_code]
     else:
-        oad_codes = zones.get(origin_zone) or []
+        try:
+            resolved = find_zone(zones, origin_zone)
+        except ValueError:
+            raise ValueError(f"unknown origin zone {origin_zone!r} (and no origin_code)")
+        oad_codes = zones.get(resolved) or []
         if not oad_codes:
             raise ValueError(f"unknown origin zone {origin_zone!r} (and no origin_code)")
     oad_len = oad_length or (len(oad_codes[0]) + 7)

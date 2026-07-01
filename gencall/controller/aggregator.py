@@ -142,9 +142,14 @@ def aggregate_loop_stats(per_node: dict[int, Optional[dict]]) -> dict:
             failures_in[str(code)] = failures_in.get(str(code), 0) + (n or 0)
 
     out = dict(summed)
+    # Completion = matched inbound / ANSWERED outbound, matching the per-node
+    # LoopMatcher definition (loop_matcher: "the denominator is answered_out, not
+    # calls_out"). Dividing by calls_out (total attempts) understated the fleet
+    # completion whenever outbound calls failed — i.e. on every real campaign —
+    # and disagreed with the per-node numbers. answered_out is summed above.
     out["completion_pct"] = (
-        round((summed["calls_in_matched"] / summed["calls_out"]) * 100, 2)
-        if summed["calls_out"] else 0.0
+        round((summed["calls_in_matched"] / summed["answered_out"]) * 100, 2)
+        if summed["answered_out"] else 0.0
     )
     out["delta_avg_ms"] = round(delta_sum / delta_count, 2) if delta_count else 0.0
     out["minutes_out"] = round(summed["minutes_out_ms"] / 60000.0, 4)

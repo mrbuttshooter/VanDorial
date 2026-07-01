@@ -767,9 +767,10 @@ def test_fleet_loop_view_sums_loop_stats_across_nodes(controller):
     # Minutes derived from summed ms.
     assert agg["minutes_out"] == 14.0
     assert agg["minutes_in"] == 15.1
-    # Completion recomputed from summed totals: 110 / 140 * 100 (NOT the mean of
-    # 80 and 75).
-    assert agg["completion_pct"] == round(110 / 140 * 100, 2)
+    # Completion recomputed from summed totals: matched-in / ANSWERED-out =
+    # 110 / 128 * 100 (matches the per-node LoopMatcher denominator, NOT calls_out
+    # and NOT the mean of 80 and 75).
+    assert agg["completion_pct"] == round(110 / 128 * 100, 2)
     # delta_avg_ms averaged over contributing nodes: (200 + 300) / 2.
     assert agg["delta_avg_ms"] == 250.0
     # Failures merged per SIP code across nodes and directions.

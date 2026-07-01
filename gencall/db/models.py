@@ -4,11 +4,14 @@ Uses SQLAlchemy for ORM with SQLite/PostgreSQL support.
 """
 
 import datetime
+import logging
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime, Text, Enum,
     UniqueConstraint, create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+_logger = logging.getLogger("gencall.db.models")
 
 Base = declarative_base()
 
@@ -428,7 +431,7 @@ class Database:
             ("dest_code", "VARCHAR(32) DEFAULT ''"),
             ("pool_count", "INTEGER DEFAULT 0"),
             ("pool_length", "INTEGER DEFAULT 11"),
-            ("dest_fixed_only", "BOOLEAN DEFAULT 0"),
+            ("dest_fixed_only", "BOOLEAN DEFAULT FALSE"),
             ("csv_path", "VARCHAR(1024) DEFAULT ''"),
             ("group_id", "INTEGER"),
             ("api_url", "VARCHAR(512) DEFAULT ''"),
@@ -438,7 +441,7 @@ class Database:
             ("rtp", "INTEGER DEFAULT 0"),
             ("rtp_loop", "INTEGER DEFAULT 0"),
             # Diurnal traffic profile (Phase 2 shaper).
-            ("profile_enabled", "BOOLEAN DEFAULT 0"),
+            ("profile_enabled", "BOOLEAN DEFAULT FALSE"),
             ("profile_preset", "VARCHAR(32) DEFAULT 'diurnal'"),
             ("night_floor", "FLOAT DEFAULT 0.25"),
             ("ramp_up_start", "INTEGER DEFAULT 6"),
@@ -459,8 +462,15 @@ class Database:
                         conn.execute(
                             text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
                         )
-                except Exception:
-                    pass  # already present (or table absent) — safe to ignore
+                except Exception as exc:
+                    # Usually "duplicate column" (already present) or "no such
+                    # table" — both safe to ignore. Log at DEBUG so a GENUINE
+                    # failure (e.g. bad DDL on Postgres) is diagnosable instead
+                    # of vanishing silently, without spamming the common case.
+                    _logger.debug(
+                        "ensure_added_columns: %s.%s (%s) skipped: %s",
+                        table, col, ddl, exc,
+                    )
 
     def get_session(self):
         return self.SessionLocal()

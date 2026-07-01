@@ -86,6 +86,14 @@ _AUTOINCREMENT_RE = re.compile(
     r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", re.IGNORECASE
 )
 
+# PostgreSQL will NOT coerce the integer literal 0/1 to a boolean in a column
+# DEFAULT (SQLite, the test DB, silently accepts it) — so `BOOLEAN DEFAULT 0`
+# passes CI and then aborts the whole migration transaction on a Postgres box,
+# permanently wedging the chain. Rewrite the literal to FALSE/TRUE for Postgres.
+_BOOL_DEFAULT_RE = re.compile(
+    r"(\bBOOLEAN\s+DEFAULT\s+)([01])\b", re.IGNORECASE
+)
+
 # Matches `ALTER TABLE <t> ADD COLUMN <c> ...` so we can skip an add-column that
 # is already present. The ORM's Database.ensure_added_columns() idempotently adds
 # late columns too, so a migration file (e.g. 0006/0007) that ADDs the same
@@ -99,14 +107,19 @@ _ADD_COLUMN_RE = re.compile(
 
 
 def _translate_for_dialect(stmt, dialect_name):
-    """Rewrite SQLite-only DDL tokens for the target SQLAlchemy dialect.
+    """Rewrite SQLite-authored DDL tokens for the target SQLAlchemy dialect.
 
-    Currently only ``INTEGER PRIMARY KEY AUTOINCREMENT`` needs translation; on
-    PostgreSQL it becomes ``BIGSERIAL PRIMARY KEY``. On sqlite (or any other
+    On PostgreSQL: ``INTEGER PRIMARY KEY AUTOINCREMENT`` -> ``BIGSERIAL PRIMARY
+    KEY``, and ``BOOLEAN DEFAULT 0/1`` -> ``BOOLEAN DEFAULT FALSE/TRUE`` (Postgres
+    rejects an integer default on a boolean column). On sqlite (or any other
     dialect) the statement is returned unchanged.
     """
     if dialect_name == "postgresql":
-        return _AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", stmt)
+        stmt = _AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", stmt)
+        stmt = _BOOL_DEFAULT_RE.sub(
+            lambda m: m.group(1) + ("TRUE" if m.group(2) == "1" else "FALSE"),
+            stmt,
+        )
     return stmt
 
 
