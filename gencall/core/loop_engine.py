@@ -605,6 +605,21 @@ class LoopEngine:
                 if val is not None and int(val) < 0:
                     raise CapExceeded(f"{label} must be >= 0 (got {val})")
 
+            # A diurnal (profiled) campaign is minute/rate-targeted: its daily
+            # target_minutes resets each GMT day and the shaper relaunches the UAC
+            # hourly, which resets SIPp's -m counter. A fixed call-count target is
+            # therefore incompatible — it would never accumulate to target_calls.
+            # Reject the combination up front rather than run a campaign that can
+            # never complete. (Minute-target a profiled campaign; call-target an
+            # un-profiled one.)
+            if profile_enabled and target_calls and int(target_calls) > 0:
+                raise CapExceeded(
+                    "a profiled (diurnal) campaign cannot also set target_calls: "
+                    "the hourly shaper relaunch resets SIPp's -m counter, so the "
+                    "call-count target would never be reached. Use target_minutes "
+                    "(the daily minute target) for profiled campaigns."
+                )
+
             campaign_id = _new_campaign_id()
             instance_id = f"uac-{campaign_id}"
 

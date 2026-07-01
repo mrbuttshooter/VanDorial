@@ -263,6 +263,28 @@ def test_shaper_target_rate_clamped_to_cap(loop_engine, monkeypatch):
     eng.stop_campaign(cid)
 
 
+def test_profiled_campaign_rejects_call_count_target(loop_engine):
+    """A profiled (diurnal) campaign is minute-targeted (daily target_minutes
+    that resets each GMT day); the hourly shaper relaunch resets SIPp's -m, so a
+    fixed call-count target could never be reached. start_campaign must reject the
+    combination up front rather than run a campaign that never completes."""
+    from gencall.core.loop_engine import CapExceeded
+    eng = loop_engine
+    with pytest.raises(CapExceeded):
+        eng.start_campaign(dest_host="203.0.113.10", rate=1.0, max_concurrent=50,
+                           duration_s=60, local_ip="",
+                           profile_enabled=True, target_calls=10_000)
+    # A profiled minute-targeted campaign is still fine.
+    c = eng.start_campaign(dest_host="203.0.113.10", rate=1.0, max_concurrent=50,
+                           duration_s=60, local_ip="",
+                           profile_enabled=True, target_minutes=5_000)
+    eng.stop_campaign(c["id"])
+    # And a call-targeted un-profiled campaign is still fine.
+    c2 = eng.start_campaign(dest_host="203.0.113.10", rate=1.0, max_concurrent=50,
+                            duration_s=60, local_ip="", target_calls=10_000)
+    eng.stop_campaign(c2["id"])
+
+
 def test_shaper_thread_starts_for_profiled_campaign_and_stops_clean(loop_engine):
     """start_campaign(profile_enabled=True) launches the shaper thread; it is
     daemon + event-driven (idle-safe) and stops cleanly."""
