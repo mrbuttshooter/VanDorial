@@ -158,22 +158,31 @@ class CaptureManager:
         self._wd.start()
 
     def _watch(self):
+        # Long-lived daemon: it keeps polling even while idle rather than
+        # self-exiting, so there is no is_alive() TOCTOU with _ensure_watchdog
+        # that could leave a running capture with its size/duration caps
+        # unenforced (which would let a forgotten pcap grow without bound). It is
+        # a daemon thread, so it dies with the process. Any unexpected error in
+        # one poll must not kill the loop.
         while True:
             time.sleep(2.0)
-            with self._lock:
-                caps = list(self._caps.values())
-            if not any(c.running() for c in caps):
-                return  # idle; a new start() relaunches the watchdog
-            now = time.time()
-            for c in caps:
-                if not c.running():
-                    continue
-                too_long = self._max_seconds > 0 and c.started_at and (now - c.started_at) > self._max_seconds
-                too_big = self._max_bytes > 0 and os.path.isfile(c.path) and os.path.getsize(c.path) > self._max_bytes
-                if too_long or too_big:
-                    logger.info("auto-stopping capture %s (%s)", c.id,
-                                "duration" if too_long else "size")
-                    try:
-                        self.stop(c.id)
-                    except Exception:
-                        pass
+            try:
+                with self._lock:
+                    caps = list(self._caps.values())
+                if not any(c.running() for c in caps):
+                    continue  # idle; keep polling, do not exit
+                now = time.time()
+                for c in caps:
+                    if not c.running():
+                        continue
+                    too_long = self._max_seconds > 0 and c.started_at and (now - c.started_at) > self._max_seconds
+                    too_big = self._max_bytes > 0 and os.path.isfile(c.path) and os.path.getsize(c.path) > self._max_bytes
+                    if too_long or too_big:
+                        logger.info("auto-stopping capture %s (%s)", c.id,
+                                    "duration" if too_long else "size")
+                        try:
+                            self.stop(c.id)
+                        except Exception:
+                            pass
+            except Exception:
+                logger.exception("capture watchdog poll error (continuing)")

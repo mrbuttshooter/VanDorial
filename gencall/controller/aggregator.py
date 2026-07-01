@@ -161,6 +161,11 @@ def split_rate(mode: str, value: float, n_targets: int) -> list[float]:
     - total: split `value` evenly across targets, distributing the remainder to
       the first nodes (design §5).
     Returns a list of length n_targets (empty if no targets).
+
+    Raises ValueError for a 'total' split that can't give every node a positive
+    rate (value <= 0, or too small to spread across n_targets). Callers should
+    translate this to a 4xx so the operator gets one clear reason instead of N
+    opaque per-node "rate 0.0 -> 422" dispatch failures.
     """
     if n_targets <= 0:
         return []
@@ -170,6 +175,13 @@ def split_rate(mode: str, value: float, n_targets: int) -> list[float]:
     # total: even split with remainder to the first nodes. Work in a fixed-point
     # (hundredths of a cps) so we distribute fractional cps deterministically.
     units = int(round(float(value) * 100))
+    if units <= 0:
+        raise ValueError(f"total rate {value} must be positive")
+    if units < n_targets:
+        raise ValueError(
+            f"total rate {value} too small to split across {n_targets} nodes "
+            f"(min {n_targets / 100.0} cps)"
+        )
     base = units // n_targets
     remainder = units - base * n_targets
     rates = []

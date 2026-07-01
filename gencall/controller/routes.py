@@ -500,7 +500,10 @@ async def fleet_launch(req: FleetLaunchRequest):
         online_targets = [n for n in targets if _is_target_online(n)]
         offline_targets = [n for n in targets if not _is_target_online(n)]
 
-        rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
+        try:
+            rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
         # Snapshot the data we need so we can use it after closing the session.
         plan = []
@@ -655,7 +658,10 @@ async def fleet_loops_launch(req: FleetLoopLaunchRequest):
         online_targets = [n for n in targets if _is_target_online(n)]
         offline_targets = [n for n in targets if not _is_target_online(n)]
 
-        rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
+        try:
+            rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
         plan = []
         for node, rate in zip(online_targets, rates):
