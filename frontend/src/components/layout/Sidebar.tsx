@@ -90,8 +90,8 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
           <IconWave width={18} height={18} />
         </div>
         <div className={styles.brandText}>
-          <span className={styles.brandName}>GENCALL</span>
-          <span className={styles.brandSub}>SMC Console</span>
+          <span className={styles.brandName}>SEJO</span>
+          <span className={styles.brandSub}>SIP Generator</span>
         </div>
       </div>
 
@@ -135,9 +135,9 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
             <span>Logout</span>
           </button>
         </div>
-        <span>GenCall v2.0 · SIP traffic generator</span>
+        <span>Sejo v2.0 · SIP Generator</span>
         <span>build · console 2.1.0</span>
-        <span>Done by Sergio &amp; Joey</span>
+        <span>Done by Sergio Elias &amp; Joey Rmeily</span>
       </div>
     </aside>
   );

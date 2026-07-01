@@ -51,11 +51,11 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
         <Panel
           title={
             <>
-              <IconWave width={16} height={16} /> GenCall SMC
+              <IconWave width={16} height={16} /> SEJO
             </>
           }
         >
-          <div className={s.intro}>Sign in to the SMC Console.</div>
+          <div className={s.intro}>Sign in to the SIP Generator.</div>
 
           <div className={s.fields}>
             <Field label="Username">

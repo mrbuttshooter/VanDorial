@@ -27,7 +27,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
 
 export function Shell() {
   const loc = useLocation();
-  const meta = TITLES[loc.pathname] ?? { title: "GenCall", sub: "" };
+  const meta = TITLES[loc.pathname] ?? { title: "Sejo", sub: "" };
   const { latest } = useLiveStats(60);
   const connected = useStreamStatus();
   const toast = useToast();
