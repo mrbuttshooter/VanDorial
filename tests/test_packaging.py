@@ -139,3 +139,24 @@ def test_deploy_doc_ships_nftables_and_ufw_rules():
     assert "default deny incoming" in doc  # ufw
     # The whitelist / trust boundary is named.
     assert "MADA" in doc and "whitelist" in doc.lower()
+
+
+# ── loop_uac SDP media port (v2.2.10 regression) ─────────────────────────────
+
+
+def test_loop_uac_advertises_media_port_not_auto():
+    """The UAC INVITE must offer m=audio [media_port] — the -mp socket rtp_stream
+    actually sends from — NOT [auto_media_port].
+
+    rtp_stream streams from the single -mp base port; [auto_media_port] advertises
+    a different per-call port, so the offered port never matches where the audio
+    arrives. Strict SBCs then hear no media on the negotiated port and clear every
+    call on a ~10s media-inactivity timer. Every other shipped scenario already
+    uses [media_port]; this guards the UAC from drifting back to the broken token.
+    """
+    scn = _read("gencall/scenarios/templates/loop_uac.xml")
+    assert "m=audio [media_port]" in scn
+    # The broken token must not appear on any actual m=audio offer line (a
+    # header comment may still name it to explain why it's wrong).
+    media_lines = [ln for ln in scn.splitlines() if "m=audio" in ln]
+    assert media_lines and all("[auto_media_port]" not in ln for ln in media_lines)

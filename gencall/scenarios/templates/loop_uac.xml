@@ -22,6 +22,15 @@
       RTP-off = a few; PCMA-only locks negotiation to the codec we really send.
       (The working Sigma box offers 8 18 101 because it streams the *negotiated*
       codec; GenCall can't, so it offers PCMA-only.)
+    * SDP advertises [media_port] (the -mp socket rtp_stream actually sends
+      from) — NOT [auto_media_port]. rtp_stream streams from the single -mp
+      base port, but [auto_media_port] advertises a DIFFERENT per-call port, so
+      the offered port never matches the port the audio arrives from. A strict
+      SBC that pins media to the negotiated port then hears nothing on it and
+      clears every call on its ~10s media-inactivity timer (Q.850 cause=31
+      "Normal") — proven on the wire vs the Sigma box, whose media source ==
+      its advertised port. Every other scenario here already uses [media_port];
+      this one must too.
     * No Max-Forwards header; Dory omits it and the SBC accepts the call, so we
       omit it too to keep the message identical.
 
@@ -68,7 +77,7 @@
       s=SIP Call
       c=IN IP[media_ip_type] [media_ip]
       t=0 0
-      m=audio [auto_media_port] RTP/AVP 8 101
+      m=audio [media_port] RTP/AVP 8 101
       a=rtpmap:8 PCMA/8000
       a=rtpmap:101 telephone-event/8000
       a=fmtp:101 0-15
