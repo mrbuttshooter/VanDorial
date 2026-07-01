@@ -669,6 +669,41 @@ def test_fleet_loop_stop_calls_each_node(controller):
     assert run["status"] == "stopped"
 
 
+def test_fleet_test_stop_rejects_loop_run(controller):
+    """Stopping a LOOP run via the test-stop route must 409, not silently mark it
+    stopped while the worker campaigns keep dialing (cross-type mismatch)."""
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    launch = client.post("/api/fleet/loops/launch", json={
+        "node_ids": [n1["id"]],
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "per_node", "value": 1.0},
+    }, headers=headers).json()
+    run_id = launch["fleet_run_id"]
+
+    resp = client.post(f"/api/fleet/{run_id}/stop", headers=headers)
+    assert resp.status_code == 409
+    # The run must NOT have been flipped to stopped by the wrong route.
+    run = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()
+    assert run["status"] != "stopped"
+
+
+def test_fleet_loop_stop_rejects_test_run(controller):
+    """Symmetric guard: stopping a TEST run via the loops-stop route must 409."""
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    launch = client.post("/api/fleet/launch", json={
+        "node_ids": [n1["id"]],
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9"},
+        "rate": {"mode": "per_node", "value": 1.0},
+    }, headers=headers).json()
+    run_id = launch["fleet_run_id"]
+
+    resp = client.post(f"/api/fleet/loops/{run_id}/stop", headers=headers)
+    assert resp.status_code == 409
+
+
 def test_fleet_loop_stop_404(controller):
     client, headers, _ctx = controller
     assert client.post("/api/fleet/loops/999/stop",

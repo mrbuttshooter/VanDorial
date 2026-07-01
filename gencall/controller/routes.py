@@ -497,8 +497,12 @@ async def fleet_launch(req: FleetLaunchRequest):
     session = _require_db().get_session()
     try:
         targets = _resolve_targets(session, req)
-        online_targets = [n for n in targets if _is_target_online(n)]
-        offline_targets = [n for n in targets if not _is_target_online(n)]
+        # Evaluate online-ness once per node so both partitions derive from a
+        # single snapshot. Calling _is_target_online twice lets a node flapping
+        # between the two list comprehensions land in both or neither list.
+        online_flags = {n.id: _is_target_online(n) for n in targets}
+        online_targets = [n for n in targets if online_flags[n.id]]
+        offline_targets = [n for n in targets if not online_flags[n.id]]
 
         try:
             rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
@@ -603,6 +607,12 @@ async def fleet_stop(run_id: int):
         run = session.query(FleetRun).filter_by(id=run_id).first()
         if not run:
             raise HTTPException(404, f"Fleet run {run_id} not found")
+        # A loop run's members carry campaign_id, not test_id, so stop_test would
+        # silently no-op and the run would be marked 'stopped' while the worker
+        # loops keep dialing. Reject the mismatch instead (use the loops route).
+        if run.scenario == LOOP_RUN_SCENARIO:
+            raise HTTPException(
+                409, f"run {run_id} is a loop run; use /api/fleet/loops/{run_id}/stop")
         results = run.get_results()
         node_map = {n.id: (n.address, n.api_key) for n in session.query(Node).all()}
     finally:
@@ -655,8 +665,11 @@ async def fleet_loops_launch(req: FleetLoopLaunchRequest):
     session = _require_db().get_session()
     try:
         targets = _resolve_targets(session, req)
-        online_targets = [n for n in targets if _is_target_online(n)]
-        offline_targets = [n for n in targets if not _is_target_online(n)]
+        # Single online-ness snapshot per node (see fleet_launch) so a flapping
+        # node can't be classified into both partitions.
+        online_flags = {n.id: _is_target_online(n) for n in targets}
+        online_targets = [n for n in targets if online_flags[n.id]]
+        offline_targets = [n for n in targets if not online_flags[n.id]]
 
         try:
             rates = split_rate(req.rate.mode, req.rate.value, len(online_targets))
@@ -761,6 +774,11 @@ async def fleet_loops_stop(run_id: int):
         run = session.query(FleetRun).filter_by(id=run_id).first()
         if not run:
             raise HTTPException(404, f"Fleet run {run_id} not found")
+        # Symmetric guard: a non-loop (test) run has no campaign_id members, so
+        # stop_loop would no-op. Reject and point at the test-stop route.
+        if run.scenario != LOOP_RUN_SCENARIO:
+            raise HTTPException(
+                409, f"run {run_id} is a test run; use /api/fleet/{run_id}/stop")
         results = run.get_results()
         node_map = {n.id: (n.address, n.api_key) for n in session.query(Node).all()}
     finally:

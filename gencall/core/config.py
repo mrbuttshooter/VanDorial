@@ -339,11 +339,21 @@ class Config:
 
     # Force-finalize a call record with no parsed BYE after this long, so the
     # tail-parser's in-memory accumulator can't leak. Must be comfortably above
-    # the longest call hold (ACD) you run; default 1800 s (30 min) covers any
-    # normal loop. 0 disables the staleness sweep.
+    # the longest call hold (ACD) you run. 0 disables the staleness sweep.
+    #
+    # The DEFAULT tracks the answered-call ceiling: a call cannot outlive
+    # loops_answered_max_duration_s (the UAS BYE guard), so we default to that +
+    # 300 s of margin. The old fixed 1800 s (30 min) default was BELOW the 7200 s
+    # answered ceiling, so a normal answered call of 30 min–2 h was force-evicted
+    # mid-call and later re-ingested from its BYE line alone as a 0-second,
+    # code-0 record — silently undercounting billed minutes. Keeping the default
+    # above the ceiling means an answerable call is never evicted while active.
     @property
     def loops_record_max_age_s(self):
-        return self.getint("loops", "record_max_age_s", 1800)
+        return self.getint(
+            "loops", "record_max_age_s",
+            max(1800, self.loops_answered_max_duration_s + 300),
+        )
 
     # Minimum seconds between UAS restart attempts — the throttled backoff floor
     # for the answer-side monitor (design §8). Never busy-restart a crash loop.
