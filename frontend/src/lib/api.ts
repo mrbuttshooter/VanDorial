@@ -636,7 +636,30 @@ export const api = {
   // ---- Traffic calculator (size a diurnal campaign from a minutes target) ----
   /** Size peak/avg CPS + peak concurrency from a daily minutes target + ACD. */
   trafficCalc: (body: { target_minutes: number; acd_s: number; profile: Partial<TrafficProfile> }) =>
-    request<TrafficCalcResult>("/api/loops/traffic-calc", { method: "POST", body }),
+    call<TrafficCalcResult>(
+      () => request("/api/loops/traffic-calc", { method: "POST", body }),
+      async () => {
+        // diurnal weights over 24h (night floor -> daytime plateau -> evening)
+        const w = [.25,.25,.25,.28,.32,.45,.62,.8,.95,1,1,.98,.95,.97,1,.98,.9,.82,.7,.55,.42,.34,.28,.25];
+        const acd = body.acd_s || 120;
+        const target = body.target_minutes || 1_000_000;
+        const totalW = w.reduce((a, b) => a + b, 0);
+        const attemptsDay = Math.round((target * 60) / acd);
+        const per_hour = w.map((weight, hour) => {
+          const attempts = Math.round((attemptsDay * weight) / totalW);
+          return { hour, weight: +weight.toFixed(2), cps: +(attempts / 3600).toFixed(2), attempts };
+        });
+        const peak_cps = Math.max(...per_hour.map((h) => h.cps));
+        const avg_cps = +(attemptsDay / 86400).toFixed(2);
+        const peak_concurrent = Math.ceil(peak_cps * acd);
+        return {
+          per_hour, peak_cps, avg_cps, peak_concurrent,
+          attempts_per_day: attemptsDay,
+          nodes_needed: Math.max(1, Math.ceil(peak_concurrent / 1000)),
+          warnings: peak_concurrent > 1000 ? ["Peak concurrency exceeds 1000 — spread across multiple nodes."] : [],
+        };
+      },
+    ),
 
   /** Probe a remote worker's health WITHOUT saving — the node form's
    *  "Test connection" button (POST /api/servers/check-worker). */
