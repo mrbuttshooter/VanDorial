@@ -470,8 +470,38 @@ class LoopEngine:
             if not camp or camp.get("status") != "running":
                 return False
             old_id = camp["instance_id"]
+
+            # Carry the attempted-call count across relaunches. Otherwise each
+            # adaptive-pool rebuild rebuilds the UAC with -m = the FULL
+            # target_calls, resetting SIPp's per-process counter — so a
+            # call-count-targeted campaign overshot its target by ~one full
+            # target per restart (or never terminated). SIPp's -m counts
+            # TotalCallCreated, surfaced as stats.total_calls (NOT answered).
+            tc = int(camp.get("target_calls") or 0)
+            old_inst = self.engine.get_instance(old_id)
+            if old_inst is not None:
+                placed = int(getattr(old_inst.stats, "total_calls", 0) or 0)
+                camp["calls_placed"] = int(camp.get("calls_placed") or 0) + placed
+
             self.engine.stop_instance(old_id)
             self.engine.remove_instance(old_id)
+
+            # Target already reached across all UAC generations -> finalize the
+            # campaign rather than relaunch. (max_calls=0 means UNLIMITED here, so
+            # we must NOT start a fresh UAC once the target is met.)
+            if tc > 0 and int(camp.get("calls_placed") or 0) >= tc:
+                camp["status"] = "completed"
+                camp["stopped_at"] = _now_iso()
+                self._unlink_inf(camp.get("inf_path"))
+                camp["inf_path"] = None
+                self._campaigns[campaign_id] = camp
+                self._update_campaign_status(
+                    campaign_id, "completed", stopped_at=camp["stopped_at"])
+                logger.info(
+                    "adaptive pool: campaign %s reached target_calls=%d "
+                    "(placed=%d) — completed instead of relaunching",
+                    campaign_id, tc, int(camp.get("calls_placed") or 0))
+                return True
 
             # SIPp's -inf must be the PREPARED file (3-col, [field2] hold + the
             # SIPp header), not the raw A;B pool — loop_uac.xml holds with
@@ -484,7 +514,9 @@ class LoopEngine:
 
             tr = _TRANSPORT_MAP.get((camp.get("transport") or "udp").lower(),
                                     SIPpTransport.UDP)
-            tc = int(camp.get("target_calls") or 0)
+            # Remaining calls for a targeted campaign (carry-forward, above);
+            # 0 = unlimited for a minute/rate-targeted campaign.
+            remaining = max(0, tc - int(camp.get("calls_placed") or 0)) if tc > 0 else 0
             instance = SIPpInstance(
                 id=old_id,
                 scenario_file=self._uac_scenario(bool(camp.get("rtp")),
@@ -497,7 +529,7 @@ class LoopEngine:
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=float(camp.get("rate") or 1.0),
-                max_calls=tc if tc > 0 else 0,
+                max_calls=remaining if tc > 0 else 0,
                 call_limit=int(camp.get("max_concurrent") or 10),
                 duration=int(camp.get("duration_s") or 0),
                 csv_file=resolved_csv,
