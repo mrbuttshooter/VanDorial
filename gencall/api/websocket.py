@@ -491,8 +491,10 @@ async def _ws_authorized(ws: WebSocket) -> bool:
     if not key:
         return False
     # A machine API key OR a console login session token is accepted (both are
-    # presented the same way on the handshake).
-    if gw.keys.validate_key(key):
+    # presented the same way on the handshake). Validate read-only (touch=False):
+    # a WS handshake happens on every (re)connect, and a browser reconnect storm
+    # must not write a usage row per attempt and hammer the DB.
+    if gw.keys.validate_key(key, touch=False):
         return True
     return _routes._session_principal(key) is not None
 

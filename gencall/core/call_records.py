@@ -509,13 +509,25 @@ class CallRecordParser:
                     },
                 ).fetchone()
                 if existing:
+                    # Merge, don't clobber. A record can be re-ingested across
+                    # passes (e.g. an answer line finalized in one pass, a later
+                    # BYE-only pass). COALESCE keeps an already-populated timestamp
+                    # when the incoming value is NULL; the CASE guards stop a good
+                    # answered row (final_code=200, duration>0) from being nulled
+                    # to 0 by a partial re-ingest that lacked the answer line.
                     conn.execute(
                         text(
                             "UPDATE call_records SET "
-                            "a_number = :a_number, b_number = :b_number, "
-                            "source_ip = :source_ip, t_start_ms = :t_start_ms, "
-                            "t_answer_ms = :t_answer_ms, t_end_ms = :t_end_ms, "
-                            "duration_ms = :duration_ms, final_code = :final_code "
+                            "a_number = COALESCE(:a_number, a_number), "
+                            "b_number = COALESCE(:b_number, b_number), "
+                            "source_ip = COALESCE(:source_ip, source_ip), "
+                            "t_start_ms = COALESCE(:t_start_ms, t_start_ms), "
+                            "t_answer_ms = COALESCE(:t_answer_ms, t_answer_ms), "
+                            "t_end_ms = COALESCE(:t_end_ms, t_end_ms), "
+                            "duration_ms = CASE WHEN :duration_ms > 0 "
+                            "  THEN :duration_ms ELSE duration_ms END, "
+                            "final_code = CASE WHEN :final_code IS NOT NULL "
+                            "  AND :final_code <> 0 THEN :final_code ELSE final_code END "
                             "WHERE id = :id"
                         ),
                         {**params, "id": existing[0]},

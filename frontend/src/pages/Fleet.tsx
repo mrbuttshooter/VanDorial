@@ -101,6 +101,12 @@ export function Fleet() {
           <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
             <Spinner />
           </div>
+        ) : res.error && !res.data ? (
+          <EmptyState
+            mark="⚠"
+            title="Controller unreachable"
+            hint={res.error}
+          />
         ) : nodes.length === 0 ? (
           <EmptyState
             title="No nodes"

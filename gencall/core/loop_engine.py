@@ -470,8 +470,38 @@ class LoopEngine:
             if not camp or camp.get("status") != "running":
                 return False
             old_id = camp["instance_id"]
+
+            # Carry the attempted-call count across relaunches. Otherwise each
+            # adaptive-pool rebuild rebuilds the UAC with -m = the FULL
+            # target_calls, resetting SIPp's per-process counter — so a
+            # call-count-targeted campaign overshot its target by ~one full
+            # target per restart (or never terminated). SIPp's -m counts
+            # TotalCallCreated, surfaced as stats.total_calls (NOT answered).
+            tc = int(camp.get("target_calls") or 0)
+            old_inst = self.engine.get_instance(old_id)
+            if old_inst is not None:
+                placed = int(getattr(old_inst.stats, "total_calls", 0) or 0)
+                camp["calls_placed"] = int(camp.get("calls_placed") or 0) + placed
+
             self.engine.stop_instance(old_id)
             self.engine.remove_instance(old_id)
+
+            # Target already reached across all UAC generations -> finalize the
+            # campaign rather than relaunch. (max_calls=0 means UNLIMITED here, so
+            # we must NOT start a fresh UAC once the target is met.)
+            if tc > 0 and int(camp.get("calls_placed") or 0) >= tc:
+                camp["status"] = "completed"
+                camp["stopped_at"] = _now_iso()
+                self._unlink_inf(camp.get("inf_path"))
+                camp["inf_path"] = None
+                self._campaigns[campaign_id] = camp
+                self._update_campaign_status(
+                    campaign_id, "completed", stopped_at=camp["stopped_at"])
+                logger.info(
+                    "adaptive pool: campaign %s reached target_calls=%d "
+                    "(placed=%d) — completed instead of relaunching",
+                    campaign_id, tc, int(camp.get("calls_placed") or 0))
+                return True
 
             # SIPp's -inf must be the PREPARED file (3-col, [field2] hold + the
             # SIPp header), not the raw A;B pool — loop_uac.xml holds with
@@ -484,7 +514,9 @@ class LoopEngine:
 
             tr = _TRANSPORT_MAP.get((camp.get("transport") or "udp").lower(),
                                     SIPpTransport.UDP)
-            tc = int(camp.get("target_calls") or 0)
+            # Remaining calls for a targeted campaign (carry-forward, above);
+            # 0 = unlimited for a minute/rate-targeted campaign.
+            remaining = max(0, tc - int(camp.get("calls_placed") or 0)) if tc > 0 else 0
             instance = SIPpInstance(
                 id=old_id,
                 scenario_file=self._uac_scenario(bool(camp.get("rtp")),
@@ -497,7 +529,7 @@ class LoopEngine:
                 mode=SIPpMode.UAC,
                 transport=tr,
                 call_rate=float(camp.get("rate") or 1.0),
-                max_calls=tc if tc > 0 else 0,
+                max_calls=remaining if tc > 0 else 0,
                 call_limit=int(camp.get("max_concurrent") or 10),
                 duration=int(camp.get("duration_s") or 0),
                 csv_file=resolved_csv,
@@ -604,6 +636,21 @@ class LoopEngine:
                                ("target_minutes", target_minutes)):
                 if val is not None and int(val) < 0:
                     raise CapExceeded(f"{label} must be >= 0 (got {val})")
+
+            # A diurnal (profiled) campaign is minute/rate-targeted: its daily
+            # target_minutes resets each GMT day and the shaper relaunches the UAC
+            # hourly, which resets SIPp's -m counter. A fixed call-count target is
+            # therefore incompatible — it would never accumulate to target_calls.
+            # Reject the combination up front rather than run a campaign that can
+            # never complete. (Minute-target a profiled campaign; call-target an
+            # un-profiled one.)
+            if profile_enabled and target_calls and int(target_calls) > 0:
+                raise CapExceeded(
+                    "a profiled (diurnal) campaign cannot also set target_calls: "
+                    "the hourly shaper relaunch resets SIPp's -m counter, so the "
+                    "call-count target would never be reached. Use target_minutes "
+                    "(the daily minute target) for profiled campaigns."
+                )
 
             campaign_id = _new_campaign_id()
             instance_id = f"uac-{campaign_id}"
@@ -849,6 +896,14 @@ class LoopEngine:
                 remote_port=old.remote_port,
                 local_port=0,                 # OS-assigned ephemeral (distinct)
                 local_ip=old.local_ip,
+                # Carry the media/SDP address across the relaunch. Without this,
+                # media_ip defaults to "" and build_command falls back to
+                # local_ip (the signalling IP) — so on a multi-homed / public-
+                # signalling-IP box the advertised SDP media address flips off
+                # the on-box interface on the first curve step, reintroducing the
+                # Algeria/Chad cause-47 one-way-audio teardown. start_campaign and
+                # _restart_uac_with_csv both preserve it; the shaper must too.
+                media_ip=old.media_ip,
                 mode=SIPpMode.UAC,
                 transport=old.transport,
                 call_rate=new_rate,
