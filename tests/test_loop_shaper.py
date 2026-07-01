@@ -175,6 +175,27 @@ def test_step_campaign_rate_two_uacs_same_ip_distinct_source_ports(loop_engine):
     eng.stop_campaign(cid)
 
 
+def test_step_campaign_rate_preserves_media_ip(loop_engine):
+    """The shaper relaunch must carry media_ip across, or the advertised SDP
+    media address flips from the on-box interface to the signalling IP on the
+    first curve step — the Algeria/Chad cause-47 one-way-audio regression."""
+    eng = loop_engine
+    c = eng.start_campaign(dest_host="203.0.113.10", rate=2.0, max_concurrent=50,
+                           duration_s=10, local_ip="10.20.30.40")
+    cid = c["id"]
+    old_iid = eng._campaigns[cid]["instance_id"]
+    old = _wait_running(eng.engine, old_iid)
+    launch_media_ip = old.media_ip
+    # start_campaign sets media_ip from _detect_primary_ip(); it must be set to a
+    # concrete address (not the empty "let build_command fall back to local_ip").
+    assert launch_media_ip
+
+    assert eng.step_campaign_rate(cid, 5.0) is True
+    new = _wait_running(eng.engine, eng._campaigns[cid]["instance_id"])
+    assert new.media_ip == launch_media_ip   # carried across the relaunch
+    eng.stop_campaign(cid)
+
+
 def test_step_campaign_rate_rejects_unchanged_and_bad_rate(loop_engine):
     """No relaunch for an unchanged rate, a non-positive rate, or an over-cap
     rate — step returns False and the instance id is unchanged."""

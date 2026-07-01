@@ -22,7 +22,16 @@ Method: 5 subsystem maps → multi-lens bug hunters → **adversarial verificati
 
 Regression tests: `tests/test_wave1_fixes.py` (10 new tests).
 
-## Quarantined — needs operator sign-off (touches the sacred call path)
+## Call-path fixes (operator-approved)
+
+### #1 (HIGH) `core/loop_engine.py` — shaper relaunch drops `media_ip` — ✅ APPLIED (commit follows Wave 1)
+**Operator signed off 2026-07-01.** Added `media_ip=old.media_ip` to the
+`step_campaign_rate` relaunch so the launch UAC's media/SDP address is preserved
+across every curve step. Regression test:
+`tests/test_loop_shaper.py::test_step_campaign_rate_preserves_media_ip`.
+⚠ Touches `-mi`/SDP — **verify on-box with a working-vs-ours pcap before deploy.**
+
+Original finding:
 
 ### #1 (HIGH) `core/loop_engine.py` — shaper relaunch drops `media_ip`
 `step_campaign_rate` (the hourly diurnal-shaper overlap-relaunch) rebuilds the

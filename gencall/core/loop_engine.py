@@ -849,6 +849,14 @@ class LoopEngine:
                 remote_port=old.remote_port,
                 local_port=0,                 # OS-assigned ephemeral (distinct)
                 local_ip=old.local_ip,
+                # Carry the media/SDP address across the relaunch. Without this,
+                # media_ip defaults to "" and build_command falls back to
+                # local_ip (the signalling IP) — so on a multi-homed / public-
+                # signalling-IP box the advertised SDP media address flips off
+                # the on-box interface on the first curve step, reintroducing the
+                # Algeria/Chad cause-47 one-way-audio teardown. start_campaign and
+                # _restart_uac_with_csv both preserve it; the shaper must too.
+                media_ip=old.media_ip,
                 mode=SIPpMode.UAC,
                 transport=old.transport,
                 call_rate=new_rate,
