@@ -123,6 +123,17 @@ def create_app(config_path: str = None):
     registry = ProcessRegistry(db=db)
     sipp_engine.registry = registry
 
+    # ── Operational alerts (design roadmap: webhook alerting) ────────────────
+    # Optional [alerts] webhook; None when unconfigured. Queued fire-and-forget
+    # delivery — an unreachable endpoint never blocks any engine path.
+    from gencall.core import alerts as alerts_mod
+
+    notifier = alerts_mod.build_from_config(
+        config, source=f"worker@{socket.gethostname()}")
+    if notifier is not None:
+        notifier.start()
+        logger.info("Alert webhooks enabled -> %s", notifier.callback.url)
+
     # Startup reconciliation: kill any still-alive SIPp from a previous run whose
     # cmdline still matches (PID-reuse guarded) and mark its campaign interrupted.
     try:
@@ -132,6 +143,9 @@ def create_app(config_path: str = None):
                 "Startup reconciliation killed %d stray process(es): %s",
                 len(summary["killed"]), summary["killed"],
             )
+            if notifier is not None:
+                notifier.notify("stray_processes_killed",
+                                {"killed": summary["killed"]})
         else:
             logger.info("Startup reconciliation: no stray SIPp processes found")
     except Exception as e:
@@ -203,6 +217,7 @@ def create_app(config_path: str = None):
     from gencall.api import loops as loops_api
 
     loop_engine = LoopEngine(sipp_engine, db=db, config=config)
+    loop_engine.alerts = notifier
     loops_api.loop_engine = loop_engine
     app.include_router(loops_api.router)
 
@@ -211,7 +226,12 @@ def create_app(config_path: str = None):
     # throttled (>= 10 s) schedule and feeds each snapshot to the WS 'loops'
     # topic. The engine tracks/untracks campaigns on start/stop so the matcher
     # only works running campaigns.
-    loop_matcher = LoopMatcher(db=db, on_stats=websocket.on_loop_stats)
+    def _on_loop_stats(snapshot):
+        websocket.on_loop_stats(snapshot)
+        if notifier is not None:
+            notifier.check_completion(snapshot)
+
+    loop_matcher = LoopMatcher(db=db, on_stats=_on_loop_stats)
     loops_api.loop_matcher = loop_matcher
     loop_engine.matcher = loop_matcher
     loop_matcher.start()
@@ -273,7 +293,10 @@ def create_app(config_path: str = None):
     # by hand. Runs AFTER the UAS so returning calls are answered immediately.
     # Best-effort: never block API startup on it.
     try:
-        loop_engine.resume_interrupted()
+        resume_result = loop_engine.resume_interrupted()
+        if notifier is not None and (resume_result.get("resumed")
+                                     or resume_result.get("skipped")):
+            notifier.notify("campaigns_resumed", resume_result)
     except Exception as e:
         logger.warning("Auto-resume of interrupted loops failed: %s", e)
 
@@ -341,6 +364,11 @@ def create_app(config_path: str = None):
                     b.stop()
                 except Exception as e:
                     logger.warning("Error stopping fleet beacon: %s", e)
+            if notifier is not None:
+                try:
+                    notifier.stop()
+                except Exception as e:
+                    logger.warning("Error stopping alert notifier: %s", e)
 
     app.router.lifespan_context = _lifespan
 

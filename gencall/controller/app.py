@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -144,6 +145,18 @@ def create_controller_app(config: Config = None):
     aggregator.add_status_listener(controller_ws.on_node_status)
     controller_routes.aggregator = aggregator
 
+    # ── Operational alerts (node liveness flips) ─────────────────────────────
+    # Optional [alerts] webhook; the listener only fires on online<->offline
+    # transitions (the aggregator notifies on ANY status change).
+    from gencall.core import alerts as alerts_mod
+
+    notifier = alerts_mod.build_from_config(
+        config, source=f"controller@{socket.gethostname()}")
+    if notifier is not None:
+        notifier.start()
+        aggregator.add_status_listener(notifier.make_node_status_listener())
+        logger.info("Alert webhooks enabled -> %s", notifier.callback.url)
+
     # ── FastAPI app ─────────────────────────────────────────────────────────
     app = FastAPI(
         title="VanDorial Fleet Controller API",
@@ -194,6 +207,8 @@ def create_controller_app(config: Config = None):
             aggregator.stop()
             if discovery_listener is not None:
                 discovery_listener.stop()
+            if notifier is not None:
+                notifier.stop()
 
     app.router.lifespan_context = _lifespan
 

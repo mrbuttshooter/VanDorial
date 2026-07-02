@@ -151,6 +151,9 @@ class LoopEngine:
         # ingests the records the loop produces (otherwise call_records stays
         # empty and every minutes/completion stat is permanently 0).
         self.parser = None
+        # Optional AlertNotifier (gencall.core.alerts), wired in main.py like
+        # matcher/parser above. None = alerts off; every use is None-guarded.
+        self.alerts = None
         self._lock = threading.RLock()
         # campaign_id -> in-memory campaign dict (mirrors the DB row + the SIPp
         # instance id owning it). The DB is the source of truth across restarts;
@@ -358,6 +361,16 @@ class LoopEngine:
                             # Re-register the restarted UAS's (new pid → new
                             # filename) per-call log with the parser.
                             self._register_logs(new, campaign_id=None)
+                            if self.alerts is not None:
+                                self.alerts.notify(
+                                    "uas_restarted",
+                                    {"previous_state": str(getattr(inst, "state", None))},
+                                    key="uas")
+                        elif self.alerts is not None:
+                            self.alerts.notify(
+                                "uas_restart_failed",
+                                {"error": new.error_message},
+                                key="uas")
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("UAS monitor pass failed: %s", e)
             self._monitor_stop.wait(MONITOR_INTERVAL_S)

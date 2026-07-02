@@ -500,6 +500,37 @@ class Config:
         """Minimum hours between two actual prunes — the interval gate."""
         return self.getint("retention", "interval_hours", 24)
 
+    # --- Alerts (operational webhooks, [alerts]) ---
+    # Fire-and-forget notifications for lifecycle events (UAS restarts, node
+    # liveness flips, auto-resume, low loop completion). Off unless webhook_url
+    # is set; delivery is queued on a single sender thread so an unreachable
+    # endpoint can never block an engine path.
+    @property
+    def alerts_webhook_url(self):
+        """Webhook endpoint for operational alerts. Empty = alerts disabled."""
+        return self.get("alerts", "webhook_url", "").strip()
+
+    @property
+    def alerts_webhook_secret(self):
+        """HMAC-SHA256 secret; the signature rides in X-GenCall-Signature."""
+        return self.get("alerts", "webhook_secret", "")
+
+    @property
+    def alerts_events(self):
+        """Event allow-list (comma/space separated). Empty = every event."""
+        raw = self.get("alerts", "events", "") or ""
+        return [tok for tok in raw.replace(",", " ").split() if tok]
+
+    @property
+    def alerts_min_interval_s(self):
+        """Per event+key throttle so a flapping source cannot spam (seconds)."""
+        return self.getint("alerts", "min_interval_s", 60)
+
+    @property
+    def alerts_completion_min_pct(self):
+        """Alert when a running loop's completion %% drops below this (0 = off)."""
+        return self.getfloat("alerts", "completion_min_pct", 0.0)
+
     @classmethod
     def reset(cls):
         cls._instance = None
