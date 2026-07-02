@@ -272,6 +272,36 @@ def test_negative_clock_clamped_to_zero():
 # ── DB persistence + idempotency ────────────────────────────────────────────
 
 
+def test_persist_many_single_transaction_and_fallback(db):
+    parser = CallRecordParser(db=db)
+
+    def row(uuid, dur):
+        return {
+            "campaign_id": "camp-b", "direction": "out", "call_uuid": uuid,
+            "a_number": "100", "b_number": "200", "source_ip": None,
+            "t_start_ms": 1000, "t_answer_ms": 1100, "t_end_ms": 1100 + dur,
+            "duration_ms": dur, "final_code": 200,
+        }
+
+    # Batch path: several records land in one transaction.
+    parser._persist_many([row("b1", 1000), row("b2", 2000), row("b3", 3000)])
+    assert len(_fetch_records(db)) == 3
+
+    # Upsert semantics survive batching: same batch re-applied converges.
+    parser._persist_many([row("b1", 1500), row("b2", 2000)])
+    rows = _fetch_records(db)
+    assert len(rows) == 3
+    assert {r["call_uuid"]: r["duration_ms"] for r in rows}["b1"] == 1500
+
+    # Fallback path: if the batch transaction blows up, each row is retried
+    # individually so one bad row can only lose itself.
+    good, bad = row("b4", 4000), row("b5", 5000)
+    del bad["call_uuid"]  # required bind param -> per-row persist fails for it
+    parser._persist_many([good, bad])
+    uuids = {r["call_uuid"] for r in _fetch_records(db)}
+    assert "b4" in uuids and len(uuids) == 4
+
+
 def test_persist_and_idempotent_upsert(db):
     parser = CallRecordParser(db=db)
     parser._persist({

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
@@ -181,18 +182,20 @@ def create_controller_app(config: Config = None):
         discovery_listener = BeaconListener(
             _on_beacon, port=config.fleet_beacon_port, token=config.fleet_token)
 
-    @app.on_event("startup")
-    async def _on_startup() -> None:
+    @asynccontextmanager
+    async def _lifespan(_app):
         controller_ws.set_event_loop(asyncio.get_running_loop())
         aggregator.start()
         if discovery_listener is not None:
             discovery_listener.start()
+        try:
+            yield
+        finally:
+            aggregator.stop()
+            if discovery_listener is not None:
+                discovery_listener.stop()
 
-    @app.on_event("shutdown")
-    async def _on_shutdown() -> None:
-        aggregator.stop()
-        if discovery_listener is not None:
-            discovery_listener.stop()
+    app.router.lifespan_context = _lifespan
 
     # ── Console static mount + root redirect (mirror worker main.py) ────────
     if os.path.isdir(CONSOLE_DIR):

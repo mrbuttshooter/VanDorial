@@ -446,8 +446,11 @@ class CallRecordParser:
                 if row is None:
                     # Dropped: outside the whitelist and drop_untrusted is on.
                     continue
-                self._persist(row)
                 finalized.append(row)
+        # One transaction per pass, not per record: at high call rates a pass
+        # finalizes dozens of records, and per-record engine.begin() made each
+        # one its own commit (fsync). Falls back to per-row on batch failure.
+        self._persist_many(finalized)
         return finalized
 
     def _apply_trust_filter(self, row):
@@ -494,6 +497,61 @@ class CallRecordParser:
 
     # ── persistence (raw SQL, idempotent upsert) ─────────────────────────────
 
+    def _persist_many(self, rows):
+        """Upsert a whole pass's finalized records in ONE transaction.
+
+        Restart durability comes from SIPp, not from us: real SIPp logs to a
+        pid-named file, so a restarted process writes a fresh log and an old
+        file is never re-registered — there is nothing to checkpoint.
+
+        Falls back to per-row persistence if the batch transaction fails, so a
+        single bad row can only lose itself (the pre-batch behavior).
+        """
+        if self.db is None or not rows:
+            return
+        try:
+            from sqlalchemy import text
+
+            with self.db.engine.begin() as conn:
+                for row in rows:
+                    self._upsert_row(conn, row, text)
+        except Exception as e:
+            logger.warning(
+                "Batch persist of %d call_record(s) failed (%s); retrying per-row",
+                len(rows), e,
+            )
+            for row in rows:
+                self._persist(row)
+
+    @staticmethod
+    def _upsert_row(conn, row, text):
+        """Run the SELECT-then-INSERT/UPDATE upsert for one row on ``conn``."""
+        params = dict(row)
+        params["created_at"] = _now_iso()
+        existing = conn.execute(
+            text(
+                "SELECT id FROM call_records "
+                "WHERE call_uuid = :call_uuid AND direction = :direction "
+                # NULL-safe equality, portable across SQLite 3.37 (Ubuntu
+                # 22.04), SQLite 3.39+ and PostgreSQL. 'IS :param' is
+                # SQLite-only; 'IS NOT DISTINCT FROM' needs SQLite >= 3.39
+                # (it raises a syntax error on 3.37, silently dropping
+                # every record). This explicit OR works everywhere and
+                # still matches NULL=NULL for one-shot tests (no campaign).
+                "AND ((:campaign_id IS NULL AND campaign_id IS NULL) "
+                "     OR campaign_id = :campaign_id)"
+            ),
+            {
+                "call_uuid": params["call_uuid"],
+                "direction": params["direction"],
+                "campaign_id": params["campaign_id"],
+            },
+        ).fetchone()
+        if existing:
+            conn.execute(text(_UPDATE_SQL), {**params, "id": existing[0]})
+        else:
+            conn.execute(text(_INSERT_SQL), params)
+
     def _persist(self, row):
         """Upsert one finalized record into ``call_records`` (no-op if no DB).
 
@@ -506,38 +564,8 @@ class CallRecordParser:
         try:
             from sqlalchemy import text
 
-            params = dict(row)
-            params["created_at"] = _now_iso()
             with self.db.engine.begin() as conn:
-                existing = conn.execute(
-                    text(
-                        "SELECT id FROM call_records "
-                        "WHERE call_uuid = :call_uuid AND direction = :direction "
-                        # NULL-safe equality, portable across SQLite 3.37 (Ubuntu
-                        # 22.04), SQLite 3.39+ and PostgreSQL. 'IS :param' is
-                        # SQLite-only; 'IS NOT DISTINCT FROM' needs SQLite >= 3.39
-                        # (it raises a syntax error on 3.37, silently dropping
-                        # every record). This explicit OR works everywhere and
-                        # still matches NULL=NULL for one-shot tests (no campaign).
-                        "AND ((:campaign_id IS NULL AND campaign_id IS NULL) "
-                        "     OR campaign_id = :campaign_id)"
-                    ),
-                    {
-                        "call_uuid": params["call_uuid"],
-                        "direction": params["direction"],
-                        "campaign_id": params["campaign_id"],
-                    },
-                ).fetchone()
-                if existing:
-                    conn.execute(
-                        text(_UPDATE_SQL),
-                        {**params, "id": existing[0]},
-                    )
-                else:
-                    conn.execute(
-                        text(_INSERT_SQL),
-                        params,
-                    )
+                self._upsert_row(conn, row, text)
         except Exception as e:
             logger.warning("Could not persist call_record %s: %s",
                            row.get("call_uuid"), e)
