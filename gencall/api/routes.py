@@ -989,3 +989,15 @@ def health_check():
         "active_tests": len([i for i in engine.instances.values()
                              if i.state == SIPpState.RUNNING]) if engine else 0,
     }
+
+
+@app.get("/api/openapi.json", dependencies=[Depends(require_api_key)],
+         include_in_schema=False)
+def openapi_schema(request: Request):
+    """The OpenAPI schema of THIS running app, auth-gated.
+
+    The unauthenticated /openapi.json + /docs are disabled at app construction
+    (they map the whole API surface to any network peer); this endpoint serves
+    the same schema to authenticated callers, and the build-time export
+    (gencall/scripts/export_openapi.py) feeds frontend type generation."""
+    return request.app.openapi()

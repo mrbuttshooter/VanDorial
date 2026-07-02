@@ -1,0 +1,4619 @@
+{
+  "components": {
+    "schemas": {
+      "CheckWorkerRequest": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "title": "Api Key",
+            "type": "string"
+          },
+          "api_url": {
+            "title": "Api Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_url"
+        ],
+        "title": "CheckWorkerRequest",
+        "type": "object"
+      },
+      "ConnectorRequest": {
+        "properties": {
+          "auth_pass": {
+            "default": "",
+            "title": "Auth Pass",
+            "type": "string"
+          },
+          "auth_user": {
+            "default": "",
+            "title": "Auth User",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "local_ip": {
+            "title": "Local Ip",
+            "type": "string"
+          },
+          "local_port": {
+            "default": 5060,
+            "title": "Local Port",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "remote_ip": {
+            "title": "Remote Ip",
+            "type": "string"
+          },
+          "remote_port": {
+            "default": 5060,
+            "title": "Remote Port",
+            "type": "integer"
+          },
+          "transport": {
+            "default": "udp",
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "local_ip",
+          "remote_ip"
+        ],
+        "title": "ConnectorRequest",
+        "type": "object"
+      },
+      "CreateUserRequest": {
+        "properties": {
+          "password": {
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "CreateUserRequest",
+        "type": "object"
+      },
+      "FleetCaptureReq": {
+        "properties": {
+          "box": {
+            "default": "local",
+            "title": "Box",
+            "type": "string"
+          },
+          "campaign_id": {
+            "title": "Campaign Id",
+            "type": "string"
+          },
+          "capture_id": {
+            "default": "",
+            "title": "Capture Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "campaign_id"
+        ],
+        "title": "FleetCaptureReq",
+        "type": "object"
+      },
+      "FleetStopRequest": {
+        "properties": {
+          "box": {
+            "default": "local",
+            "title": "Box",
+            "type": "string"
+          },
+          "campaign_id": {
+            "title": "Campaign Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "campaign_id"
+        ],
+        "title": "FleetStopRequest",
+        "type": "object"
+      },
+      "FleetTrustBody": {
+        "properties": {
+          "drop_untrusted": {
+            "default": false,
+            "title": "Drop Untrusted",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "ips": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Ips",
+            "type": "array"
+          }
+        },
+        "title": "FleetTrustBody",
+        "type": "object"
+      },
+      "GenerateNumbersRequest": {
+        "description": "Generate an A/B number pool from a chosen origin + drop sale zone.",
+        "properties": {
+          "count": {
+            "default": 500000,
+            "maximum": 2000000.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "dest_code": {
+            "default": "",
+            "title": "Dest Code",
+            "type": "string"
+          },
+          "dest_fixed_only": {
+            "default": false,
+            "title": "Dest Fixed Only",
+            "type": "boolean"
+          },
+          "dest_zone": {
+            "title": "Dest Zone",
+            "type": "string"
+          },
+          "length": {
+            "default": 11,
+            "maximum": 18.0,
+            "minimum": 4.0,
+            "title": "Length",
+            "type": "integer"
+          },
+          "origin_code": {
+            "default": "",
+            "title": "Origin Code",
+            "type": "string"
+          },
+          "origin_zone": {
+            "title": "Origin Zone",
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "required": [
+          "origin_zone",
+          "dest_zone"
+        ],
+        "title": "GenerateNumbersRequest",
+        "type": "object"
+      },
+      "GeneratePoolRequest": {
+        "description": "(Re)generate a node's number pool. Empty fields reuse the node's stored\nzones/codes/length so a bare POST just refreshes the pool.",
+        "properties": {
+          "count": {
+            "default": 500000,
+            "maximum": 2000000.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "dest_code": {
+            "default": "",
+            "title": "Dest Code",
+            "type": "string"
+          },
+          "dest_fixed_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dest Fixed Only"
+          },
+          "dest_zone": {
+            "default": "",
+            "title": "Dest Zone",
+            "type": "string"
+          },
+          "length": {
+            "default": 0,
+            "maximum": 18.0,
+            "minimum": 0.0,
+            "title": "Length",
+            "type": "integer"
+          },
+          "origin_code": {
+            "default": "",
+            "title": "Origin Code",
+            "type": "string"
+          },
+          "origin_zone": {
+            "default": "",
+            "title": "Origin Zone",
+            "type": "string"
+          }
+        },
+        "title": "GeneratePoolRequest",
+        "type": "object"
+      },
+      "GroupStartRequest": {
+        "description": "Optionally start only a SUBSET of a group's nodes. ``node_ids`` = None or\nempty means \"all member nodes\" (the common case).",
+        "properties": {
+          "node_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Ids"
+          }
+        },
+        "title": "GroupStartRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "LoopPresetRequest": {
+        "description": "A saved loop recipe: destination + ACD/rate/targets, but NO source. The\nnode or group to run it on is chosen at run time (POST .../run).",
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "dest_host": {
+            "default": "",
+            "title": "Dest Host",
+            "type": "string"
+          },
+          "dest_port": {
+            "default": 5060,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Dest Port",
+            "type": "integer"
+          },
+          "duration_max_s": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Duration Max S",
+            "type": "integer"
+          },
+          "duration_mode": {
+            "default": "fixed",
+            "title": "Duration Mode",
+            "type": "string"
+          },
+          "duration_s": {
+            "default": 180,
+            "minimum": 0.0,
+            "title": "Duration S",
+            "type": "integer"
+          },
+          "match_key": {
+            "default": "exact",
+            "title": "Match Key",
+            "type": "string"
+          },
+          "max_concurrent": {
+            "default": 10,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Concurrent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "night_floor": {
+            "default": 0.25,
+            "title": "Night Floor",
+            "type": "number"
+          },
+          "plateau_end": {
+            "default": 18,
+            "title": "Plateau End",
+            "type": "integer"
+          },
+          "plateau_start": {
+            "default": 9,
+            "title": "Plateau Start",
+            "type": "integer"
+          },
+          "profile_enabled": {
+            "default": false,
+            "title": "Profile Enabled",
+            "type": "boolean"
+          },
+          "profile_preset": {
+            "default": "diurnal",
+            "title": "Profile Preset",
+            "type": "string"
+          },
+          "ramp_down_end": {
+            "default": 22,
+            "title": "Ramp Down End",
+            "type": "integer"
+          },
+          "ramp_up_start": {
+            "default": 6,
+            "title": "Ramp Up Start",
+            "type": "integer"
+          },
+          "rate": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Rate",
+            "type": "number"
+          },
+          "rtp": {
+            "default": false,
+            "title": "Rtp",
+            "type": "boolean"
+          },
+          "rtp_loop": {
+            "default": false,
+            "title": "Rtp Loop",
+            "type": "boolean"
+          },
+          "target_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Calls",
+            "type": "integer"
+          },
+          "target_minutes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Minutes",
+            "type": "integer"
+          },
+          "transport": {
+            "default": "udp",
+            "title": "Transport",
+            "type": "string"
+          },
+          "tz_offset": {
+            "default": 0,
+            "title": "Tz Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopPresetRequest",
+        "type": "object"
+      },
+      "NodeGroupRequest": {
+        "description": "A group of nodes sharing a destination route. Starting the group fans a\nloop out to every member node (each on its own IP + pool).",
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "dest_host": {
+            "default": "",
+            "title": "Dest Host",
+            "type": "string"
+          },
+          "dest_port": {
+            "default": 5060,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Dest Port",
+            "type": "integer"
+          },
+          "duration_max_s": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Duration Max S",
+            "type": "integer"
+          },
+          "duration_mode": {
+            "default": "fixed",
+            "title": "Duration Mode",
+            "type": "string"
+          },
+          "duration_s": {
+            "default": 180,
+            "minimum": 0.0,
+            "title": "Duration S",
+            "type": "integer"
+          },
+          "match_key": {
+            "default": "exact",
+            "title": "Match Key",
+            "type": "string"
+          },
+          "max_concurrent": {
+            "default": 10,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Concurrent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Rate",
+            "type": "number"
+          },
+          "target_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Calls",
+            "type": "integer"
+          },
+          "target_minutes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Minutes",
+            "type": "integer"
+          },
+          "transport": {
+            "default": "udp",
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "NodeGroupRequest",
+        "type": "object"
+      },
+      "RunPresetRequest": {
+        "description": "Where to fire a preset: a single source-IP node, OR a group (optionally a\nsubset of its members via ``node_ids``).",
+        "properties": {
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "node_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Ids"
+          }
+        },
+        "title": "RunPresetRequest",
+        "type": "object"
+      },
+      "SaleZoneCreate": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "country": {
+            "title": "Country",
+            "type": "string"
+          },
+          "zone": {
+            "title": "Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "country",
+          "zone",
+          "code"
+        ],
+        "title": "SaleZoneCreate",
+        "type": "object"
+      },
+      "ScenarioRequest": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "mode": {
+            "default": "uac",
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "xml_content": {
+            "title": "Xml Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "xml_content"
+        ],
+        "title": "ScenarioRequest",
+        "type": "object"
+      },
+      "ServerRequest": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "title": "Api Key",
+            "type": "string"
+          },
+          "api_url": {
+            "default": "",
+            "title": "Api Url",
+            "type": "string"
+          },
+          "count": {
+            "default": 500000,
+            "maximum": 2000000.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "dest_code": {
+            "default": "",
+            "title": "Dest Code",
+            "type": "string"
+          },
+          "dest_fixed_only": {
+            "default": false,
+            "title": "Dest Fixed Only",
+            "type": "boolean"
+          },
+          "dest_zone": {
+            "default": "",
+            "title": "Dest Zone",
+            "type": "string"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "ip": {
+            "title": "Ip",
+            "type": "string"
+          },
+          "length": {
+            "default": 11,
+            "maximum": 18.0,
+            "minimum": 4.0,
+            "title": "Length",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin_code": {
+            "default": "",
+            "title": "Origin Code",
+            "type": "string"
+          },
+          "origin_zone": {
+            "default": "",
+            "title": "Origin Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ip"
+        ],
+        "title": "ServerRequest",
+        "type": "object"
+      },
+      "ServerUpdate": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "api_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Url"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "ServerUpdate",
+        "type": "object"
+      },
+      "SetPasswordRequest": {
+        "properties": {
+          "password": {
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "SetPasswordRequest",
+        "type": "object"
+      },
+      "StartLoopRequest": {
+        "description": "Loop-campaign start request with bounded, security-validated inputs.\n\nStructural bounds (negatives, zero, port range, transport set) are enforced\nhere and surface as 422. Config-dependent checks \u2014 the dest_host\nprivate/loopback/SSRF block and the rate/channel upper caps \u2014 run in the\nendpoint (they need the runtime Config) and also surface as 422.",
+        "properties": {
+          "csv_path": {
+            "default": "",
+            "title": "Csv Path",
+            "type": "string"
+          },
+          "dest_host": {
+            "title": "Dest Host",
+            "type": "string"
+          },
+          "dest_port": {
+            "default": 5060,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Dest Port",
+            "type": "integer"
+          },
+          "duration_max_s": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Duration Max S",
+            "type": "integer"
+          },
+          "duration_mode": {
+            "default": "fixed",
+            "title": "Duration Mode",
+            "type": "string"
+          },
+          "duration_s": {
+            "default": 180,
+            "minimum": 0.0,
+            "title": "Duration S",
+            "type": "integer"
+          },
+          "local_ip": {
+            "default": "",
+            "title": "Local Ip",
+            "type": "string"
+          },
+          "match_key": {
+            "default": "exact",
+            "title": "Match Key",
+            "type": "string"
+          },
+          "max_concurrent": {
+            "default": 10,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Concurrent",
+            "type": "integer"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "night_floor": {
+            "default": 0.25,
+            "title": "Night Floor",
+            "type": "number"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "plateau_end": {
+            "default": 18,
+            "title": "Plateau End",
+            "type": "integer"
+          },
+          "plateau_start": {
+            "default": 9,
+            "title": "Plateau Start",
+            "type": "integer"
+          },
+          "profile_enabled": {
+            "default": false,
+            "title": "Profile Enabled",
+            "type": "boolean"
+          },
+          "profile_preset": {
+            "default": "diurnal",
+            "title": "Profile Preset",
+            "type": "string"
+          },
+          "ramp_down_end": {
+            "default": 22,
+            "title": "Ramp Down End",
+            "type": "integer"
+          },
+          "ramp_up_start": {
+            "default": 6,
+            "title": "Ramp Up Start",
+            "type": "integer"
+          },
+          "rate": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Rate",
+            "type": "number"
+          },
+          "rtp": {
+            "default": false,
+            "title": "Rtp",
+            "type": "boolean"
+          },
+          "rtp_loop": {
+            "default": false,
+            "title": "Rtp Loop",
+            "type": "boolean"
+          },
+          "target_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Calls",
+            "type": "integer"
+          },
+          "target_minutes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Minutes",
+            "type": "integer"
+          },
+          "transport": {
+            "default": "udp",
+            "title": "Transport",
+            "type": "string"
+          },
+          "tz_offset": {
+            "default": 0,
+            "title": "Tz Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dest_host"
+        ],
+        "title": "StartLoopRequest",
+        "type": "object"
+      },
+      "StartTestRequest": {
+        "properties": {
+          "auth_pass": {
+            "default": "",
+            "title": "Auth Pass",
+            "type": "string"
+          },
+          "auth_user": {
+            "default": "",
+            "title": "Auth User",
+            "type": "string"
+          },
+          "call_limit": {
+            "default": 10,
+            "title": "Call Limit",
+            "type": "integer"
+          },
+          "call_rate": {
+            "default": 1.0,
+            "title": "Call Rate",
+            "type": "number"
+          },
+          "csv_file": {
+            "default": "",
+            "title": "Csv File",
+            "type": "string"
+          },
+          "duration": {
+            "default": 0,
+            "title": "Duration",
+            "type": "integer"
+          },
+          "local_ip": {
+            "default": "",
+            "title": "Local Ip",
+            "type": "string"
+          },
+          "local_port": {
+            "default": 5060,
+            "title": "Local Port",
+            "type": "integer"
+          },
+          "max_calls": {
+            "default": 0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "remote_host": {
+            "title": "Remote Host",
+            "type": "string"
+          },
+          "remote_port": {
+            "default": 5060,
+            "title": "Remote Port",
+            "type": "integer"
+          },
+          "scenario": {
+            "default": "basic_call",
+            "title": "Scenario",
+            "type": "string"
+          },
+          "transport": {
+            "default": "udp",
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote_host"
+        ],
+        "title": "StartTestRequest",
+        "type": "object"
+      },
+      "TrafficCalcProfile": {
+        "properties": {
+          "night_floor": {
+            "default": 0.25,
+            "title": "Night Floor",
+            "type": "number"
+          },
+          "plateau_end": {
+            "default": 18,
+            "title": "Plateau End",
+            "type": "integer"
+          },
+          "plateau_start": {
+            "default": 9,
+            "title": "Plateau Start",
+            "type": "integer"
+          },
+          "preset": {
+            "default": "diurnal",
+            "title": "Preset",
+            "type": "string"
+          },
+          "ramp_down_end": {
+            "default": 22,
+            "title": "Ramp Down End",
+            "type": "integer"
+          },
+          "ramp_up_start": {
+            "default": 6,
+            "title": "Ramp Up Start",
+            "type": "integer"
+          },
+          "tz_offset": {
+            "default": 0,
+            "title": "Tz Offset",
+            "type": "integer"
+          }
+        },
+        "title": "TrafficCalcProfile",
+        "type": "object"
+      },
+      "TrafficCalcRequest": {
+        "properties": {
+          "acd_s": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 86400.0,
+            "title": "Acd S",
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/TrafficCalcProfile",
+            "default": {
+              "night_floor": 0.25,
+              "plateau_end": 18,
+              "plateau_start": 9,
+              "preset": "diurnal",
+              "ramp_down_end": 22,
+              "ramp_up_start": 6,
+              "tz_offset": 0
+            }
+          },
+          "target_minutes": {
+            "maximum": 525600000.0,
+            "minimum": 0.0,
+            "title": "Target Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_minutes",
+          "acd_s"
+        ],
+        "title": "TrafficCalcRequest",
+        "type": "object"
+      },
+      "TrustConfigBody": {
+        "properties": {
+          "drop_untrusted": {
+            "default": false,
+            "title": "Drop Untrusted",
+            "type": "boolean"
+          },
+          "ips": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Ips",
+            "type": "array"
+          }
+        },
+        "title": "TrustConfigBody",
+        "type": "object"
+      },
+      "UpdateRateRequest": {
+        "properties": {
+          "call_rate": {
+            "title": "Call Rate",
+            "type": "number"
+          }
+        },
+        "required": [
+          "call_rate"
+        ],
+        "title": "UpdateRateRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "GenCall SIP Traffic Generator - REST API",
+    "title": "GenCall API",
+    "version": "2.2.8"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/answer/status": {
+      "get": {
+        "description": "UAS health + current answered-call count (design \u00a74.4).",
+        "operationId": "answer_status_api_answer_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer Status"
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "description": "Authenticate a user and issue a session token.",
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "description": "Revoke the current session token (idempotent).",
+        "operationId": "logout_api_auth_logout_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "x_api_key",
+            "required": false,
+            "schema": {
+              "title": "X Api Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "Return the current principal (logged-in username, or the API key name).",
+        "operationId": "me_api_auth_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/users": {
+      "get": {
+        "operationId": "list_users_api_auth_users_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Users",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "create_user_api_auth_users_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/users/{user_id}": {
+      "delete": {
+        "operationId": "delete_user_api_auth_users__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/users/{user_id}/password": {
+      "post": {
+        "operationId": "set_password_api_auth_users__user_id__password_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/config/trust": {
+      "get": {
+        "description": "This worker's current inbound trust whitelist + drop flag.",
+        "operationId": "get_trust_config_api_config_trust_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Trust Config"
+      },
+      "post": {
+        "description": "Hot-apply an inbound trust whitelist (controller push). Empty ips = allow-all.",
+        "operationId": "set_trust_config_api_config_trust_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustConfigBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Trust Config"
+      }
+    },
+    "/api/connectors": {
+      "get": {
+        "description": "List all configured connectors.",
+        "operationId": "list_connectors_api_connectors_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connectors"
+      },
+      "post": {
+        "description": "Create a new connector.",
+        "operationId": "create_connector_api_connectors_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Connector"
+      }
+    },
+    "/api/connectors/{name}": {
+      "delete": {
+        "description": "Delete a connector.",
+        "operationId": "delete_connector_api_connectors__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Connector"
+      }
+    },
+    "/api/console/bootstrap": {
+      "get": {
+        "description": "Legacy console auto-auth \u2014 superseded by the login flow (/api/auth/login).\n\n404s once ANY console user account exists. In the residual zero-user window it\nstill mints the key, but ONLY for a loopback caller (so an exposed/0-user box\ncannot hand admin to the network), and a DB error fails CLOSED instead of\nhanding out the key.",
+        "operationId": "console_bootstrap_api_console_bootstrap_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Console Bootstrap"
+      }
+    },
+    "/api/fleet/config/trust": {
+      "get": {
+        "description": "Fleet-wide inbound trust view for the console = this worker's whitelist.\n``enabled`` = the list is non-empty (being enforced).",
+        "operationId": "get_fleet_trust_api_fleet_config_trust_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Fleet Trust"
+      },
+      "post": {
+        "description": "Apply the inbound trust whitelist on THIS worker and push it to every\nremote worker (Server rows with an api_url). ``enabled=false`` => allow-all\n(an empty list is applied/pushed).",
+        "operationId": "set_fleet_trust_api_fleet_config_trust_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetTrustBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Fleet Trust"
+      }
+    },
+    "/api/fleet/resources": {
+      "get": {
+        "description": "Per-node CPU/RAM across the fleet for the Fleet page. Each node (Server\nrow) reports its box: blank api_url = THIS box (local _box_resources()),\notherwise the remote worker's /api/resources is polled. Resources are cached\nper box, so two IPs sharing one box don't poll it twice.",
+        "operationId": "fleet_resources_api_fleet_resources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Resources"
+      }
+    },
+    "/api/health": {
+      "get": {
+        "description": "Health check endpoint.",
+        "operationId": "health_check_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Check"
+      }
+    },
+    "/api/history": {
+      "get": {
+        "description": "Get test run history from database.",
+        "operationId": "get_test_history_api_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Test History"
+      }
+    },
+    "/api/loop-presets": {
+      "get": {
+        "description": "List saved loop presets (newest first).",
+        "operationId": "list_loop_presets_api_loop_presets_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Loop Presets"
+      },
+      "post": {
+        "description": "Create a saved loop preset.",
+        "operationId": "create_loop_preset_api_loop_presets_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopPresetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Loop Preset"
+      }
+    },
+    "/api/loop-presets/{preset_id}": {
+      "delete": {
+        "description": "Delete a preset (does not touch any running campaign it launched).",
+        "operationId": "delete_loop_preset_api_loop_presets__preset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Loop Preset"
+      },
+      "put": {
+        "description": "Replace a preset's fields.",
+        "operationId": "update_loop_preset_api_loop_presets__preset_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopPresetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Loop Preset"
+      }
+    },
+    "/api/loop-presets/{preset_id}/run": {
+      "post": {
+        "description": "Run a saved preset on a chosen source-IP node OR a group.\n\nThe preset supplies the recipe (dest/ACD/rate/targets); the node or group\nsupplies the source IP + number pool. Running on a group fans the recipe out\nto every member node (one loop per IP). Returns a per-node result list.",
+        "operationId": "run_loop_preset_api_loop_presets__preset_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPresetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Loop Preset"
+      }
+    },
+    "/api/loops": {
+      "get": {
+        "description": "List all Loop Campaigns.",
+        "operationId": "list_loops_api_loops_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Loops"
+      },
+      "post": {
+        "description": "Start a Loop Campaign. Refuses (409) when the concurrent cap is reached.\n\nBefore spawning, validate the destination against the SSRF/private-range\nblock and bound rate/channels against the config caps (both 422 on reject).",
+        "operationId": "start_loop_api_loops_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartLoopRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Loop"
+      }
+    },
+    "/api/loops/fleet": {
+      "get": {
+        "description": "All loop runs across THIS box + every remote worker, each tagged with its\n``box`` and carrying loop_stats. Remote workers are the distinct ``api_url``\nof the node (Server) rows; we pull each worker's /api/loops/history (which\nalready folds loop_stats). Declared before /api/loops/{id}.",
+        "operationId": "list_loops_fleet_api_loops_fleet_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Loops Fleet"
+      }
+    },
+    "/api/loops/fleet-capture/delete": {
+      "delete": {
+        "operationId": "fleet_capture_delete_api_loops_fleet_capture_delete_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetCaptureReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Capture Delete"
+      }
+    },
+    "/api/loops/fleet-capture/download": {
+      "get": {
+        "operationId": "fleet_capture_download_api_loops_fleet_capture_download_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "box",
+            "required": false,
+            "schema": {
+              "default": "local",
+              "title": "Box",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Capture Download"
+      }
+    },
+    "/api/loops/fleet-capture/list": {
+      "get": {
+        "operationId": "fleet_capture_list_api_loops_fleet_capture_list_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "box",
+            "required": false,
+            "schema": {
+              "default": "local",
+              "title": "Box",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Capture List"
+      }
+    },
+    "/api/loops/fleet-capture/start": {
+      "post": {
+        "operationId": "fleet_capture_start_api_loops_fleet_capture_start_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetCaptureReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Capture Start"
+      }
+    },
+    "/api/loops/fleet-capture/stop": {
+      "post": {
+        "operationId": "fleet_capture_stop_api_loops_fleet_capture_stop_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetCaptureReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Capture Stop"
+      }
+    },
+    "/api/loops/fleet-stop": {
+      "post": {
+        "description": "Stop a campaign on whichever box it runs on (local or a remote worker).",
+        "operationId": "fleet_stop_loop_api_loops_fleet_stop_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetStopRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Stop Loop"
+      }
+    },
+    "/api/loops/history": {
+      "get": {
+        "description": "Past + present loop runs with their final loop_stats, newest first.\n\nFeeds the History tab's loop archive. Declared BEFORE /api/loops/{id} so the\nliteral 'history' path is not swallowed as a campaign id.",
+        "operationId": "loop_history_api_loops_history_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Loop History"
+      }
+    },
+    "/api/loops/numbers": {
+      "post": {
+        "description": "Generate an A/B number pool server-side and return its path + a preview.\n\nThe returned ``csv_path`` is fed straight into a loop campaign's ``csv_path``;\neach call then draws a random pair from the pool (the engine renders a RANDOM\n-inf). Numbers are validated to start with a real zone code so MADA routes\nthem to the chosen drop zone.",
+        "operationId": "generate_numbers_api_loops_numbers_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateNumbersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Numbers"
+      }
+    },
+    "/api/loops/traffic-calc": {
+      "post": {
+        "description": "Size a diurnal campaign from a daily minutes target + ACD.",
+        "operationId": "traffic_calc_api_loops_traffic_calc_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrafficCalcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Traffic Calc"
+      }
+    },
+    "/api/loops/{campaign_id}": {
+      "get": {
+        "description": "Live status for one campaign incl. its UAC's SIPp stats + latest loop_stats.\n\nThe ``loop_stats`` field carries the most recent matcher snapshot (out/in\nminutes, completion %, per-call delta percentiles, failures by SIP code \u2014\ndesign \u00a74.3); it is ``None`` until the matcher has run a pass (or when no\nmatcher/DB is wired).",
+        "operationId": "get_loop_api_loops__campaign_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Loop"
+      }
+    },
+    "/api/loops/{campaign_id}/capture/start": {
+      "post": {
+        "description": "Start a tcpdump capture for a running loop (filtered to its dest switch).",
+        "operationId": "capture_start_api_loops__campaign_id__capture_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Start"
+      }
+    },
+    "/api/loops/{campaign_id}/capture/{capture_id}": {
+      "delete": {
+        "operationId": "capture_delete_api_loops__campaign_id__capture__capture_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Delete"
+      }
+    },
+    "/api/loops/{campaign_id}/capture/{capture_id}/download": {
+      "get": {
+        "operationId": "capture_download_api_loops__campaign_id__capture__capture_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Download"
+      }
+    },
+    "/api/loops/{campaign_id}/capture/{capture_id}/stop": {
+      "post": {
+        "operationId": "capture_stop_api_loops__campaign_id__capture__capture_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture Stop"
+      }
+    },
+    "/api/loops/{campaign_id}/captures": {
+      "get": {
+        "operationId": "capture_list_api_loops__campaign_id__captures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture List"
+      }
+    },
+    "/api/loops/{campaign_id}/pool-stats": {
+      "get": {
+        "description": "Per-prefix ASR the adaptive pool sees for this campaign (read-only).\n\nScores ``call_records`` by destination prefix and labels each keep/drop/\nundecided using the live ``[loops] adaptive_*`` thresholds \u2014 the same view\nthe optimizer acts on. Lets the console show which prefixes route (and why a\nprefix was pruned) without enabling adaptive_pool. Empty until calls land.",
+        "operationId": "loop_pool_stats_api_loops__campaign_id__pool_stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Loop Pool Stats"
+      }
+    },
+    "/api/loops/{campaign_id}/stop": {
+      "post": {
+        "description": "Stop a running campaign.",
+        "operationId": "stop_loop_api_loops__campaign_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Loop"
+      }
+    },
+    "/api/node-groups": {
+      "get": {
+        "description": "List node groups with their member nodes and running-loop counts.",
+        "operationId": "list_node_groups_api_node_groups_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Node Groups"
+      },
+      "post": {
+        "description": "Create a node group (a customer/route with shared loop settings).",
+        "operationId": "create_node_group_api_node_groups_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Node Group"
+      }
+    },
+    "/api/node-groups/{group_id}": {
+      "delete": {
+        "description": "Delete a group. Member nodes are kept (their group_id is cleared).",
+        "operationId": "delete_node_group_api_node_groups__group_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Node Group"
+      },
+      "put": {
+        "description": "Replace a group's settings (name + shared route/loop fields).",
+        "operationId": "update_node_group_api_node_groups__group_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Node Group"
+      }
+    },
+    "/api/node-groups/{group_id}/start": {
+      "post": {
+        "description": "Start a loop on the group's member nodes (each on its own IP + pool), using\nthe group's shared destination + loop settings. By default every member is\nstarted; pass ``node_ids`` to run only a subset. Returns a per-node result\nlist; nodes without a pool or whose IP is already looping are reported, not\nfatal.",
+        "operationId": "start_node_group_api_node_groups__group_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupStartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Node Group"
+      }
+    },
+    "/api/node-groups/{group_id}/stop": {
+      "post": {
+        "description": "Stop every running loop on this group's member IPs.",
+        "operationId": "stop_node_group_api_node_groups__group_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Node Group"
+      }
+    },
+    "/api/resources": {
+      "get": {
+        "description": "This box's live CPU/RAM. The controller's /api/fleet/resources polls this\non each remote worker to build the Fleet page; the local box calls it too.",
+        "operationId": "box_resources_api_resources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Box Resources"
+      }
+    },
+    "/api/sale-zones": {
+      "get": {
+        "description": "Country -> [sale zones] tree + zone -> [codes] map (CSV deck + DB overlay).",
+        "operationId": "sale_zones_api_sale_zones_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sale Zones"
+      },
+      "post": {
+        "description": "Add a user sale zone (overlay on the CSV deck). 409 on duplicate (zone, code).",
+        "operationId": "create_sale_zone_api_sale_zones_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaleZoneCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Sale Zone"
+      }
+    },
+    "/api/sale-zones/{sale_zone_id}": {
+      "delete": {
+        "description": "Delete a user-added sale zone by id (bundled CSV zones are not deletable).",
+        "operationId": "delete_sale_zone_api_sale_zones__sale_zone_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sale_zone_id",
+            "required": true,
+            "schema": {
+              "title": "Sale Zone Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Sale Zone"
+      }
+    },
+    "/api/scenarios": {
+      "get": {
+        "description": "List all available SIP scenarios.",
+        "operationId": "list_scenarios_api_api_scenarios_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scenarios Api"
+      },
+      "post": {
+        "description": "Save a custom scenario.",
+        "operationId": "create_scenario_api_scenarios_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Scenario"
+      }
+    },
+    "/api/scenarios/{name}": {
+      "delete": {
+        "description": "Delete a custom scenario.",
+        "operationId": "delete_scenario_api_scenarios__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Scenario"
+      },
+      "get": {
+        "description": "Get the XML content of a scenario.",
+        "operationId": "get_scenario_api_scenarios__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scenario"
+      }
+    },
+    "/api/servers": {
+      "get": {
+        "description": "List origination servers (a server = a source IP a loop can run from).",
+        "operationId": "list_servers_api_servers_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Servers"
+      },
+      "post": {
+        "description": "Register a node (a source IP). If origin_zone + dest_zone are supplied,\nits A/B number pool is generated immediately (each node = one loop's numbers).",
+        "operationId": "create_server_api_servers_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Server"
+      }
+    },
+    "/api/servers/check-worker": {
+      "post": {
+        "description": "Probe a remote worker's /api/health (the 'Test connection' button) WITHOUT\nsaving anything. Distinct path; declared before /api/servers/{id} routes.",
+        "operationId": "check_worker_api_servers_check_worker_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckWorkerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Worker"
+      }
+    },
+    "/api/servers/{server_id}": {
+      "delete": {
+        "description": "Delete a server by id.",
+        "operationId": "delete_server_api_servers__server_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Server"
+      },
+      "put": {
+        "description": "Update a node's name/description/group/enabled (not its pool \u2014 use\n/generate for that). ``group_id`` of -1 clears group membership.",
+        "operationId": "update_server_api_servers__server_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Server"
+      }
+    },
+    "/api/servers/{server_id}/generate": {
+      "post": {
+        "description": "(Re)generate a node's number pool. Empty zones/length reuse the node's\nstored values, so a bare POST refreshes the existing pool.",
+        "operationId": "generate_server_pool_api_servers__server_id__generate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneratePoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Server Pool"
+      }
+    },
+    "/api/source-ips": {
+      "get": {
+        "description": "Auto-detected source IPv4s on this box (suggestions for adding servers).",
+        "operationId": "list_source_ips_api_source_ips_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Source Ips"
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "description": "Get current aggregated stats.",
+        "operationId": "get_stats_api_stats_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stats"
+      }
+    },
+    "/api/stats/history": {
+      "get": {
+        "description": "Get stats history for charting.",
+        "operationId": "get_stats_history_api_stats_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Stats History"
+      }
+    },
+    "/api/tests": {
+      "get": {
+        "description": "List one-shot test instances (loop UAS/UAC are excluded \u2014 see Loops page).",
+        "operationId": "list_tests_api_tests_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tests"
+      }
+    },
+    "/api/tests/start": {
+      "post": {
+        "description": "Start a new SIP test.",
+        "operationId": "start_test_api_tests_start_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Test"
+      }
+    },
+    "/api/tests/stop-all": {
+      "post": {
+        "description": "Emergency stop all running tests.",
+        "operationId": "stop_all_tests_api_tests_stop_all_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop All Tests"
+      }
+    },
+    "/api/tests/{test_id}": {
+      "delete": {
+        "description": "Remove a stopped test instance (loop UAS/UAC are engine-managed \u2014 refused).",
+        "operationId": "remove_test_api_tests__test_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Test"
+      },
+      "get": {
+        "description": "Get details of a specific test.",
+        "operationId": "get_test_api_tests__test_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Test"
+      }
+    },
+    "/api/tests/{test_id}/rate": {
+      "post": {
+        "description": "Update the call rate of a running test.",
+        "operationId": "update_rate_api_tests__test_id__rate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Rate"
+      }
+    },
+    "/api/tests/{test_id}/stop": {
+      "post": {
+        "description": "Stop a running test.",
+        "operationId": "stop_test_api_tests__test_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Test"
+      }
+    },
+    "/api/ws/clients": {
+      "get": {
+        "description": "List connected WebSocket clients.",
+        "operationId": "ws_clients_api_ws_clients_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ws Clients",
+        "tags": [
+          "websocket"
+        ]
+      }
+    },
+    "/api/ws/status": {
+      "get": {
+        "description": "Get WebSocket connection status.",
+        "operationId": "ws_status_api_ws_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ws Status",
+        "tags": [
+          "websocket"
+        ]
+      }
+    }
+  }
+}

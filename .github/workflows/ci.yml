@@ -24,6 +24,13 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: OpenAPI schemas are current
+        # docs/api/*.json feed frontend type generation (npm run generate:api);
+        # fail if the checked-in schema drifted from the API code.
+        run: |
+          python -m gencall.scripts.export_openapi --role worker --check docs/api/openapi.worker.json
+          python -m gencall.scripts.export_openapi --role controller --check docs/api/openapi.controller.json
+
       - name: Run GenCall test suite
         run: python tests/test_gencall.py
 

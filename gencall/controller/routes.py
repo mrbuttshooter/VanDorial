@@ -892,6 +892,9 @@ def _empty() -> dict:
     "/api/nodes/{node_id}/proxy/{rest_of_path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     dependencies=[Depends(require_api_key)],
+    # Opaque passthrough — the schema can't describe the proxied surface, and a
+    # multi-method route emits duplicate operation IDs that break TS codegen.
+    include_in_schema=False,
 )
 async def proxy_to_node(node_id: int, rest_of_path: str, request: Request):
     """Proxy ALL methods to the node's /{rest_of_path}, injecting its key."""
@@ -948,3 +951,11 @@ def health_check():
         "mode": "controller",
         "nodes": node_count,
     }
+
+
+@router.get("/api/openapi.json", dependencies=[Depends(require_api_key)],
+            include_in_schema=False)
+def openapi_schema(request: Request):
+    """The controller's OpenAPI schema, auth-gated (the unauthenticated
+    /openapi.json + /docs stay disabled at app construction)."""
+    return request.app.openapi()
