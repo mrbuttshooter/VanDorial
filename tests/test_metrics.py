@@ -118,3 +118,27 @@ def test_controller_metrics_without_aggregator():
     out = render_controller_metrics(aggregator=None)
     assert 'role="controller"' in out
     assert "gencall_fleet_nodes" not in out
+
+
+def test_grafana_dashboard_references_only_exported_metrics():
+    """Guard: every gencall_* metric the shipped dashboard queries must be one
+    the code actually exports, so a metric rename can't silently break panels."""
+    import json
+    import os
+    import re
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dash = os.path.join(repo, "deploy", "grafana-gencall.json")
+    raw = open(dash, encoding="utf-8").read()
+    json.loads(raw)  # must be valid JSON
+
+    referenced = set(re.findall(r"gencall_[a-z_]+", raw))
+
+    worker = render_worker_metrics(stats=FakeStats(), loops=FakeLoops(),
+                                   matcher=FakeMatcher(), parser=FakeParser())
+    controller = render_controller_metrics(aggregator=FakeAggregator())
+    exported = set(re.findall(r"gencall_[a-z_]+",
+                              worker + "\n" + controller))
+
+    missing = referenced - exported
+    assert not missing, f"dashboard references unexported metrics: {sorted(missing)}"

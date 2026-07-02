@@ -1,0 +1,194 @@
+{
+  "__meta": "GenCall / VanDorial fleet dashboard. Import into Grafana (Dashboards -> New -> Import) and pick your Prometheus data source. Metrics come from the auth-gated /metrics endpoints (see docs/deploy/loop-runner.md).",
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "tags": ["gencall", "vandorial", "sip"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "campaign",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(gencall_loop_completion_pct, campaign)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Fleet",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Nodes online",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "targets": [
+        { "expr": "sum(gencall_fleet_nodes_online)", "legendFormat": "online" },
+        { "expr": "sum(gencall_fleet_nodes)", "legendFormat": "total" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Fleet calls/sec",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "cps", "decimals": 2 } },
+      "targets": [{ "expr": "sum(gencall_fleet_calls_per_second)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Fleet concurrent calls",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "targets": [{ "expr": "sum(gencall_fleet_current_calls)" }]
+    },
+    {
+      "type": "gauge",
+      "title": "Fleet success rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 50 },
+              { "color": "green", "value": 90 }
+            ]
+          }
+        }
+      },
+      "targets": [{ "expr": "avg(gencall_fleet_success_rate)" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-node liveness",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "bool", "max": 1, "min": 0 } },
+      "targets": [
+        { "expr": "gencall_fleet_node_online", "legendFormat": "node {{node_id}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Loops",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Loop completion % (per campaign)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "gencall_loop_completion_pct{campaign=~\"$campaign\"}",
+          "legendFormat": "{{name}} ({{campaign}})"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Loop minutes out vs in (per campaign)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "m" } },
+      "targets": [
+        {
+          "expr": "gencall_loop_minutes_out_ms{campaign=~\"$campaign\"} / 60000",
+          "legendFormat": "out {{name}}"
+        },
+        {
+          "expr": "gencall_loop_minutes_in_ms{campaign=~\"$campaign\"} / 60000",
+          "legendFormat": "in {{name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Loop ASR (answered / calls out)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "targets": [
+        {
+          "expr": "gencall_loop_answered_out{campaign=~\"$campaign\"} / clamp_min(gencall_loop_calls_out{campaign=~\"$campaign\"}, 1)",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Campaigns by status",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "targets": [
+        { "expr": "sum by (status) (gencall_loop_campaigns)", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Per-node engine",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Calls per second (per instance)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 },
+      "fieldConfig": { "defaults": { "unit": "cps" } },
+      "targets": [
+        { "expr": "gencall_calls_per_second", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Concurrent calls (per instance)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "targets": [
+        { "expr": "gencall_current_calls", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "UAS answer side (up / holding)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "targets": [
+        { "expr": "gencall_uas_up", "legendFormat": "up {{instance}}" },
+        { "expr": "gencall_uas_current_answered", "legendFormat": "holding {{instance}}" }
+      ]
+    }
+  ]
+}

@@ -253,3 +253,51 @@ After a deploy, run a 50-loop campaign for ~1 h from the console and confirm:
 - Completion % on the Loops page tracks MADA's own returned-call counters.
 - Every inbound `call_record` carries a `source_ip` inside the whitelist (if any
   are flagged outside it, the firewall and `[trust] whitelist` are out of sync).
+
+---
+
+## 7. Monitoring (Prometheus + Grafana)
+
+Every worker and the controller expose `GET /metrics` in Prometheus text format.
+It is **auth-gated** with the same `X-API-Key` as the rest of the API, so the
+scrape config carries the key in a header (do **not** open `/metrics`
+unauthenticated — it maps live loop/fleet state):
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: gencall-workers
+    metrics_path: /metrics
+    scheme: http                      # https if you enabled TLS
+    authorization:
+      type: ""                        # header set manually below instead
+    http_headers:
+      X-API-Key:
+        values: ["<a read-capable API key>"]
+    static_configs:
+      - targets: ["10.0.0.11:8080", "10.0.0.12:8080"]   # worker IPs
+        labels: { role: worker }
+  - job_name: gencall-controller
+    metrics_path: /metrics
+    http_headers:
+      X-API-Key:
+        values: ["<controller API key>"]
+    static_configs:
+      - targets: ["10.0.0.10:8090"]
+        labels: { role: controller }
+```
+
+Mint a dedicated scrape key with `gencall keys create --name prometheus` (a
+`viewer`-scoped key is enough — `/metrics` is a GET). Point Prometheus at the
+worker port (`[web] port`, default 8080) and the controller port (8090).
+
+**Grafana:** import `deploy/grafana-gencall.json` (Dashboards → New → Import) and
+select your Prometheus data source. It shows fleet liveness/throughput, per-loop
+completion %, minutes out-vs-in, ASR, campaigns by status, and per-node engine
+rates + UAS health. The `campaign` template variable filters the loop panels.
+
+Metric families exported (see `gencall/api/metrics.py`): `gencall_calls_*`,
+`gencall_current_calls`, `gencall_calls_per_second`, `gencall_success_rate`,
+`gencall_uas_*`, `gencall_loop_*` (labelled by `campaign`/`name`),
+`gencall_parser_tracked_logs`, and on the controller `gencall_fleet_*`
+(incl. per-node `gencall_fleet_node_online`).
