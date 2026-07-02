@@ -155,16 +155,16 @@ class ScenarioManager:
 
     @staticmethod
     def _get_description(name: str) -> str:
+        # One entry per template that actually ships in templates/.
         descriptions = {
             "basic_call": "Basic SIP call (INVITE → 200 OK → ACK → BYE)",
             "basic_register": "SIP REGISTER with authentication",
             "call_with_auth": "SIP call with digest authentication",
-            "call_with_rtp": "SIP call with RTP media streaming",
             "uas_answer": "UAS: Answer incoming calls with 200 OK",
-            "uas_busy": "UAS: Reject calls with 486 Busy Here",
-            "call_transfer": "SIP call with blind transfer (REFER)",
+            "uas_full": "UAS: Answer with media and stay up until BYE",
             "options_ping": "SIP OPTIONS keep-alive / ping test",
             "stress_test": "High-rate INVITE flood for stress testing",
-            "ivr_dtmf": "IVR test with DTMF digit injection",
+            "loop_uac": "Loop runner: outbound dialer leg (engine-managed)",
+            "loop_uas": "Loop runner: persistent answer side (engine-managed)",
         }
         return descriptions.get(name, "SIP scenario")
