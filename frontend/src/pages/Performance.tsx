@@ -9,7 +9,7 @@ import { EmptyState, Spinner } from "@/components/ui/Misc";
 import { useAsync } from "@/hooks/useAsync";
 import { api } from "@/lib/api";
 import { int, num, pct, duration } from "@/lib/format";
-import { networkFails } from "./Loops";
+import { networkFails } from "./loops/loopsUtils";
 import type { LoopCampaign } from "@/lib/types";
 
 /* Performance = a filterable rollup over every loop in the fleet (this box + all
