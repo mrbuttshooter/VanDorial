@@ -3,6 +3,7 @@ import s from "./pages.module.css";
 import ui from "@/components/ui/ui.module.css";
 import { Panel } from "@/components/ui/Panel";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { statusTone } from "@/components/ui/tone";
 import { EmptyState, Spinner } from "@/components/ui/Misc";
 import { useAsync } from "@/hooks/useAsync";
@@ -72,6 +73,7 @@ function LoopHistory() {
                 <th className={ui.numCell}>Min out/in</th>
                 <th>Status</th>
                 <th>Started</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -109,6 +111,16 @@ function LoopHistory() {
                       <Badge tone={statusTone(r.status)}>{r.status}</Badge>
                     </td>
                     <td style={{ color: "var(--text-muted)" }}>{datetime(r.started_at)}</td>
+                    <td>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Export this run's per-call records as CSV"
+                        onClick={() => api.downloadLoopRecords(r.id)}
+                      >
+                        CDRs
+                      </Button>
+                    </td>
                   </tr>
                 );
               })}

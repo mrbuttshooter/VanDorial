@@ -752,6 +752,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/loops/{campaign_id}/records.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Loop Records
+         * @description Stream one campaign's per-call records (CDRs) as CSV.
+         *
+         *     call_records is live diagnostics that retention prunes — this endpoint is
+         *     how the data gets out before that (billing reconciliation, spreadsheets).
+         *     Streamed in keyset batches so a multi-100k-row campaign never loads into
+         *     worker memory.
+         */
+        get: operations["export_loop_records_api_loops__campaign_id__records_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/loops/{campaign_id}/stop": {
         parameters: {
             query?: never;
@@ -3477,6 +3502,46 @@ export interface operations {
     loop_pool_stats_api_loops__campaign_id__pool_stats_get: {
         parameters: {
             query?: never;
+            header?: {
+                "X-API-Key"?: string;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_loop_records_api_loops__campaign_id__records_csv_get: {
+        parameters: {
+            query?: {
+                /** @description ISO date/datetime lower bound */
+                since?: string;
+                /** @description ISO date/datetime upper bound (a plain date includes that whole day) */
+                until?: string;
+                /** @description Filter: out | in */
+                direction?: string;
+            };
             header?: {
                 "X-API-Key"?: string;
             };

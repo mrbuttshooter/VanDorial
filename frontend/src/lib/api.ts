@@ -400,6 +400,13 @@ export const api = {
       `${campaign_id}_${capture_id}.pcap`,
     ),
 
+  /** Stream a loop's per-call records (CDRs) as CSV (authenticated download). */
+  downloadLoopRecords: (campaign_id: string) =>
+    downloadAuthed(
+      `/api/loops/${encodeURIComponent(campaign_id)}/records.csv`,
+      `records_${campaign_id}.csv`,
+    ),
+
   // ---- Sale zones (Country -> Zone -> Code pickers on the Nodes page) ----
   saleZones: () => request<SaleZonesResponse>("/api/sale-zones"),
   createSaleZone: (req: SaleZoneCreate) =>

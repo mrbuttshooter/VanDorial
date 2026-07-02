@@ -3115,6 +3115,86 @@
         "summary": "Loop Pool Stats"
       }
     },
+    "/api/loops/{campaign_id}/records.csv": {
+      "get": {
+        "description": "Stream one campaign's per-call records (CDRs) as CSV.\n\ncall_records is live diagnostics that retention prunes \u2014 this endpoint is\nhow the data gets out before that (billing reconciliation, spreadsheets).\nStreamed in keyset batches so a multi-100k-row campaign never loads into\nworker memory.",
+        "operationId": "export_loop_records_api_loops__campaign_id__records_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "campaign_id",
+            "required": true,
+            "schema": {
+              "title": "Campaign Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO date/datetime lower bound",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "description": "ISO date/datetime lower bound",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO date/datetime upper bound (a plain date includes that whole day)",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "description": "ISO date/datetime upper bound (a plain date includes that whole day)",
+              "title": "Until",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter: out | in",
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "description": "Filter: out | in",
+              "title": "Direction",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Loop Records"
+      }
+    },
     "/api/loops/{campaign_id}/stop": {
       "post": {
         "description": "Stop a running campaign.",

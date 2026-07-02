@@ -17,7 +17,7 @@ the same ``require_api_key`` dependency the rest of the worker API uses.
 import logging
 import os
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -683,6 +683,117 @@ def loop_pool_stats(campaign_id: str):
         "keep": keep, "drop": drop, "undecided": undecided,
         "prefixes": prefixes,
     }
+
+
+# ─── CDR export ──────────────────────────────────────────────────────────────
+
+_EXPORT_BATCH = 5000
+
+
+def _parse_export_bound(value: str, *, is_until: bool) -> str:
+    """Normalize a since/until query param to an ISO-8601 UTC string comparable
+    with call_records.created_at (which is a UTC ISO string, so lexical
+    comparison IS chronological). A date-only ``until`` means "through that
+    whole day", so it advances one day and the query uses ``<``."""
+    import datetime as _dt
+
+    raw = (value or "").strip()
+    try:
+        if len(raw) == 10:  # YYYY-MM-DD
+            day = _dt.date.fromisoformat(raw)
+            if is_until:
+                day = day + _dt.timedelta(days=1)
+            dt = _dt.datetime.combine(day, _dt.time.min, _dt.timezone.utc)
+        else:
+            dt = _dt.datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_dt.timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            422, f"invalid date/datetime {raw!r} (use ISO-8601, e.g. "
+                 f"2026-07-01 or 2026-07-01T12:00:00Z)")
+    return dt.isoformat()
+
+
+def _stream_records_csv(db, campaign_id, since=None, until=None, direction=None):
+    """Yield call_records as CSV in id-keyset batches of _EXPORT_BATCH.
+
+    Keyset pagination (WHERE id > :last ORDER BY id LIMIT n) keeps memory flat
+    no matter how big the growth table is — this is the "way out" for the data
+    the retention job will eventually prune."""
+    import csv
+    import io
+
+    from sqlalchemy import text
+
+    from gencall.db.schema import CALL_RECORD_COLUMNS
+
+    cols = CALL_RECORD_COLUMNS + ("matched_record_id",)
+    where = ["campaign_id = :cid"]
+    params = {"cid": campaign_id}
+    if since:
+        where.append("created_at >= :since")
+        params["since"] = since
+    if until:
+        where.append("created_at < :until")
+        params["until"] = until
+    if direction:
+        where.append("direction = :dir")
+        params["dir"] = direction
+    sql = (f"SELECT {', '.join(cols)} FROM call_records "
+           f"WHERE {' AND '.join(where)} AND id > :last "
+           f"ORDER BY id LIMIT {_EXPORT_BATCH}")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(cols)
+    yield buf.getvalue()
+
+    last_id = 0
+    while True:
+        with db.engine.connect() as conn:
+            rows = conn.execute(text(sql), {**params, "last": last_id}).fetchall()
+        if not rows:
+            return
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for row in rows:
+            writer.writerow(row)
+        last_id = rows[-1][0]  # cols[0] is id
+        yield buf.getvalue()
+
+
+@router.get("/api/loops/{campaign_id}/records.csv",
+            dependencies=[Depends(require_api_key)])
+def export_loop_records(
+    campaign_id: str,
+    since: str = Query(None, description="ISO date/datetime lower bound"),
+    until: str = Query(None, description="ISO date/datetime upper bound "
+                                         "(a plain date includes that whole day)"),
+    direction: str = Query(None, description="Filter: out | in"),
+):
+    """Stream one campaign's per-call records (CDRs) as CSV.
+
+    call_records is live diagnostics that retention prunes — this endpoint is
+    how the data gets out before that (billing reconciliation, spreadsheets).
+    Streamed in keyset batches so a multi-100k-row campaign never loads into
+    worker memory.
+    """
+    if direction and direction not in ("out", "in"):
+        raise HTTPException(422, "direction must be 'out' or 'in'")
+    since_iso = _parse_export_bound(since, is_until=False) if since else None
+    until_iso = _parse_export_bound(until, is_until=True) if until else None
+    try:
+        _engine().get_campaign(campaign_id)
+    except KeyError:
+        raise HTTPException(404, f"Loop campaign '{campaign_id}' not found")
+    fname = f"records_{campaign_id}.csv"
+    return StreamingResponse(
+        _stream_records_csv(_db(), campaign_id, since=since_iso,
+                            until=until_iso, direction=direction),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/api/loops/{campaign_id}", dependencies=[Depends(require_api_key)])
