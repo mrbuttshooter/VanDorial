@@ -56,7 +56,7 @@ def create_controller_app(config: Config = None):
     config = config or Config()
 
     logger.info("=" * 60)
-    logger.info("  VanDorial Fleet Controller (GenCall v2.0.0)")
+    logger.info("  VanDorial Fleet Controller (GenCall v3.0.0)")
     logger.info("=" * 60)
 
     # ── Controller database (its own, separate from workers) ────────────────
@@ -164,7 +164,7 @@ def create_controller_app(config: Config = None):
     app = FastAPI(
         title="VanDorial Fleet Controller API",
         description="VanDorial fleet control-plane for GenCall workers",
-        version="2.0.0",
+        version="3.0.0",
         docs_url=None, redoc_url=None, openapi_url=None,
     )
 

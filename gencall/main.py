@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from gencall.core.config import Config
+from gencall import __version__
 from gencall.core.log import setup_logging
 from gencall.core.sipp_engine import SIPpEngine
 from gencall.core.stats import StatsEngine
@@ -71,7 +72,7 @@ def create_app(config_path: str = None):
     setup_logging(config)
 
     logger.info("=" * 60)
-    logger.info("  GenCall v2.2.2 - SIP Traffic Generator")
+    logger.info("  GenCall v%s - SIP Traffic Generator", __version__)
     logger.info("=" * 60)
 
     # Initialize components
@@ -456,7 +457,7 @@ def create_app(config_path: str = None):
 def main():
     parser = argparse.ArgumentParser(
         prog="gencall",
-        description="GenCall - SIP Traffic Generator v2.0",
+        description="GenCall - SIP Traffic Generator v3.0",
     )
     parser.add_argument("-c", "--config", default=None, help="Path to gencall.cfg")
     parser.add_argument("-H", "--host", default=None, help="Web server bind address")
@@ -513,7 +514,7 @@ def main():
 
     banner = f"""
     ╔═══════════════════════════════════════════╗
-    ║   GenCall v2.0 - SIP Traffic Generator    ║
+    ║   GenCall v3.0 - SIP Traffic Generator    ║
     ║                                           ║
     ║   Console:   {scheme}://{host}:{port:<5d}/console  ║
     ║   API:       {scheme}://{host}:{port:<5d}/api      ║
@@ -527,7 +528,7 @@ def main():
         # Console encoding can't render box-drawing glyphs (e.g. Windows cp1252).
         # Fall back to plain ASCII rather than crashing on startup.
         print(
-            f"\n  GenCall v2.0 - SIP Traffic Generator\n"
+            f"\n  GenCall v3.0 - SIP Traffic Generator\n"
             f"    Console: {scheme}://{host}:{port}/console\n"
             f"    API:     {scheme}://{host}:{port}/api\n"
             f"    Streams: {ws_scheme}://{host}:{port}/ws\n"

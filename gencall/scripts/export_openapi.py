@@ -44,7 +44,7 @@ def build_controller_schema() -> dict:
     app = FastAPI(
         title="VanDorial Fleet Controller API",
         description="VanDorial fleet control-plane for GenCall workers",
-        version="2.0.0",
+        version="3.0.0",
     )
     app.include_router(controller_routes.router)
     app.include_router(controller_ws.router)

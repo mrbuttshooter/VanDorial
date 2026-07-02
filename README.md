@@ -1,4 +1,8 @@
-# GenCall v2 — VanDorial Loop Runner
+# GenCall v3 — VanDorial Loop Runner
+
+> **Release 3.0.0** — deploy & upgrade guide: [`docs/deploy/release-3.0.md`](docs/deploy/release-3.0.md)
+> · full changelog: [`CHANGELOG.md`](CHANGELOG.md). 3.0.0 is a **drop-in upgrade
+> from 2.2.x** (migrations apply automatically on boot; all new features are opt-in).
 
 An in-house SIP call generator and **minutes-for-minutes loop runner**: it originates
 outbound calls, answers the leg that returns through your switch, and reports the loop
@@ -12,6 +16,10 @@ call/media work; Python is control-plane only, so it idles near 0 % CPU.
 The loop SIPp scenarios live in [`gencall/scenarios/templates/`](gencall/scenarios/templates/)
 (`loop_uac.xml`, `loop_uas.xml`) and are used automatically by the engine — nothing to install
 separately.
+
+**New in 3.0:** Prometheus `/metrics` + Grafana dashboard, webhook alerts, console
+RBAC (viewer/operator/admin), CDR CSV export, per-campaign schedule windows,
+JSON logging, and opt-in worker→controller stats push. See the release guide.
 
 ---
 

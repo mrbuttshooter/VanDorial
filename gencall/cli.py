@@ -221,7 +221,7 @@ def cmd_server(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="gencall",
-        description="GenCall - SIP Traffic Generator v2.0",
+        description="GenCall - SIP Traffic Generator v3.0",
     )
     sub = parser.add_subparsers(dest="command", help="Command")
 
