@@ -1192,7 +1192,7 @@ class LoopEngine:
             )
             return UAC_TEMPLATE
         try:
-            with open(UAC_TEMPLATE, "r", encoding="utf-8") as fh:
+            with open(UAC_TEMPLATE, encoding="utf-8") as fh:
                 xml = fh.read()
             if _RTP_HOOK not in xml:
                 logger.warning("loop_uac.xml has no RTP_HOOK; media not injected")
@@ -1256,7 +1256,7 @@ class LoopEngine:
             return []
         pairs = []
         try:
-            with open(csv_path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(csv_path, encoding="utf-8", errors="replace") as fh:
                 for idx, line in enumerate(fh):
                     line = line.strip()
                     if not line:

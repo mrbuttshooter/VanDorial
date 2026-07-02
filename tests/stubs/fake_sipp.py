@@ -198,7 +198,7 @@ def _read_inf_pairs(path):
     """
     pairs = []
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             lines = [ln.strip() for ln in fh if ln.strip()]
         for idx, ln in enumerate(lines):
             if idx == 0 and ln.upper() in ("SEQUENTIAL", "RANDOM", "USERS"):
@@ -248,7 +248,6 @@ def main(argv):
         return (f"1000{n:06d}", f"2000{n:06d}")
 
     start_wall = time.time()
-    start_ms = _now_ms()
 
     # Open both output files up front (truncate). Writing the stats header
     # immediately means an early reader sees a valid (header-only) file.

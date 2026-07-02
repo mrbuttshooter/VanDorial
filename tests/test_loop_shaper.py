@@ -21,7 +21,6 @@ import time
 
 import pytest
 
-from gencall.core.config import Config
 from gencall.core.loop_engine import LoopEngine
 from gencall.core.process_registry import ProcessRegistry
 from gencall.core.sipp_engine import SIPpEngine, SIPpState

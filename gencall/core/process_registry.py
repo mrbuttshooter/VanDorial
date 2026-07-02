@@ -253,7 +253,7 @@ class ProcessRegistry:
 
     def _fallback_load(self):
         try:
-            with open(self.fallback_path, "r", encoding="utf-8") as fh:
+            with open(self.fallback_path, encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, list):
                 return data

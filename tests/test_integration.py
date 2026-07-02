@@ -23,7 +23,6 @@ contract expects (import failures, missing attributes), the affected test is
 skipped rather than erroring, so the runnable-and-passing guarantee holds.
 """
 
-import importlib
 
 import pytest
 
@@ -47,7 +46,7 @@ except Exception as exc:  # pragma: no cover - defensive
 
 try:
     from gencall.core.sipp_engine import (
-        SIPpInstance, SIPpState, SIPpTransport, SIPpMode,
+        SIPpInstance, SIPpState,
     )
     from gencall.core.stats import StatsEngine
 except Exception as exc:  # pragma: no cover - defensive

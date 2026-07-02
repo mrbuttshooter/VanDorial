@@ -7,7 +7,6 @@ import argparse
 import asyncio
 import logging
 import socket
-import sys
 import os
 import tempfile
 from contextlib import asynccontextmanager

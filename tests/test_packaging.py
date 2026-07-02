@@ -26,7 +26,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _read(rel):
     path = os.path.join(REPO_ROOT, rel)
     assert os.path.isfile(path), f"missing deliverable: {rel}"
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         return fh.read()
 
 

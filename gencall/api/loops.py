@@ -16,7 +16,6 @@ the same ``require_api_key`` dependency the rest of the worker API uses.
 
 import logging
 import os
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -42,18 +41,18 @@ router = APIRouter()
 
 # Wired in main.py (create_app) once the LoopEngine is constructed. None means
 # the loop subsystem is not configured — endpoints then return 503.
-loop_engine: Optional[LoopEngine] = None
+loop_engine: LoopEngine | None = None
 
 # The shared LoopMatcher (design §4.3), wired in main.py alongside the engine.
 # When present, GET /api/loops/{id} folds the latest loop_stats snapshot into the
 # campaign's live status. None => no matcher (e.g. no DB); the field is omitted.
-loop_matcher: Optional[LoopMatcher] = None
+loop_matcher: LoopMatcher | None = None
 
 # The shared CallRecordParser (design §4.2), wired in main.py. GET/POST
 # /api/config/trust read/hot-apply its inbound trust whitelist + drop flag (the
 # controller fans the whitelist out to every worker via this endpoint). None =>
 # no parser configured on this worker; the endpoints return 503.
-call_parser: Optional[CallRecordParser] = None
+call_parser: CallRecordParser | None = None
 
 # The on-demand pcap CaptureManager (design Part 3), wired in main.py. None =>
 # capture is not configured on this worker (e.g. a Windows dev box, or tcpdump
@@ -67,7 +66,7 @@ def _engine() -> LoopEngine:
     return loop_engine
 
 
-def _lookup_node(node_id: int) -> Optional[dict]:
+def _lookup_node(node_id: int) -> dict | None:
     """Resolve a node (Server row) to a dict, or None. Uses the engine's DB."""
     db = getattr(_engine(), "db", None)
     if db is None:
@@ -116,7 +115,7 @@ class StartLoopRequest(BaseModel):
     # Node ("each IP one loop"): when set, the loop's source IP AND number pool
     # are taken from this node (gencall.db.models.Server), overriding local_ip /
     # csv_path below. This is the primary path from the UI.
-    node_id: Optional[int] = None
+    node_id: int | None = None
     # Source IP this loop originates from ("Node = IP"). "" => OS-routed (legacy
     # single-IP behaviour). The engine enforces one running loop per non-empty IP.
     local_ip: str = ""
@@ -434,8 +433,7 @@ def fleet_capture_download(campaign_id: str, capture_id: str, box: str = "local"
                           f"/api/loops/{campaign_id}/capture/{capture_id}/download",
                           headers={"X-API-Key": _worker_key(box)}) as r:
                 r.raise_for_status()
-                for chunk in r.iter_bytes(65536):
-                    yield chunk
+                yield from r.iter_bytes(65536)
 
     return StreamingResponse(_proxy(), media_type="application/vnd.tcpdump.pcap",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
@@ -554,7 +552,7 @@ def fleet_resources():
     except HTTPException:
         pass
 
-    local: Optional[dict] = None        # this box, computed once on demand
+    local: dict | None = None        # this box, computed once on demand
     cache: dict = {}                    # api_url -> resources dict (with online/error)
 
     # Pre-fetch every DISTINCT remote worker's /api/resources CONCURRENTLY with a
@@ -926,7 +924,7 @@ def delete_node_group(group_id: int):
 class GroupStartRequest(BaseModel):
     """Optionally start only a SUBSET of a group's nodes. ``node_ids`` = None or
     empty means "all member nodes" (the common case)."""
-    node_ids: Optional[list[int]] = None
+    node_ids: list[int] | None = None
 
 
 @router.post("/api/node-groups/{group_id}/start", dependencies=[Depends(require_api_key)])
@@ -1064,9 +1062,9 @@ class LoopPresetRequest(BaseModel):
 class RunPresetRequest(BaseModel):
     """Where to fire a preset: a single source-IP node, OR a group (optionally a
     subset of its members via ``node_ids``)."""
-    node_id: Optional[int] = None
-    group_id: Optional[int] = None
-    node_ids: Optional[list[int]] = None
+    node_id: int | None = None
+    group_id: int | None = None
+    node_ids: list[int] | None = None
 
 
 _PRESET_FIELDS = (
@@ -1265,7 +1263,7 @@ def run_loop_preset(preset_id: int, req: RunPresetRequest = Body(default=None)):
 # ─── Sale zones + number generation (web "drop zone" flow) ───────────────────
 
 # The deck is loaded once and cached (it is large and read-only).
-_ZONES_CACHE: Optional[dict] = None
+_ZONES_CACHE: dict | None = None
 
 
 def _zones():
@@ -1287,7 +1285,7 @@ class GenerateNumbersRequest(BaseModel):
     # so one request can't pin a thread + RAM building an oversized pool.
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=11, ge=4, le=18)
-    seed: Optional[int] = None
+    seed: int | None = None
 
 
 def _merged_catalog():

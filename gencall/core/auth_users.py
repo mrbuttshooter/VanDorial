@@ -26,7 +26,6 @@ import hmac
 import logging
 import secrets
 import time
-from typing import Optional
 
 logger = logging.getLogger("gencall.auth_users")
 
@@ -114,7 +113,7 @@ class UserManager:
         finally:
             session.close()
 
-    def verify(self, username: str, password: str) -> Optional[dict]:
+    def verify(self, username: str, password: str) -> dict | None:
         """Return the user dict if the credentials are valid and enabled."""
         from gencall.db.models import User
         session = self.db.get_session()
@@ -200,7 +199,7 @@ class SessionManager:
         finally:
             session.close()
 
-    def validate(self, raw_token: str) -> Optional[dict]:
+    def validate(self, raw_token: str) -> dict | None:
         """Return {user_id, username, expires_at} for a live token, else None."""
         if not raw_token:
             return None

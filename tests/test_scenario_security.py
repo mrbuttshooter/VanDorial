@@ -6,7 +6,6 @@ authenticated API caller could read, overwrite, or delete arbitrary .xml files
 ``../../../path``. These lock the fix in gencall.scenarios.manager.
 """
 
-import os
 
 import pytest
 

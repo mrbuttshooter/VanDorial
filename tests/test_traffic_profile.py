@@ -14,7 +14,7 @@ def test_make_curve_shape_defaults():
 def test_make_curve_tz_offset_rotates():
     base = tp.make_curve(tz_offset=0)
     rot = tp.make_curve(tz_offset=3)
-    assert rot[h := 0] == base[3 % 24]
+    assert rot[0] == base[3 % 24]
     assert rot[12] == base[15]
 
 

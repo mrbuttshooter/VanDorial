@@ -19,7 +19,6 @@ stub_sipp fixture for how config.sipp_command is wired to the stub.
 import os
 import time
 
-import pytest
 
 from gencall.core.sipp_engine import (
     SIPpEngine,
@@ -90,7 +89,7 @@ def test_stub_produces_parseable_stats(stub_sipp):
 
         # The stats file exists, is SIPp-format (';'-separated, header + rows).
         assert os.path.exists(inst._stats_file)
-        with open(inst._stats_file, "r", encoding="utf-8") as fh:
+        with open(inst._stats_file, encoding="utf-8") as fh:
             lines = [ln for ln in fh.read().splitlines() if ln.strip()]
         assert len(lines) >= 2
         header = lines[0].split(";")
@@ -128,7 +127,7 @@ def test_stub_writes_per_call_log(stub_sipp):
         )
         assert got, "stub never wrote a per-call log"
 
-        with open(call_log, "r", encoding="utf-8") as fh:
+        with open(call_log, encoding="utf-8") as fh:
             first = fh.readline()
         # Design §4.2 UAC fields must all be present on a line.
         for field in (

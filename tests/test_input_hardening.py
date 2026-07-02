@@ -11,7 +11,6 @@ These lock the fixes that don't touch the engine or call flow:
   * a directly-supplied loop `csv_path` is contained to the pools directory.
 """
 
-import ipaddress
 
 import pytest
 from pydantic import ValidationError

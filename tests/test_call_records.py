@@ -414,7 +414,7 @@ def test_ingest_multibyte_line_end_to_end(tmp_path, db):
             "loop_uac direction=out call_id=mbcall a_number=café日本 "
             "b_number=200 t_invite=1000 t_200ok_received=1100 "
             "t_bye_sent=61100 final_code=200\n"
-        ).encode("utf-8")
+        ).encode()
     )
     parser = CallRecordParser(db=db)
     parser.add_log_file(str(path), campaign_id="mb")

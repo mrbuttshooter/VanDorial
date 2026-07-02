@@ -28,7 +28,7 @@ die()  { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "Run as root:  sudo $0"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-[ -f "$REPO/setup.py" ] && [ -d "$REPO/gencall" ] || die "Run from inside the cloned repo (setup.py not found)."
+[ -f "$REPO/pyproject.toml" ] && [ -d "$REPO/gencall" ] || die "Run from inside the cloned repo (pyproject.toml not found)."
 . /etc/os-release 2>/dev/null || true
 [ "${ID:-}" = "ubuntu" ] || warn "This script targets Ubuntu; ${PRETTY_NAME:-this OS} may need tweaks."
 

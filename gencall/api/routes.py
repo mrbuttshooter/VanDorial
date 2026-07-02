@@ -7,22 +7,19 @@ import os
 import uuid
 import datetime
 import logging
-from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Header, Request, Depends
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from gencall.core.sipp_engine import (
-    SIPpEngine, SIPpInstance, SIPpMode, SIPpTransport, SIPpState
+    SIPpEngine, SIPpInstance, SIPpTransport, SIPpState
 )
 from gencall.core.stats import StatsEngine
 from gencall.core.api_gateway import APIGateway
 from gencall.api.loop_validation import validate_transport
 from gencall.scenarios.manager import ScenarioManager
 from gencall import __version__
-from gencall.db.models import Database, Connector, Scenario, Server, TestRun, User
+from gencall.db.models import Database, Connector, Scenario, Server, TestRun
 
 logger = logging.getLogger("gencall.api")
 
@@ -41,20 +38,20 @@ from gencall.api.security_headers import install_security_headers
 install_security_headers(app)
 
 # These get set during app startup
-engine: Optional[SIPpEngine] = None
-stats: Optional[StatsEngine] = None
-scenarios: Optional[ScenarioManager] = None
-db: Optional[Database] = None
+engine: SIPpEngine | None = None
+stats: StatsEngine | None = None
+scenarios: ScenarioManager | None = None
+db: Database | None = None
 # API authentication gateway (keys + rate limiter + audit log). Wired in
 # main.py when a database is available; None means auth is not configured.
-gateway: Optional[APIGateway] = None
+gateway: APIGateway | None = None
 
 # Raw API key handed to the served NOC console at load via /api/console/bootstrap
 # so any browser that opens /console is authenticated without pasting a key by
 # hand (the key used to live only in each browser's localStorage). Set in
 # main.py ONLY when this box serves the console; stays None on fleet workers and
 # in external-API-only deployments, where the bootstrap endpoint then 404s.
-console_api_key: Optional[str] = None
+console_api_key: str | None = None
 
 
 # ─── Authentication ──────────────────────────────────────────────────────────
@@ -184,7 +181,7 @@ class ServerRequest(BaseModel):
     name: str
     ip: str
     description: str = ""
-    group_id: Optional[int] = None  # optional NodeGroup membership
+    group_id: int | None = None  # optional NodeGroup membership
     # Remote worker (one controller, many workers): when api_url is set this node
     # lives on ANOTHER box — pool-gen + loop-start are proxied there. Blank =
     # local node on this box.
@@ -223,7 +220,7 @@ class GeneratePoolRequest(BaseModel):
     dest_code: str = ""
     # None => keep the node's stored fixed-only setting (so a bare "regenerate"
     # never silently clears it); True/False explicitly overrides it.
-    dest_fixed_only: Optional[bool] = None
+    dest_fixed_only: bool | None = None
     count: int = Field(default=500000, ge=1, le=2_000_000)
     length: int = Field(default=0, ge=0, le=18)  # 0 => keep the node's stored length
 
@@ -868,12 +865,12 @@ def generate_server_pool(server_id: int, req: GeneratePoolRequest):
 
 
 class ServerUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    group_id: Optional[int] = None  # -1 clears membership; None leaves unchanged
-    enabled: Optional[bool] = None
-    api_url: Optional[str] = None   # "" clears (back to local); None leaves unchanged
-    api_key: Optional[str] = None   # blank leaves unchanged
+    name: str | None = None
+    description: str | None = None
+    group_id: int | None = None  # -1 clears membership; None leaves unchanged
+    enabled: bool | None = None
+    api_url: str | None = None   # "" clears (back to local); None leaves unchanged
+    api_key: str | None = None   # blank leaves unchanged
 
 
 @app.put("/api/servers/{server_id}", dependencies=[Depends(require_api_key)])

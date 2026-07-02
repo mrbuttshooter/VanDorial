@@ -29,7 +29,7 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from gencall.controller.node_client import NodeClient
 
@@ -96,7 +96,7 @@ def aggregate_snapshots(snapshots: list[dict]) -> dict:
     return out
 
 
-def aggregate_loop_stats(per_node: dict[int, Optional[dict]]) -> dict:
+def aggregate_loop_stats(per_node: dict[int, dict | None]) -> dict:
     """Sum a map of node_id -> loop_stats snapshot into one combined view.
 
     Each per-node snapshot is the shape produced by the worker's
@@ -196,7 +196,7 @@ class FleetAggregator:
         health_interval: float = 5.0,
         history_size: int = 1000,
         verify_tls: bool = False,
-        fleet_trust_provider: Optional[Callable[[], dict]] = None,
+        fleet_trust_provider: Callable[[], dict] | None = None,
     ):
         self._node_provider = node_provider
         self.stats_interval = stats_interval
@@ -210,7 +210,7 @@ class FleetAggregator:
         self._fleet_trust_provider = fleet_trust_provider
 
         # node_id -> latest StatsSnapshot dict (None if offline)
-        self._node_stats: dict[int, Optional[dict]] = {}
+        self._node_stats: dict[int, dict | None] = {}
         # node_id -> {online, version, active_tests, last_seen, error, group_id}
         self._node_status: dict[int, dict] = {}
         self._history: deque[dict] = deque(maxlen=history_size)
@@ -220,8 +220,8 @@ class FleetAggregator:
         self._status_listeners: list[Callable[[dict], None]] = []
 
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ─── listeners ──────────────────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ class FleetAggregator:
 
         with self._lock:
             present_ids = set()
-            for nid, stats, err in results:
+            for nid, stats, _err in results:
                 present_ids.add(nid)
                 if stats is not None:
                     self._node_stats[nid] = stats
@@ -431,7 +431,7 @@ class FleetAggregator:
         with self._lock:
             return bool(self._node_status.get(node_id, {}).get("online", False))
 
-    def node_status(self, node_id: int) -> Optional[dict]:
+    def node_status(self, node_id: int) -> dict | None:
         with self._lock:
             st = self._node_status.get(node_id)
             return dict(st) if st else None
@@ -447,7 +447,7 @@ class FleetAggregator:
             node_stats = dict(self._node_stats)
             status = dict(self._node_status)
 
-        per_node: dict[int, Optional[dict]] = {}
+        per_node: dict[int, dict | None] = {}
         per_group_lists: dict[Any, list] = {}
         online_snaps: list[dict] = []
 

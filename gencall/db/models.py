@@ -5,8 +5,7 @@ Uses SQLAlchemy for ORM with SQLite/PostgreSQL support.
 
 import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, DateTime, Text, Enum,
-    UniqueConstraint, create_engine,
+    Column, Integer, String, Float, Boolean, DateTime, Text, UniqueConstraint, create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 

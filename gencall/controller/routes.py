@@ -22,7 +22,6 @@ import asyncio
 import datetime
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Request, Response
 from pydantic import BaseModel
@@ -51,17 +50,17 @@ router = APIRouter(tags=["controller"])
 class NodeCreate(BaseModel):
     name: str
     address: str
-    group_id: Optional[int] = None
+    group_id: int | None = None
     api_key: str = ""
     enabled: bool = True
 
 
 class NodeUpdate(BaseModel):
-    name: Optional[str] = None
-    address: Optional[str] = None
-    group_id: Optional[int] = None
-    api_key: Optional[str] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    address: str | None = None
+    group_id: int | None = None
+    api_key: str | None = None
+    enabled: bool | None = None
 
 
 class GroupCreate(BaseModel):
@@ -70,9 +69,9 @@ class GroupCreate(BaseModel):
 
 
 class GroupUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    node_ids: Optional[list[int]] = None
+    name: str | None = None
+    description: str | None = None
+    node_ids: list[int] | None = None
 
 
 class Destination(BaseModel):
@@ -93,15 +92,15 @@ class AuthSpec(BaseModel):
 
 class FleetLaunchRequest(BaseModel):
     name: str = ""
-    group_id: Optional[int] = None
-    node_ids: Optional[list[int]] = None
+    group_id: int | None = None
+    node_ids: list[int] | None = None
     scenario: str = "basic_call"
     destination: Destination
     rate: RateSpec = RateSpec()
-    call_limit: Optional[int] = None
-    max_calls: Optional[int] = None
-    duration: Optional[int] = None
-    auth: Optional[AuthSpec] = None
+    call_limit: int | None = None
+    max_calls: int | None = None
+    duration: int | None = None
+    auth: AuthSpec | None = None
 
 
 class FleetLoopLaunchRequest(BaseModel):
@@ -114,8 +113,8 @@ class FleetLoopLaunchRequest(BaseModel):
     StartLoopRequest body.
     """
     name: str = ""
-    group_id: Optional[int] = None
-    node_ids: Optional[list[int]] = None
+    group_id: int | None = None
+    node_ids: list[int] | None = None
     destination: Destination
     rate: RateSpec = RateSpec()
     csv_path: str = ""

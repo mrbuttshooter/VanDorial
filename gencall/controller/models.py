@@ -18,7 +18,7 @@ Fields mirror the spec:
 
 import datetime
 import json
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text,
@@ -61,7 +61,7 @@ def _as_json(value: Any, default):
         return default
 
 
-def _iso(dt: Optional[datetime.datetime]) -> Optional[str]:
+def _iso(dt: datetime.datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 

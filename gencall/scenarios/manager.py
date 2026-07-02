@@ -6,7 +6,6 @@ Manages SIPp XML scenarios - built-in templates and custom scenarios.
 import os
 import logging
 import re
-from typing import Optional
 
 logger = logging.getLogger("gencall.scenarios")
 
@@ -106,7 +105,7 @@ class ScenarioManager:
                     })
         return result
 
-    def get_scenario_path(self, name: str) -> Optional[str]:
+    def get_scenario_path(self, name: str) -> str | None:
         """Get the file path for a named scenario."""
         if name in self._builtin:
             return self._builtin[name]
@@ -118,11 +117,11 @@ class ScenarioManager:
                 return custom_path
         return None
 
-    def get_scenario_content(self, name: str) -> Optional[str]:
+    def get_scenario_content(self, name: str) -> str | None:
         """Read the XML content of a scenario."""
         path = self.get_scenario_path(name)
         if path and os.path.exists(path):
-            with open(path, "r") as f:
+            with open(path) as f:
                 return f.read()
         return None
 

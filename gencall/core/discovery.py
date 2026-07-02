@@ -23,7 +23,7 @@ import json
 import logging
 import socket
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger("gencall.discovery")
 
@@ -49,7 +49,7 @@ def encode_beacon(beacon: dict) -> bytes:
     return json.dumps(beacon, separators=(",", ":")).encode("utf-8")
 
 
-def parse_beacon(data: bytes, expected_token: str) -> Optional[dict]:
+def parse_beacon(data: bytes, expected_token: str) -> dict | None:
     """Validate + parse a received datagram. Returns the node info dict
     (``address``/``hostname``/``version``) or None if it is not a valid beacon
     for our fleet (bad JSON, wrong magic, token mismatch, or no address).
@@ -92,7 +92,7 @@ class BeaconBroadcaster:
         self.interval = max(2, int(interval))
         self.address = address
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -134,8 +134,8 @@ class BeaconListener:
         self.port = port
         self.token = token
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._sock: Optional[socket.socket] = None
+        self._thread: threading.Thread | None = None
+        self._sock: socket.socket | None = None
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -154,7 +154,7 @@ class BeaconListener:
         while not self._stop.is_set():
             try:
                 data, _addr = self._sock.recvfrom(MAX_BEACON_BYTES)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

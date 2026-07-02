@@ -18,7 +18,6 @@ is exercised directly against the runner's pure helper.
 import os
 import re
 
-import pytest
 
 MIGRATIONS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -50,7 +49,7 @@ def test_migrations_have_no_raw_autoincrement_for_postgres():
     )
 
     for path in _migration_sql_files():
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             sql = fh.read()
         for stmt in _split_statements(sql):
             pg = _translate_for_dialect(stmt, "postgresql")
@@ -73,7 +72,7 @@ def test_query_sql_has_no_sqlite_only_is_param():
         if not fname.endswith(".py"):
             continue
         path = os.path.join(CORE_DIR, fname)
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             lines = fh.readlines()
         for lineno, line in enumerate(lines, 1):
             # Strip a Python line comment so the pattern in THIS test's own

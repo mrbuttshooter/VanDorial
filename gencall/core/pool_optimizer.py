@@ -25,7 +25,6 @@ import logging
 import os
 import random
 import tempfile
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("gencall.pool_optimizer")
 
@@ -46,7 +45,7 @@ def _is_answered(final_code, duration_ms) -> bool:
 
 
 def prefix_asr(db, campaign_id: str, prefix_len: int = 6,
-               recent_limit: int = 0) -> Dict[str, List[int]]:
+               recent_limit: int = 0) -> dict[str, list[int]]:
     """Return ``{prefix: [answered, total]}`` for a campaign's B-numbers.
 
     ``prefix`` is the first ``prefix_len`` digits of ``b_number`` (country code +
@@ -57,7 +56,7 @@ def prefix_asr(db, campaign_id: str, prefix_len: int = 6,
     (newest by row id), so the score tracks CURRENT routability instead of being
     dragged down forever by pre-convergence history. 0 = all-time.
     """
-    stats: Dict[str, List[int]] = {}
+    stats: dict[str, list[int]] = {}
     if db is None:
         return stats
     try:
@@ -87,10 +86,10 @@ def prefix_asr(db, campaign_id: str, prefix_len: int = 6,
 
 
 def classify_prefixes(
-    stats: Dict[str, List[int]],
+    stats: dict[str, list[int]],
     min_attempts: int = 30,
     min_asr: float = 0.5,
-) -> Tuple[List[str], List[str], List[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     """Split prefixes into (keep, drop, undecided).
 
     A prefix is only judged once it has ``>= min_attempts`` calls:
@@ -99,9 +98,9 @@ def classify_prefixes(
     Under ``min_attempts`` it is *undecided* — never dropped on thin evidence, so
     a new prefix gets a fair trial before being pruned.
     """
-    keep: List[str] = []
-    drop: List[str] = []
-    undecided: List[str] = []
+    keep: list[str] = []
+    drop: list[str] = []
+    undecided: list[str] = []
     for pfx, (answered, total) in stats.items():
         if total < min_attempts:
             undecided.append(pfx)
@@ -115,14 +114,14 @@ def rebuild_pool_csv(
     *,
     origin_zone: str,
     origin_code: str,
-    keep_prefixes: List[str],
+    keep_prefixes: list[str],
     dad_length: int = 12,
-    oad_length: Optional[int] = None,
+    oad_length: int | None = None,
     count: int = 500000,
-    deck_path: Optional[str] = None,
-    out_dir: Optional[str] = None,
-    seed: Optional[int] = None,
-) -> Tuple[str, int]:
+    deck_path: str | None = None,
+    out_dir: str | None = None,
+    seed: int | None = None,
+) -> tuple[str, int]:
     """Write a new A/B pool whose B-numbers come ONLY from ``keep_prefixes``.
 
     A-numbers are generated from the node's origin zone/code exactly as before;
@@ -163,7 +162,7 @@ def rebuild_pool_csv(
     return path, len(pairs)
 
 
-def best_prefix(stats: Dict[str, List[int]]) -> Optional[str]:
+def best_prefix(stats: dict[str, list[int]]) -> str | None:
     """The single best prefix by ASR (ties broken by call volume), or None."""
     if not stats:
         return None
@@ -174,14 +173,14 @@ def best_prefix(stats: Dict[str, List[int]]) -> Optional[str]:
 def optimize(
     db,
     campaign: dict,
-    node: Optional[dict],
+    node: dict | None,
     *,
     prefix_len: int = 6,
     min_attempts: int = 30,
     min_asr: float = 0.5,
     window: int = 0,
-    last_keep: Optional[List[str]] = None,
-) -> Optional[dict]:
+    last_keep: list[str] | None = None,
+) -> dict | None:
     """Analyze one campaign and, if there are dead prefixes to prune, rebuild its
     pool from the routable ones. Returns a report dict (or ``None`` = no change).
 

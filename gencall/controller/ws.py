@@ -25,7 +25,6 @@ import logging
 import threading
 import time
 from enum import Enum
-from typing import Optional
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -169,7 +168,7 @@ class FleetConnectionManager:
 
 manager = FleetConnectionManager()
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:

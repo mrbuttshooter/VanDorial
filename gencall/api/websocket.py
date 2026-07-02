@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -72,7 +72,7 @@ class WSClient:
         except Exception:
             return False
 
-    def is_subscribed(self, topic: StreamTopic, test_id: Optional[str] = None) -> bool:
+    def is_subscribed(self, topic: StreamTopic, test_id: str | None = None) -> bool:
         if StreamTopic.ALL in self.subscriptions:
             return True
         if topic not in self.subscriptions:
@@ -138,7 +138,7 @@ class ConnectionManager:
         self,
         topic: StreamTopic,
         data: dict,
-        test_id: Optional[str] = None,
+        test_id: str | None = None,
     ) -> int:
         """Broadcast to all clients subscribed to the topic. Returns delivery count."""
         message = {
@@ -177,7 +177,7 @@ class ConnectionManager:
         self,
         topic: StreamTopic,
         data: dict,
-        test_id: Optional[str] = None,
+        test_id: str | None = None,
     ) -> None:
         """
         Synchronous broadcast for use from non-async callbacks
@@ -307,7 +307,7 @@ manager = ConnectionManager()
 
 # ─── Event Loop Reference (for sync-to-async bridging) ───────────────────────
 
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:

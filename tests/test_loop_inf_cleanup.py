@@ -1,5 +1,6 @@
 """Generated -inf cleanup helper: deletes only our own gencall_loop_*.csv."""
-import os, tempfile
+import os
+import tempfile
 from gencall.core.loop_engine import LoopEngine
 
 
@@ -28,4 +29,5 @@ def test_unlink_inf_refuses_non_inf_paths():
         LoopEngine._unlink_inf("/tmp/gencall_loop_does_not_exist.csv")  # missing
         assert os.path.exists(pool) and os.path.exists(other)
     finally:
-        os.unlink(pool); os.unlink(other)
+        os.unlink(pool)
+        os.unlink(other)

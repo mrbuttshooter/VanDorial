@@ -16,12 +16,9 @@ regression that re-introduces them fails CI on a plain box:
     a busy SIPp; SIPp's own -trace_err file carries the detail.
 """
 
-from gencall.core.config import Config
 from gencall.core.sipp_engine import (
     SIPpInstance,
-    SIPpMode,
     SIPpState,
-    SIPpTransport,
 )
 
 

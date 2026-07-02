@@ -6,7 +6,6 @@ Pure beacon encode/parse, the controller-side node upsert, the listener thread
 [web] serve_console / --headless toggle.
 """
 
-import os
 import socket
 import tempfile
 import time

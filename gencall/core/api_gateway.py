@@ -21,8 +21,6 @@ import logging
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Optional, Any
-from functools import wraps
 
 logger = logging.getLogger("gencall.api_gateway")
 
@@ -184,7 +182,7 @@ class APIKeyManager:
             logger.info("API key registered: %s (%s)", name, key_id)
             return api_key
 
-    def validate_key(self, raw_key: str) -> Optional[APIKey]:
+    def validate_key(self, raw_key: str) -> APIKey | None:
         """Validate a raw API key. Returns the APIKey if valid and enabled."""
         if not raw_key:
             return None
@@ -545,13 +543,13 @@ class APIGateway:
         with self._lock:
             self.templates[template.template_id] = template
 
-    def get_template(self, template_id: str) -> Optional[TestTemplate]:
+    def get_template(self, template_id: str) -> TestTemplate | None:
         return self.templates.get(template_id)
 
     def list_templates(self) -> list[dict]:
         return [t.to_dict() for t in self.templates.values()]
 
-    def authenticate(self, raw_key: str) -> Optional[APIKey]:
+    def authenticate(self, raw_key: str) -> APIKey | None:
         """Authenticate and rate-check an API key."""
         api_key = self.keys.validate_key(raw_key)
         if not api_key:

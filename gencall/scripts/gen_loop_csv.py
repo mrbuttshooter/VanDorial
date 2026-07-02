@@ -51,9 +51,8 @@ import random
 import re
 import sys
 from collections import OrderedDict
-from typing import Dict, List, Optional, Set, Tuple
 
-Pair = Tuple[str, str]
+Pair = tuple[str, str]
 
 _log = logging.getLogger("gencall.gen_loop_csv")
 
@@ -64,7 +63,7 @@ _DECK_SAMPLE = os.path.join(_HERE, "data", "sale_codes.sample.csv")
 
 # ── Sale Codes deck ───────────────────────────────────────────────────────────
 
-def resolve_deck_path(explicit: Optional[str] = None) -> str:
+def resolve_deck_path(explicit: str | None = None) -> str:
     """Return the first Sale Codes deck path that exists (see module docstring)."""
     for p in (explicit, os.environ.get("GENCALL_SALE_CODES"), _DECK_FULL, _DECK_SAMPLE):
         if p and os.path.isfile(p):
@@ -75,14 +74,14 @@ def resolve_deck_path(explicit: Optional[str] = None) -> str:
     )
 
 
-def load_zones(deck_path: str) -> "OrderedDict[str, List[str]]":
+def load_zones(deck_path: str) -> OrderedDict[str, list[str]]:
     """Load ``zone -> [codes]`` from a 2-column (zone,code) CSV.
 
     A header row ``zone,code`` is skipped. Non-digit codes are ignored. Codes are
     de-duplicated per zone and kept shortest-first (the base breakout first).
     """
-    zones: "OrderedDict[str, List[str]]" = OrderedDict()
-    with open(deck_path, "r", encoding="utf-8", newline="") as fh:
+    zones: OrderedDict[str, list[str]] = OrderedDict()
+    with open(deck_path, encoding="utf-8", newline="") as fh:
         reader = _csv.reader(fh)
         for i, row in enumerate(reader):
             if len(row) < 2:
@@ -100,12 +99,12 @@ def load_zones(deck_path: str) -> "OrderedDict[str, List[str]]":
     return zones
 
 
-def merge_zones(base: Dict[str, List[str]],
-                extra: Optional[Dict[str, List[str]]]) -> "OrderedDict[str, List[str]]":
+def merge_zones(base: dict[str, list[str]],
+                extra: dict[str, list[str]] | None) -> OrderedDict[str, list[str]]:
     """Return a NEW ``{zone: [codes]}`` map = ``base`` plus ``extra`` (the DB
     overlay). Extra codes are appended to an existing zone (de-duped) or create a
     new zone. Codes stay shortest-first. ``base`` is never mutated."""
-    merged: "OrderedDict[str, List[str]]" = OrderedDict(
+    merged: OrderedDict[str, list[str]] = OrderedDict(
         (z, list(codes)) for z, codes in base.items()
     )
     for zone, codes in (extra or {}).items():
@@ -139,25 +138,25 @@ def derive_country(zone: str) -> str:
     return name.split("-", 1)[0].strip()
 
 
-def build_country_tree(zones: Dict[str, List[str]],
-                       country_overrides: Optional[Dict[str, str]] = None
-                       ) -> "OrderedDict[str, List[str]]":
+def build_country_tree(zones: dict[str, list[str]],
+                       country_overrides: dict[str, str] | None = None
+                       ) -> OrderedDict[str, list[str]]:
     """Group zone names by country: ``country -> [zone, ...]`` (sorted).
 
     Country is ``country_overrides[zone]`` when present (DB overlay rows carry an
     explicit country), else derived from the zone name."""
     overrides = country_overrides or {}
-    tree: "OrderedDict[str, List[str]]" = OrderedDict()
+    tree: OrderedDict[str, list[str]] = OrderedDict()
     for zone in zones:
         country = overrides.get(zone) or derive_country(zone)
         tree.setdefault(country, []).append(zone)
-    out: "OrderedDict[str, List[str]]" = OrderedDict()
+    out: OrderedDict[str, list[str]] = OrderedDict()
     for country in sorted(tree):
         out[country] = sorted(tree[country])
     return out
 
 
-def find_zone(zones: Dict[str, List[str]], query: str) -> str:
+def find_zone(zones: dict[str, list[str]], query: str) -> str:
     """Resolve a zone name from a query: exact (case-insensitive) wins; otherwise
     a UNIQUE case-insensitive substring match. Raises ValueError listing
     candidates when ambiguous or absent."""
@@ -262,7 +261,7 @@ def translate_pattern(pattern: str) -> str:
     return pattern.replace(r"\|", "|")
 
 
-def parse_skeleton(pattern: str) -> Tuple[int, str]:
+def parse_skeleton(pattern: str) -> tuple[int, str]:
     """Extract ``(lead_count, token)`` from a pattern's first alternative.
 
     ``lead_count`` = single ``.`` wildcards before the literal token; ``token`` =
@@ -316,16 +315,16 @@ def gen_from_pattern(pattern: str, total_len: int, rng: random.Random) -> str:
 # deck re-import on an air-gapped box (the deck may still list the dead codes).
 # Extend at runtime with ``$GENCALL_ROUTABLE_CODES`` ("Zone Name=22462|22463;
 # Other Zone=555").
-ROUTABLE_ALLOWLIST: Dict[str, Set[str]] = {
+ROUTABLE_ALLOWLIST: dict[str, set[str]] = {
     "Guinea-Mobile (Orange)": {"22462"},
 }
 
 
-def _env_routable_overrides() -> Dict[str, Set[str]]:
+def _env_routable_overrides() -> dict[str, set[str]]:
     """Parse ``$GENCALL_ROUTABLE_CODES`` into ``{zone: {code, ...}}`` (empty when
     unset/malformed). Format: ``Zone Name=code|code; Other Zone=code,code``."""
     raw = os.environ.get("GENCALL_ROUTABLE_CODES", "") or ""
-    out: Dict[str, Set[str]] = {}
+    out: dict[str, set[str]] = {}
     for chunk in raw.split(";"):
         if "=" not in chunk:
             continue
@@ -338,7 +337,7 @@ def _env_routable_overrides() -> Dict[str, Set[str]]:
     return out
 
 
-def allowlist_for(zone_name: str) -> Optional[Set[str]]:
+def allowlist_for(zone_name: str) -> set[str] | None:
     """Routable-code allowlist for a resolved zone name, or ``None`` when the zone
     has no known routability constraint (so all of its codes are usable)."""
     merged = dict(ROUTABLE_ALLOWLIST)
@@ -346,7 +345,7 @@ def allowlist_for(zone_name: str) -> Optional[Set[str]]:
     return merged.get(zone_name)
 
 
-def routable_codes(zone_name: str, codes: List[str]) -> List[str]:
+def routable_codes(zone_name: str, codes: list[str]) -> list[str]:
     """Filter ``codes`` to those known-routable for ``zone_name``.
 
     A zone with no allowlist entry is returned unchanged. If the allowlist would
@@ -375,7 +374,7 @@ def set_overlay_provider(fn) -> None:
     _overlay_provider = fn
 
 
-def _overlay_zones() -> Dict[str, List[str]]:
+def _overlay_zones() -> dict[str, list[str]]:
     if _overlay_provider is None:
         return {}
     try:
@@ -441,7 +440,7 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
                    dad_zone=None, dad_code=None, dad_pattern=None,
                    count=100, length=11, seed=None, unique=True,
                    oad_length=None, dad_length=None,
-                   dad_fixed_only=False) -> List[Pair]:
+                   dad_fixed_only=False) -> list[Pair]:
     """Generate ``count`` validated (A, B) pairs.
 
     Each side is driven by a zone (codes spread across the zone), a pinned code,
@@ -479,7 +478,7 @@ def generate_pairs(zones, *, oad_zone=None, oad_code=None, oad_pattern=None,
         target = explicit_len or e164_total_length(code, length)
         return gen_from_code(code, target, rng)
 
-    pairs: List[Pair] = []
+    pairs: list[Pair] = []
     seen: set = set()
     attempts, cap = 0, count * 50 + 100
     while len(pairs) < count and attempts < cap:
@@ -537,7 +536,7 @@ def generate_pool_file(origin_zone, dest_zone, count=500000, length=11,
     return path, len(pairs), preview
 
 
-def write_csv(pairs: List[Pair], out, order: Optional[str] = None) -> None:
+def write_csv(pairs: list[Pair], out, order: str | None = None) -> None:
     """Write A/B pairs as ``A;B`` rows, one pair per line (no trailing ``;``).
 
     ``order`` (``"sequential"`` / ``"random"``) prepends that SIPp ``-inf`` header
@@ -588,7 +587,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         deck = resolve_deck_path(args.codes)

@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gencall"
+description = "GenCall - SIP Traffic Generator"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.24.0",
+    "dpkt>=1.9.8",
+]
+
+[project.optional-dependencies]
+postgresql = ["psycopg2-binary>=2.9.0"]
+dev = ["pytest>=7.0", "ruff>=0.5"]
+
+[project.scripts]
+gencall = "gencall.cli:main"
+gencall-server = "gencall.main:main"
+gencall-controller = "gencall.controller.app:run"
+
+[tool.setuptools.dynamic]
+version = { attr = "gencall.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["gencall*"]
+
+[tool.setuptools.package-data]
+gencall = [
+    "etc/*.cfg",
+    "scenarios/templates/*.xml",
+    "scenarios/media/*",
+    "media/*",
+    "db/migrations/*.sql",
+    "web/console/**/*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["vendor", "frontend", "sigma-re"]
+
+[tool.ruff.lint]
+# Start with correctness-focused rules; expand once the baseline is clean.
+select = [
+    "E4", "E7", "E9",  # pycodestyle errors
+    "F",               # pyflakes
+    "B",               # bugbear
+    "UP",              # pyupgrade
+]
+ignore = [
+    "UP035",  # typing.Dict/List imports — cleaned up incrementally
+    "B008",   # function call in argument defaults — FastAPI Depends() idiom
+    "B904",   # raise-without-from in except blocks — chaining added incrementally
+    "B905",   # zip(strict=) — pre-3.10 idiom kept; equal lengths are guaranteed by construction
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Deliberate late imports: routes.py wires module singletons before importing
+# submodules; migrations/manager keep heavy deps lazy; tests mutate sys.path first.
+"gencall/api/routes.py" = ["E402"]
+"gencall/db/migrations/__init__.py" = ["E402"]
+"gencall/scenarios/manager.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"tests/test_security_hardening.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

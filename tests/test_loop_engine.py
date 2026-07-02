@@ -263,7 +263,7 @@ def test_answer_status_reports_uas(loop_engine):
 # ─── Call-path bug regressions (review-confirmed) ─────────────────────────────
 
 def _csv_rows(path):
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         return [ln.rstrip("\n") for ln in fh if ln.strip()]
 
 
@@ -387,7 +387,6 @@ def test_create_app_wires_parser_and_ingests_end_to_end(stub_sipp, tmp_path,
     """
     import textwrap
 
-    from gencall.core.config import Config
 
     # A config pointing [sipp] at the stub and [database] at a temp sqlite file.
     db_path = tmp_path / "appwire.db"
@@ -467,7 +466,6 @@ def test_node_group_start_stop_fans_out_over_http(stub_sipp, tmp_path, monkeypat
     import textwrap
     from fastapi.testclient import TestClient
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "grp.db"
@@ -561,7 +559,6 @@ def test_loop_preset_save_run_and_history_over_http(stub_sipp, tmp_path, monkeyp
     import textwrap
     from fastapi.testclient import TestClient
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "preset.db"
@@ -653,7 +650,6 @@ def test_node_pool_pins_drop_code(stub_sipp, tmp_path, monkeypatch):
     import textwrap
     from fastapi.testclient import TestClient
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "pin.db"
@@ -713,7 +709,6 @@ def test_remote_node_pool_gen_proxies_to_worker(stub_sipp, tmp_path, monkeypatch
     import textwrap
     from fastapi.testclient import TestClient
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "remote.db"
@@ -780,7 +775,6 @@ def test_fleet_resources_local_and_remote(stub_sipp, tmp_path, monkeypatch):
     import textwrap
     from fastapi.testclient import TestClient
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "res.db"
@@ -928,7 +922,6 @@ def test_node_to_loop_end_to_end_over_http(stub_sipp, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from sqlalchemy import text
 
-    from gencall.core.config import Config
     from gencall.core.api_gateway import APIKeyManager
 
     db_path = tmp_path / "e2e.db"

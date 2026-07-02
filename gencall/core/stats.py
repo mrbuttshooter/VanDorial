@@ -7,8 +7,7 @@ import time
 import threading
 import logging
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from gencall.core.config import Config
 
@@ -56,7 +55,7 @@ class StatsEngine:
         self.current = StatsSnapshot()
         self._sipp_engine = None
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._listeners: list = []
 

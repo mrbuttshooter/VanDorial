@@ -14,7 +14,6 @@ Tests core modules to verify they actually work:
 import os
 import sys
 import time
-import json
 import tempfile
 
 # Add project root to path
@@ -352,8 +351,8 @@ print("\n\033[1m=== Utilities ===\033[0m")
 def _():
     from gencall.utils.auth import hash_password, verify_password
     hashed, salt = hash_password("mysecret")
-    assert verify_password("mysecret", hashed, salt) == True
-    assert verify_password("wrongpass", hashed, salt) == False
+    assert verify_password("mysecret", hashed, salt)
+    assert not verify_password("wrongpass", hashed, salt)
 
 @test("API key generation")
 def _():
@@ -401,10 +400,10 @@ def _():
     from gencall.core.api_gateway import RateLimiter
     limiter = RateLimiter()
     # Should allow up to limit
-    for i in range(5):
-        assert limiter.check("test", 5) == True
+    for _ in range(5):
+        assert limiter.check("test", 5)
     # Should reject after limit
-    assert limiter.check("test", 5) == False
+    assert not limiter.check("test", 5)
     assert limiter.get_remaining("test", 5) == 0
 
 

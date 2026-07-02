@@ -129,7 +129,7 @@ def apply_migrations(engine):
         if filename in done:
             continue
         path = os.path.join(MIGRATIONS_DIR, filename)
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             sql_text = fh.read()
         statements = _split_statements(sql_text)
         # One transaction per file: all-or-nothing.

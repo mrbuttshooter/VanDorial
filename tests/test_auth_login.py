@@ -68,7 +68,8 @@ def test_user_manager_crud(db):
 
 
 def test_session_manager_lifecycle(db):
-    um = UserManager(db); sm = SessionManager(db)
+    um = UserManager(db)
+    sm = SessionManager(db)
     u = um.create_user("alice", "supersecret")
     tok, exp = sm.create(u["id"], "alice")
     assert tok.startswith(SESSION_TOKEN_PREFIX)

@@ -8,12 +8,11 @@ import sys
 import time
 import signal
 import uuid
-import logging
 
 from gencall.core.config import Config
 from gencall.core.log import setup_logging
 from gencall.core.sipp_engine import (
-    SIPpEngine, SIPpInstance, SIPpMode, SIPpTransport, SIPpState
+    SIPpEngine, SIPpInstance, SIPpTransport, SIPpState
 )
 from gencall.scenarios.manager import ScenarioManager
 
@@ -163,29 +162,34 @@ def cmd_users(args):
             return pw
         pw = getpass.getpass("Password: ")
         if pw != getpass.getpass("Confirm password: "):
-            print("Passwords do not match."); sys.exit(1)
+            print("Passwords do not match.")
+            sys.exit(1)
         return pw
 
     if args.users_command == "create":
         try:
             user = mgr.create_user(args.username, _resolve_password())
         except ValueError as e:
-            print(f"Error: {e}"); sys.exit(1)
+            print(f"Error: {e}")
+            sys.exit(1)
         print(f"Console user created: {user['username']} (id={user['id']})")
     elif args.users_command == "passwd":
         # Find the user id by username.
         match = [u for u in mgr.list_users() if u["username"] == args.username]
         if not match:
-            print(f"User {args.username!r} not found"); sys.exit(1)
+            print(f"User {args.username!r} not found")
+            sys.exit(1)
         try:
             mgr.set_password(match[0]["id"], _resolve_password())
         except ValueError as e:
-            print(f"Error: {e}"); sys.exit(1)
+            print(f"Error: {e}")
+            sys.exit(1)
         print(f"Password updated for {args.username}")
     elif args.users_command == "delete":
         match = [u for u in mgr.list_users() if u["username"] == args.username]
         if not match:
-            print(f"User {args.username!r} not found"); sys.exit(1)
+            print(f"User {args.username!r} not found")
+            sys.exit(1)
         mgr.delete_user(match[0]["id"])
         print(f"Deleted user {args.username}")
     else:  # list (default)
@@ -237,7 +241,7 @@ def main():
     run_parser.add_argument("-c", "--config", default=None, help="Config file path")
 
     # Scenarios command
-    sc_parser = sub.add_parser("scenarios", help="List available scenarios")
+    sub.add_parser("scenarios", help="List available scenarios")
 
     # Server command
     srv_parser = sub.add_parser("server", help="Start the web server")

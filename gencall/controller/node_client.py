@@ -14,7 +14,7 @@ configurable").
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -43,7 +43,7 @@ class NodeClient:
 
     # ─── internals ──────────────────────────────────────────────────────────
 
-    def _headers(self, extra: Optional[dict] = None) -> dict:
+    def _headers(self, extra: dict | None = None) -> dict:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         if extra:
             headers.update(extra)
@@ -60,8 +60,8 @@ class NodeClient:
         path: str,
         *,
         json: Any = None,
-        params: Optional[dict] = None,
-        timeout: Optional[float] = None,
+        params: dict | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         url = self._url(path)
         async with httpx.AsyncClient(verify=self.verify,
@@ -144,7 +144,7 @@ class NodeClient:
         method: str,
         path: str,
         json: Any = None,
-        params: Optional[dict] = None,
+        params: dict | None = None,
     ) -> httpx.Response:
         """Generic proxy: forward `method path` to the node, return the raw
         httpx.Response so the caller can relay status + body verbatim."""

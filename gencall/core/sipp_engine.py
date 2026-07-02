@@ -13,7 +13,6 @@ import shlex
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from gencall.core.config import Config
 
@@ -168,8 +167,8 @@ class SIPpInstance:
     campaign_id: str = ""  # owning loop campaign (§4.5), "" for one-shot tests
     state: SIPpState = SIPpState.IDLE
     stats: SIPpStats = field(default_factory=SIPpStats)
-    _process: Optional[subprocess.Popen] = field(default=None, repr=False)
-    _monitor_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    _process: subprocess.Popen | None = field(default=None, repr=False)
+    _monitor_thread: threading.Thread | None = field(default=None, repr=False)
     _stats_file: str = field(default="", repr=False)
     # Per-call <log> output path the CallRecordParser tails (design §4.2). Set in
     # build_command alongside _stats_file so the LoopEngine can register it with
@@ -597,7 +596,7 @@ class SIPpEngine:
             del self.instances[instance_id]
             return True
 
-    def get_instance(self, instance_id: str) -> Optional[SIPpInstance]:
+    def get_instance(self, instance_id: str) -> SIPpInstance | None:
         return self.instances.get(instance_id)
 
     def list_instances(self) -> list[dict]:
@@ -659,7 +658,7 @@ class SIPpEngine:
             return
 
         try:
-            with open(instance._stats_file, "r") as f:
+            with open(instance._stats_file) as f:
                 lines = f.readlines()
                 if len(lines) < 2:
                     return
