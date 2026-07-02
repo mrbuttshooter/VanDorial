@@ -561,6 +561,10 @@ class LoopEngine:
         plateau_end=18,
         ramp_down_end=22,
         tz_offset=0,
+        schedule_enabled=False,
+        schedule_start_min=0,
+        schedule_end_min=0,
+        schedule_tz_offset=0,
     ) -> dict:
         """Start a Loop Campaign: spawn one UAC and persist a 'running' row.
 
@@ -744,6 +748,14 @@ class LoopEngine:
                 "plateau_end": int(plateau_end),
                 "ramp_down_end": int(ramp_down_end),
                 "tz_offset": int(tz_offset),
+                # Optional daily active window (schedule.py). schedule_active is
+                # in-memory only: whether the dialer is currently up (False while
+                # paused outside the window); the row stays 'running' either way.
+                "schedule_enabled": bool(schedule_enabled),
+                "schedule_start_min": int(schedule_start_min),
+                "schedule_end_min": int(schedule_end_min),
+                "schedule_tz_offset": int(schedule_tz_offset),
+                "schedule_active": True,
                 "created_at": now,
                 "started_at": now,
                 "stopped_at": None,
@@ -763,9 +775,15 @@ class LoopEngine:
                 campaign_id, instance_id, dest_host, dest_port,
             )
             # A profiled campaign needs the shaper running so its rate tracks the
-            # diurnal curve hour by hour. Idempotent + idle-safe (event wait).
-            if profile_enabled:
+            # diurnal curve hour by hour; a scheduled campaign needs it to enforce
+            # the active window. Idempotent + idle-safe (event wait).
+            if profile_enabled or schedule_enabled:
                 self._ensure_shaper()
+            # If we launched OUTSIDE the active window, pause the dialer at once
+            # so a scheduled campaign never dials in its quiet period even for the
+            # one shaper interval before the first pass.
+            if schedule_enabled and not self._schedule_is_active(campaign):
+                self._pause_dialer(campaign, reason="started outside window")
             return self._public_campaign(campaign)
 
     def stop_campaign(self, campaign_id: str) -> dict:
@@ -931,9 +949,10 @@ class LoopEngine:
         self._shaper_thread.start()
 
     def _shaper_loop(self):
-        """Each wake, step every running profiled campaign to the current hour's
-        curve rate (overlap relaunch). Idles ``SHAPER_INTERVAL_S`` between wakes
-        on an event wait — woken early only by stop_shaper, never a busy loop."""
+        """Each wake: enforce every running campaign's schedule window (pause /
+        resume the dialer) and step every ACTIVE profiled campaign to the current
+        hour's curve rate. Idles ``SHAPER_INTERVAL_S`` between wakes on an event
+        wait — woken early only by stop_shaper, never a busy loop."""
         import time as _time
         while not self._shaper_stop.is_set():
             try:
@@ -941,8 +960,15 @@ class LoopEngine:
                 # Snapshot the items so a concurrent start/stop can't mutate the
                 # dict mid-iteration.
                 for cid, campaign in list(self._campaigns.items()):
-                    if (campaign.get("status") != "running"
-                            or not campaign.get("profile_enabled")):
+                    if campaign.get("status") != "running":
+                        continue
+                    # Schedule gate first: a paused (out-of-window) campaign has
+                    # no UAC, so rate stepping below would be a no-op anyway.
+                    if campaign.get("schedule_enabled"):
+                        self._apply_schedule(campaign)
+                        if not campaign.get("schedule_active", True):
+                            continue
+                    if not campaign.get("profile_enabled"):
                         continue
                     target = self._shaper_target_rate(campaign, hour)
                     if target > 0 and abs(
@@ -951,6 +977,107 @@ class LoopEngine:
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("shaper pass failed: %s", e)
             self._shaper_stop.wait(SHAPER_INTERVAL_S)
+
+    # ── Schedule windows (pause/resume the dialer, design roadmap) ───────────
+
+    def _schedule_is_active(self, campaign: dict) -> bool:
+        """Is this campaign inside its active window right now? (True if it has
+        no window.)"""
+        if not campaign.get("schedule_enabled"):
+            return True
+        import time as _time
+        from gencall.core import schedule
+        return schedule.is_active(
+            _time.time(),
+            int(campaign.get("schedule_start_min") or 0),
+            int(campaign.get("schedule_end_min") or 0),
+            int(campaign.get("schedule_tz_offset") or 0),
+        )
+
+    def _apply_schedule(self, campaign: dict):
+        """Pause the dialer when the window closes, resume it when it reopens."""
+        should_be_active = self._schedule_is_active(campaign)
+        is_active = campaign.get("schedule_active", True)
+        if should_be_active and not is_active:
+            self._resume_dialer(campaign, reason="window opened")
+        elif not should_be_active and is_active:
+            self._pause_dialer(campaign, reason="window closed")
+
+    def _pause_dialer(self, campaign: dict, reason: str = ""):
+        """Stop the campaign's UAC but keep the row 'running' (scheduled pause).
+
+        Unlike stop_campaign this keeps matcher tracking and the prepared -inf so
+        resume is a cheap relaunch; it does NOT mark the campaign stopped."""
+        from gencall.core import schedule
+        with self._lock:
+            if not campaign.get("schedule_active", True):
+                return
+            instance_id = campaign.get("instance_id")
+            inst = self.engine.get_instance(instance_id) if instance_id else None
+            if instance_id:
+                self.engine.stop_instance(instance_id)
+                if self.parser is not None and inst is not None:
+                    try:
+                        self.parser.poll_once()
+                    except Exception as e:  # pragma: no cover - defensive
+                        logger.warning("Pause parse pass for %s failed: %s",
+                                       campaign["id"], e)
+                    self._unregister_logs(inst)
+                self.engine.remove_instance(instance_id)
+            campaign["schedule_active"] = False
+            logger.info("Loop campaign %s paused (%s; window %s)",
+                        campaign["id"], reason,
+                        schedule.format_window(
+                            campaign.get("schedule_start_min") or 0,
+                            campaign.get("schedule_end_min") or 0))
+            if self.alerts is not None:
+                self.alerts.notify("loop_paused",
+                                   {"campaign_id": campaign["id"], "reason": reason},
+                                   key=str(campaign["id"]))
+
+    def _resume_dialer(self, campaign: dict, reason: str = ""):
+        """Relaunch a scheduled campaign's UAC from its stored parameters."""
+        with self._lock:
+            if campaign.get("schedule_active", True):
+                return
+            instance_id = campaign.get("instance_id") or f"uac-{campaign['id']}"
+            # Clear any stale STOPPED instance object under this id first.
+            self.engine.remove_instance(instance_id)
+            tr = _TRANSPORT_MAP.get((campaign.get("transport") or "udp").lower(),
+                                    SIPpTransport.UDP)
+            tc = int(campaign.get("target_calls") or 0)
+            instance = SIPpInstance(
+                id=instance_id,
+                scenario_file=self._uac_scenario(bool(campaign.get("rtp")),
+                                                 bool(campaign.get("rtp_loop"))),
+                remote_host=campaign["dest_host"],
+                remote_port=int(campaign["dest_port"]),
+                local_port=0,
+                local_ip=campaign.get("local_ip", ""),
+                media_ip=_detect_primary_ip(),
+                mode=SIPpMode.UAC,
+                transport=tr,
+                call_rate=float(campaign.get("rate") or 1.0),
+                max_calls=tc if tc > 0 else 0,
+                call_limit=int(campaign.get("max_concurrent") or 10),
+                duration=int(campaign.get("duration_s") or 0),
+                # The prepared -inf was kept across the pause, so reuse it as-is.
+                csv_file=campaign.get("inf_path") or "",
+                campaign_id=campaign["id"],
+            )
+            if not self.engine.start_instance(instance):
+                logger.warning("Loop campaign %s resume failed: %s",
+                               campaign["id"],
+                               instance.error_message or "UAC failed to start")
+                return
+            campaign["instance_id"] = instance_id
+            campaign["schedule_active"] = True
+            self._register_logs(instance, campaign_id=campaign["id"])
+            logger.info("Loop campaign %s resumed (%s)", campaign["id"], reason)
+            if self.alerts is not None:
+                self.alerts.notify("loop_resumed",
+                                   {"campaign_id": campaign["id"], "reason": reason},
+                                   key=str(campaign["id"]))
 
     def stop_shaper(self, timeout=5.0):
         """Stop the diurnal shaper thread (used on shutdown)."""
@@ -994,7 +1121,11 @@ class LoopEngine:
                 # not persisted columns, so they can't be restored here.)
                 "profile_enabled", "profile_preset", "night_floor",
                 "ramp_up_start", "plateau_start", "plateau_end",
-                "ramp_down_end", "tz_offset")
+                "ramp_down_end", "tz_offset",
+                # Schedule window, so a restart inside a quiet period comes back
+                # correctly paused instead of dialing off-hours.
+                "schedule_enabled", "schedule_start_min", "schedule_end_min",
+                "schedule_tz_offset")
         try:
             with self.db.engine.connect() as conn:
                 rows = conn.execute(text(
@@ -1053,6 +1184,10 @@ class LoopEngine:
                     ramp_down_end=(int(c["ramp_down_end"])
                                    if c.get("ramp_down_end") is not None else 22),
                     tz_offset=int(c.get("tz_offset") or 0),
+                    schedule_enabled=bool(c.get("schedule_enabled")),
+                    schedule_start_min=int(c.get("schedule_start_min") or 0),
+                    schedule_end_min=int(c.get("schedule_end_min") or 0),
+                    schedule_tz_offset=int(c.get("schedule_tz_offset") or 0),
                 )
                 resumed.append(new.get("id"))
                 logger.info("resume: %s (%s) -> %s", old_id, c.get("name"),
@@ -1343,6 +1478,8 @@ class LoopEngine:
                         " target_calls, target_minutes, profile_enabled, "
                         " profile_preset, night_floor, ramp_up_start, "
                         " plateau_start, plateau_end, ramp_down_end, tz_offset, "
+                        " schedule_enabled, schedule_start_min, schedule_end_min, "
+                        " schedule_tz_offset, "
                         " created_at, started_at, stopped_at) "
                         "VALUES (:id, :name, :status, :node_id, :local_ip, "
                         " :dest_host, :dest_port, :transport, :csv_path, :rate, "
@@ -1350,7 +1487,9 @@ class LoopEngine:
                         " :duration_max_s, :match_key, :target_calls, "
                         " :target_minutes, :profile_enabled, :profile_preset, "
                         " :night_floor, :ramp_up_start, :plateau_start, "
-                        " :plateau_end, :ramp_down_end, :tz_offset, :created_at, "
+                        " :plateau_end, :ramp_down_end, :tz_offset, "
+                        " :schedule_enabled, :schedule_start_min, "
+                        " :schedule_end_min, :schedule_tz_offset, :created_at, "
                         " :started_at, :stopped_at)"
                     ),
                     {k: campaign.get(k) for k in (
@@ -1360,7 +1499,9 @@ class LoopEngine:
                         "duration_max_s", "match_key", "target_calls",
                         "target_minutes", "profile_enabled", "profile_preset",
                         "night_floor", "ramp_up_start", "plateau_start",
-                        "plateau_end", "ramp_down_end", "tz_offset", "created_at",
+                        "plateau_end", "ramp_down_end", "tz_offset",
+                        "schedule_enabled", "schedule_start_min",
+                        "schedule_end_min", "schedule_tz_offset", "created_at",
                         "started_at", "stopped_at",
                     )},
                 )
@@ -1411,7 +1552,9 @@ class LoopEngine:
             "duration_mode", "duration_s", "duration_max_s", "match_key",
             "target_calls", "target_minutes", "profile_enabled",
             "profile_preset", "night_floor", "ramp_up_start", "plateau_start",
-            "plateau_end", "ramp_down_end", "tz_offset", "created_at",
+            "plateau_end", "ramp_down_end", "tz_offset",
+            "schedule_enabled", "schedule_start_min", "schedule_end_min",
+            "schedule_tz_offset", "created_at",
             "started_at", "stopped_at",
         )
         c = dict(zip(keys, row))
@@ -1420,6 +1563,11 @@ class LoopEngine:
         # one (sqlite stores BOOLEAN as 0/1; the shaper checks truthiness).
         if "profile_enabled" in c:
             c["profile_enabled"] = bool(c["profile_enabled"])
+        if "schedule_enabled" in c:
+            c["schedule_enabled"] = bool(c["schedule_enabled"])
+        # A reloaded campaign is assumed active; the shaper's first pass corrects
+        # it to paused within one interval if it is outside its window.
+        c["schedule_active"] = True
         return c
 
     def _load_campaign(self, campaign_id):
@@ -1436,7 +1584,9 @@ class LoopEngine:
                         "duration_s, duration_max_s, match_key, target_calls, "
                         "target_minutes, profile_enabled, profile_preset, night_floor, "
                         "ramp_up_start, plateau_start, plateau_end, ramp_down_end, "
-                        "tz_offset, created_at, started_at, stopped_at "
+                        "tz_offset, schedule_enabled, schedule_start_min, "
+                        "schedule_end_min, schedule_tz_offset, "
+                        "created_at, started_at, stopped_at "
                         "FROM loop_campaigns WHERE id = :id"
                     ),
                     {"id": campaign_id},
@@ -1460,7 +1610,9 @@ class LoopEngine:
                         "duration_s, duration_max_s, match_key, target_calls, "
                         "target_minutes, profile_enabled, profile_preset, night_floor, "
                         "ramp_up_start, plateau_start, plateau_end, ramp_down_end, "
-                        "tz_offset, created_at, started_at, stopped_at "
+                        "tz_offset, schedule_enabled, schedule_start_min, "
+                        "schedule_end_min, schedule_tz_offset, "
+                        "created_at, started_at, stopped_at "
                         "FROM loop_campaigns ORDER BY created_at DESC"
                     )
                 ).fetchall()

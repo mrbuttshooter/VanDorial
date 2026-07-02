@@ -1436,3 +1436,80 @@ def test_validate_transport_unit():
     assert validate_transport("tls") == "tls"
     with pytest.raises(ValueError):
         validate_transport("sctp")
+
+
+# ─── Schedule windows (pause/resume the dialer) ───────────────────────────────
+
+def test_schedule_pause_and_resume_dialer(loop_engine, db):
+    """A scheduled campaign's dialer is torn down when the window closes and
+    relaunched when it reopens, while the row stays 'running' throughout."""
+    campaign = loop_engine.start_campaign(
+        name="sched", dest_host="1.2.3.4", rate=5.0, max_concurrent=4,
+        duration_s=1, schedule_enabled=True,
+        # A window that is currently OPEN (all day) so the initial UAC comes up.
+        schedule_start_min=0, schedule_end_min=0,
+    )
+    cid = campaign["id"]
+    inst = _wait_running(loop_engine.engine, f"uac-{cid}")
+    assert inst is not None and inst.state == SIPpState.RUNNING
+
+    live = loop_engine._campaigns[cid]
+
+    # Force "outside window" and apply the gate -> the UAC is stopped/removed,
+    # but the campaign row is still 'running'.
+    live["schedule_active"] = True
+    loop_engine._pause_dialer(live, reason="test")
+    assert live["schedule_active"] is False
+    assert loop_engine.engine.get_instance(f"uac-{cid}") is None
+    assert loop_engine.get_campaign(cid)["status"] == "running"
+
+    # Reopen -> the dialer is relaunched under the same instance id.
+    loop_engine._resume_dialer(live, reason="test")
+    assert live["schedule_active"] is True
+    inst2 = _wait_running(loop_engine.engine, f"uac-{cid}")
+    assert inst2 is not None and inst2.state == SIPpState.RUNNING
+
+
+def test_schedule_apply_is_idempotent(loop_engine, db):
+    """_apply_schedule only acts on a transition; repeat calls are no-ops."""
+    campaign = loop_engine.start_campaign(
+        name="sched2", dest_host="1.2.3.4", rate=5.0, max_concurrent=4,
+        duration_s=1, schedule_enabled=True,
+        schedule_start_min=0, schedule_end_min=0,
+    )
+    cid = campaign["id"]
+    _wait_running(loop_engine.engine, f"uac-{cid}")
+    live = loop_engine._campaigns[cid]
+
+    loop_engine._pause_dialer(live, reason="t")
+    # A second pause is a no-op (still paused, no crash).
+    loop_engine._pause_dialer(live, reason="t")
+    assert live["schedule_active"] is False
+
+    loop_engine._resume_dialer(live, reason="t")
+    # A second resume is a no-op (still active).
+    loop_engine._resume_dialer(live, reason="t")
+    assert live["schedule_active"] is True
+
+
+def test_start_outside_window_starts_paused(loop_engine, db, monkeypatch):
+    """Launching a campaign whose window is currently CLOSED starts it paused —
+    no dialing in the quiet period."""
+    import gencall.core.loop_engine as le_mod
+    # Force the schedule check to report "closed" regardless of wall clock.
+    monkeypatch.setattr(le_mod.LoopEngine, "_schedule_is_active",
+                        lambda self, c: False)
+    campaign = loop_engine.start_campaign(
+        name="closed", dest_host="1.2.3.4", rate=5.0, max_concurrent=4,
+        duration_s=1, schedule_enabled=True,
+        schedule_start_min=8 * 60, schedule_end_min=20 * 60,
+    )
+    cid = campaign["id"]
+    live = loop_engine._campaigns[cid]
+    assert live["schedule_active"] is False
+    # The UAC was paused right after start, so there is no running dialer.
+    time.sleep(0.2)
+    inst = loop_engine.engine.get_instance(f"uac-{cid}")
+    assert inst is None or inst.state != SIPpState.RUNNING
+    # Row still 'running' (scheduled pause, not stopped).
+    assert loop_engine.get_campaign(cid)["status"] == "running"

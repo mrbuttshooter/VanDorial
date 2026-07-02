@@ -151,6 +151,29 @@ class StartLoopRequest(BaseModel):
     plateau_end: int = 18
     ramp_down_end: int = 22
     tz_offset: int = 0
+    # ── Schedule window (optional daily active window) ────────────────────────
+    # When schedule_enabled, the engine pauses the dialer outside
+    # [schedule_start_min, schedule_end_min) (minutes since local midnight,
+    # local = schedule_tz_offset hours from UTC) and resumes it inside.
+    # start == end means "always on"; start > end wraps midnight.
+    schedule_enabled: bool = False
+    schedule_start_min: int = 0
+    schedule_end_min: int = 0
+    schedule_tz_offset: int = 0
+
+    @field_validator("schedule_start_min", "schedule_end_min")
+    @classmethod
+    def _check_minute(cls, v: int) -> int:
+        if not (0 <= int(v) <= 1440):
+            raise ValueError("schedule minute must be within 0..1440")
+        return int(v)
+
+    @field_validator("schedule_tz_offset")
+    @classmethod
+    def _check_sched_tz(cls, v: int) -> int:
+        if not (-12 <= int(v) <= 14):
+            raise ValueError("schedule_tz_offset must be within -12..14 hours")
+        return int(v)
 
     @field_validator("transport")
     @classmethod
@@ -181,6 +204,13 @@ class StartLoopRequest(BaseModel):
 _PROFILE_FIELDS = (
     "profile_enabled", "profile_preset", "night_floor", "ramp_up_start",
     "plateau_start", "plateau_end", "ramp_down_end", "tz_offset",
+)
+
+# Schedule-window fields carried from a start request through to start_campaign
+# (and the remote-worker proxy payload), kept alongside _PROFILE_FIELDS.
+_SCHEDULE_FIELDS = (
+    "schedule_enabled", "schedule_start_min", "schedule_end_min",
+    "schedule_tz_offset",
 )
 
 
@@ -257,6 +287,7 @@ def start_loop(req: StartLoopRequest):
                 "target_calls": req.target_calls, "target_minutes": req.target_minutes,
                 "rtp": req.rtp, "rtp_loop": req.rtp_loop,
                 **{f: getattr(req, f) for f in _PROFILE_FIELDS},
+                **{f: getattr(req, f) for f in _SCHEDULE_FIELDS},
             }
             try:
                 res = _worker_post(node["api_url"], node.get("api_key", ""),
@@ -294,6 +325,7 @@ def start_loop(req: StartLoopRequest):
             rtp=req.rtp,
             rtp_loop=req.rtp_loop,
             **{f: getattr(req, f) for f in _PROFILE_FIELDS},
+            **{f: getattr(req, f) for f in _SCHEDULE_FIELDS},
         )
     except IPBusy as e:
         raise HTTPException(409, str(e))

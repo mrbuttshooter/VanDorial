@@ -920,6 +920,26 @@
             "title": "Rtp Loop",
             "type": "boolean"
           },
+          "schedule_enabled": {
+            "default": false,
+            "title": "Schedule Enabled",
+            "type": "boolean"
+          },
+          "schedule_end_min": {
+            "default": 0,
+            "title": "Schedule End Min",
+            "type": "integer"
+          },
+          "schedule_start_min": {
+            "default": 0,
+            "title": "Schedule Start Min",
+            "type": "integer"
+          },
+          "schedule_tz_offset": {
+            "default": 0,
+            "title": "Schedule Tz Offset",
+            "type": "integer"
+          },
           "target_calls": {
             "default": 0,
             "minimum": 0.0,

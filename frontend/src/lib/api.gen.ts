@@ -74,6 +74,8 @@ export interface paths {
         /**
          * Me
          * @description Return the current principal (logged-in username, or the API key name).
+         *
+         *     ``role`` + ``can_write`` let the console hide write controls for a viewer.
          */
         get: operations["me_api_auth_me_get"];
         put?: never;
@@ -1375,6 +1377,11 @@ export interface components {
         CreateUserRequest: {
             /** Password */
             password: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
             /** Username */
             username: string;
         };
@@ -1933,6 +1940,26 @@ export interface components {
              * @default false
              */
             rtp_loop: boolean;
+            /**
+             * Schedule Enabled
+             * @default false
+             */
+            schedule_enabled: boolean;
+            /**
+             * Schedule End Min
+             * @default 0
+             */
+            schedule_end_min: number;
+            /**
+             * Schedule Start Min
+             * @default 0
+             */
+            schedule_start_min: number;
+            /**
+             * Schedule Tz Offset
+             * @default 0
+             */
+            schedule_tz_offset: number;
             /**
              * Target Calls
              * @default 0
