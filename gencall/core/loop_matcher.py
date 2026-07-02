@@ -41,6 +41,8 @@ import json
 import logging
 import threading
 
+from gencall.db.schema import CALL_RECORD_COLUMNS
+
 logger = logging.getLogger("gencall.loop_matcher")
 
 # Minimum interval between matcher passes. The spec mandates a periodic job of
@@ -244,11 +246,7 @@ class LoopMatcher:
 
     # ── core matching (pure, DB-read) ────────────────────────────────────────
 
-    _COLS = (
-        "id", "campaign_id", "direction", "call_uuid", "a_number",
-        "b_number", "source_ip", "t_start_ms", "t_answer_ms", "t_end_ms",
-        "duration_ms", "final_code", "created_at",
-    )
+    _COLS = CALL_RECORD_COLUMNS
 
     def _pair_unmatched(self, campaign_id, match_key, window_ms):
         """Pair this campaign's still-UNMATCHED answered outbound calls to inbound

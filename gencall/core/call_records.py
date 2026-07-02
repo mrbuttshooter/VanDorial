@@ -33,7 +33,27 @@ import os
 import threading
 import time
 
+from gencall.db.schema import CALL_RECORD_FIELDS
+
 logger = logging.getLogger("gencall.call_records")
+
+# Upsert statements generated from the shared field list so the writer can
+# never drift from the schema (or from the LoopMatcher's read shape). The
+# UPDATE keeps the identity triple (campaign_id, direction, call_uuid) and the
+# first-seen created_at; everything else is refreshed by a later, more complete
+# parse of the same call.
+_IDENTITY_FIELDS = ("campaign_id", "direction", "call_uuid")
+_UPDATABLE_FIELDS = tuple(f for f in CALL_RECORD_FIELDS
+                          if f not in _IDENTITY_FIELDS and f != "created_at")
+_INSERT_SQL = (
+    "INSERT INTO call_records (" + ", ".join(CALL_RECORD_FIELDS) + ") "
+    "VALUES (" + ", ".join(f":{f}" for f in CALL_RECORD_FIELDS) + ")"
+)
+_UPDATE_SQL = (
+    "UPDATE call_records SET "
+    + ", ".join(f"{f} = :{f}" for f in _UPDATABLE_FIELDS)
+    + " WHERE id = :id"
+)
 
 # Minimum poll interval for the tail loop. The spec mandates >= 1 s for any
 # poll/tail loop on the 4 GB box (design §4.2); we floor any smaller request.
@@ -510,27 +530,12 @@ class CallRecordParser:
                 ).fetchone()
                 if existing:
                     conn.execute(
-                        text(
-                            "UPDATE call_records SET "
-                            "a_number = :a_number, b_number = :b_number, "
-                            "source_ip = :source_ip, t_start_ms = :t_start_ms, "
-                            "t_answer_ms = :t_answer_ms, t_end_ms = :t_end_ms, "
-                            "duration_ms = :duration_ms, final_code = :final_code "
-                            "WHERE id = :id"
-                        ),
+                        text(_UPDATE_SQL),
                         {**params, "id": existing[0]},
                     )
                 else:
                     conn.execute(
-                        text(
-                            "INSERT INTO call_records "
-                            "(campaign_id, direction, call_uuid, a_number, b_number, "
-                            " source_ip, t_start_ms, t_answer_ms, t_end_ms, "
-                            " duration_ms, final_code, created_at) "
-                            "VALUES (:campaign_id, :direction, :call_uuid, :a_number, "
-                            " :b_number, :source_ip, :t_start_ms, :t_answer_ms, "
-                            " :t_end_ms, :duration_ms, :final_code, :created_at)"
-                        ),
+                        text(_INSERT_SQL),
                         params,
                     )
         except Exception as e:
