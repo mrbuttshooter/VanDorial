@@ -79,6 +79,9 @@ def create_controller_app(config: Config = None):
 
     controller_routes.db = db
     controller_routes.verify_tls = False
+    # Shared VLAN secret that gates the worker→controller stats push (only that
+    # route; not a full controller credential). Empty => push ingest disabled.
+    controller_routes.fleet_token = config.fleet_token
 
     # ── Browser→Controller auth (reuse worker dependency) ───────────────────
     # require_api_key reads gencall.api.routes.gateway. Point it at a controller

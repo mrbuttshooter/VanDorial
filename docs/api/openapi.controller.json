@@ -24,6 +24,11 @@
             "title": "Password",
             "type": "string"
           },
+          "role": {
+            "default": "operator",
+            "title": "Role",
+            "type": "string"
+          },
           "username": {
             "title": "Username",
             "type": "string"
@@ -491,6 +496,25 @@
         "title": "SetPasswordRequest",
         "type": "object"
       },
+      "StatsIngestBody": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "title": "Stats",
+            "type": "object"
+          }
+        },
+        "required": [
+          "address",
+          "stats"
+        ],
+        "title": "StatsIngestBody",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -623,7 +647,7 @@
     },
     "/api/auth/me": {
       "get": {
-        "description": "Return the current principal (logged-in username, or the API key name).",
+        "description": "Return the current principal (logged-in username, or the API key name).\n\n``role`` + ``can_write`` let the console hide write controls for a viewer.",
         "operationId": "me_api_auth_me_get",
         "parameters": [
           {
@@ -943,6 +967,57 @@
           }
         },
         "summary": "Set Fleet Trust",
+        "tags": [
+          "controller"
+        ]
+      }
+    },
+    "/api/fleet/ingest/stats": {
+      "post": {
+        "description": "Worker \u2192 controller stats push (opt-in, additive; poll is the fallback).\n\nResolves the poster to a node_id by address (nodes are keyed by node_id;\nworkers know only their own address) and hands the snapshot to the\naggregator, which then treats poll results for that node as fallback while\nthe push stays fresh. Unknown address \u2192 404 (the worker retries once the\ncontroller has discovered / registered it).",
+        "operationId": "ingest_stats_api_fleet_ingest_stats_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Fleet-Token",
+            "required": false,
+            "schema": {
+              "title": "X-Fleet-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsIngestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Stats",
         "tags": [
           "controller"
         ]

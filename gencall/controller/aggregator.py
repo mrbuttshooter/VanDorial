@@ -197,11 +197,17 @@ class FleetAggregator:
         history_size: int = 1000,
         verify_tls: bool = False,
         fleet_trust_provider: Callable[[], dict] | None = None,
+        push_freshness_s: float = 15.0,
     ):
         self._node_provider = node_provider
         self.stats_interval = stats_interval
         self.health_interval = health_interval
         self.verify_tls = verify_tls
+        # A worker may PUSH its stats (see ingest_pushed_stats); while a node's
+        # push is fresher than this window the poll leaves its snapshot alone
+        # (push authoritative). Once a push goes stale the poll resumes as the
+        # fallback. ~3× the worker's default [stats] interval (5 s).
+        self.push_freshness_s = push_freshness_s
         # Zero-arg callable returning the EFFECTIVE fleet trust config
         # ({"ips": [...], "drop_untrusted": bool}) to re-push to a worker that
         # transitions offline→online (it may have restarted with an empty
@@ -213,6 +219,8 @@ class FleetAggregator:
         self._node_stats: dict[int, dict | None] = {}
         # node_id -> {online, version, active_tests, last_seen, error, group_id}
         self._node_status: dict[int, dict] = {}
+        # node_id -> monotonic ts of its last pushed snapshot (push over poll).
+        self._pushed_at: dict[int, float] = {}
         self._history: deque[dict] = deque(maxlen=history_size)
         self._lock = threading.Lock()
 
@@ -326,6 +334,11 @@ class FleetAggregator:
             present_ids = set()
             for nid, stats, _err in results:
                 present_ids.add(nid)
+                # A node with a fresh PUSH is authoritative: leave its snapshot
+                # (and don't null it on a poll error) — the push is the source,
+                # the poll is only the fallback for nodes that don't push.
+                if self._recently_pushed_locked(nid):
+                    continue
                 if stats is not None:
                     self._node_stats[nid] = stats
                 else:
@@ -335,6 +348,7 @@ class FleetAggregator:
             for nid in list(self._node_stats.keys()):
                 if nid not in present_ids:
                     self._node_stats.pop(nid, None)
+                    self._pushed_at.pop(nid, None)
 
         fleet = self.get_fleet_stats()
         with self._lock:
@@ -440,6 +454,27 @@ class FleetAggregator:
         """Snapshot of every tracked node's status (for /metrics)."""
         with self._lock:
             return [dict(st) for st in self._node_status.values()]
+
+    # ─── pushed stats (worker → controller) ─────────────────────────────────
+
+    def _recently_pushed_locked(self, node_id: int) -> bool:
+        """True if node_id pushed within push_freshness_s. Caller holds _lock.
+
+        Uses a monotonic clock so it is immune to wall-clock jumps. time is
+        imported at module scope; time.monotonic() is deliberately not stubbed
+        out (unlike Date.now in the JS layer)."""
+        ts = self._pushed_at.get(node_id)
+        return ts is not None and (time.monotonic() - ts) <= self.push_freshness_s
+
+    def ingest_pushed_stats(self, node_id: int, stats: dict) -> None:
+        """Record a stats snapshot PUSHED by a worker (POST /api/fleet/ingest/stats).
+
+        Stores it as this node's current snapshot and stamps the push time so the
+        poll loop leaves it alone while fresh. Thread-safe: called from the
+        request handler thread, not the aggregator loop."""
+        with self._lock:
+            self._node_stats[node_id] = stats
+            self._pushed_at[node_id] = time.monotonic()
 
     def get_fleet_stats(self) -> dict:
         """Return the current FleetStats: {aggregate, per_group, per_node}.

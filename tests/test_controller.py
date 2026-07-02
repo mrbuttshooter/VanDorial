@@ -939,3 +939,58 @@ def test_aggregator_without_trust_provider_does_not_push(monkeypatch):
     agg = FleetAggregator(lambda: nodes)  # no provider
     asyncio.run(agg._poll_health_once())
     assert pushed == []
+
+
+# ─── Worker→controller stats push ingest (roadmap #9) ─────────────────────────
+
+def test_ingest_stats_disabled_without_fleet_token(controller):
+    client, _headers, ctx = controller
+    from gencall.controller import routes as controller_routes
+    controller_routes.fleet_token = ""   # push disabled
+    node = ctx.register_node(client, "http://node-1", online=True)
+    r = client.post("/api/fleet/ingest/stats",
+                    json={"address": node["address"], "stats": {"calls_per_second": 5}},
+                    headers={"X-Fleet-Token": "anything"})
+    assert r.status_code == 503
+
+
+def test_ingest_stats_rejects_wrong_token(controller, monkeypatch):
+    client, _headers, ctx = controller
+    from gencall.controller import routes as controller_routes
+    monkeypatch.setattr(controller_routes, "fleet_token", "s3cret")
+    node = ctx.register_node(client, "http://node-1", online=True)
+    # Missing token.
+    assert client.post("/api/fleet/ingest/stats",
+                       json={"address": node["address"], "stats": {}}).status_code == 401
+    # Wrong token.
+    assert client.post("/api/fleet/ingest/stats",
+                       json={"address": node["address"], "stats": {}},
+                       headers={"X-Fleet-Token": "nope"}).status_code == 401
+
+
+def test_ingest_stats_unknown_address_404(controller, monkeypatch):
+    client, _headers, _ctx = controller
+    from gencall.controller import routes as controller_routes
+    monkeypatch.setattr(controller_routes, "fleet_token", "s3cret")
+    r = client.post("/api/fleet/ingest/stats",
+                    json={"address": "http://ghost:8080", "stats": {"calls_per_second": 1}},
+                    headers={"X-Fleet-Token": "s3cret"})
+    assert r.status_code == 404
+
+
+def test_ingest_stats_stores_snapshot_for_node(controller, monkeypatch):
+    client, _headers, ctx = controller
+    from gencall.controller import routes as controller_routes
+    monkeypatch.setattr(controller_routes, "fleet_token", "s3cret")
+    node = ctx.register_node(client, "http://node-7", online=True)
+    snap = {"calls_per_second": 9, "current_calls": 4, "success_rate": 100.0}
+    # Trailing slash on address must still resolve (both sides rstrip).
+    r = client.post("/api/fleet/ingest/stats",
+                    json={"address": node["address"] + "/", "stats": snap},
+                    headers={"X-Fleet-Token": "s3cret"})
+    assert r.status_code == 200, r.text
+    assert r.json()["node_id"] == node["id"]
+    # The real aggregator recorded the pushed snapshot as this node's current one.
+    agg = controller_routes.aggregator
+    assert agg._node_stats[node["id"]] == snap
+    assert agg._recently_pushed_locked(node["id"]) is True

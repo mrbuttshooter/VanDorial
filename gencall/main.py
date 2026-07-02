@@ -312,6 +312,20 @@ def create_app(config_path: str = None):
     metrics_api.call_parser = call_parser
     app.include_router(metrics_api.router)
 
+    # ── Fleet stats push (opt-in: [fleet] controller_url) ────────────────────
+    # When a controller URL is configured, push this worker's stats snapshots to
+    # the controller instead of making it poll GET /api/stats. Wired OUTSIDE the
+    # serve_console guard so headless fleet workers push too. The controller's
+    # poll stays as the fallback (it skips a node only while its push is fresh).
+    from gencall.core import stats_push as stats_push_mod
+
+    pusher = stats_push_mod.build_from_config(
+        config, address=config.fleet_node_address or _derive_node_address(config))
+    if pusher is not None:
+        stats_engine.add_listener(pusher.submit)
+        pusher.start()
+        logger.info("Fleet stats push enabled -> %s", pusher.url)
+
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.
     # Headless fleet workers skip this — the controller pulls /api/stats over the
@@ -369,6 +383,11 @@ def create_app(config_path: str = None):
                     notifier.stop()
                 except Exception as e:
                     logger.warning("Error stopping alert notifier: %s", e)
+            if pusher is not None:
+                try:
+                    pusher.stop()
+                except Exception as e:
+                    logger.warning("Error stopping stats pusher: %s", e)
 
     app.router.lifespan_context = _lifespan
 

@@ -169,6 +169,14 @@ class Config:
         return self.get("fleet", "node_address", "")
 
     @property
+    def fleet_controller_url(self):
+        """Worker: base URL of the controller to PUSH stats snapshots to (e.g.
+        http://10.20.8.10:8090). Empty (default) => push disabled; the controller
+        falls back to polling this worker's GET /api/stats. Auth reuses
+        fleet_token (sent as X-Fleet-Token). Opt-in, additive."""
+        return self.get("fleet", "controller_url", "")
+
+    @property
     def ssl_cert(self):
         return self.get("web", "ssl_cert", "")
 

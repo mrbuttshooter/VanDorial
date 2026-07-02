@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hmac
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Depends, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Depends, Request, Response
 from pydantic import BaseModel
 
 # Reuse the worker's auth dependency verbatim (contract + design §6).
@@ -41,8 +42,22 @@ logger = logging.getLogger("gencall.controller.routes")
 db = None                # ControllerDatabase
 aggregator = None        # FleetAggregator
 verify_tls = False       # controller→node TLS verification toggle
+fleet_token = ""         # shared VLAN secret; gates POST /api/fleet/ingest/stats
 
 router = APIRouter(tags=["controller"])
+
+
+def require_fleet_token(x_fleet_token: str = Header(default=None, alias="X-Fleet-Token")):
+    """Dedicated auth for the worker→controller stats push.
+
+    Deliberately NOT require_api_key: the shared fleet_token gates ONLY stats
+    ingest, so a VLAN secret can never become a full controller credential.
+    Constant-time compare; 503 when no token is configured (push disabled),
+    401 on mismatch/absent."""
+    if not fleet_token:
+        raise HTTPException(503, "Fleet stats ingest is disabled (no [fleet] token)")
+    if not x_fleet_token or not hmac.compare_digest(str(x_fleet_token), fleet_token):
+        raise HTTPException(401, "Invalid or missing fleet token")
 
 
 # ─── Pydantic request models ───────────────────────────────────────────────────
@@ -873,6 +888,39 @@ def fleet_stats_history(limit: int = Query(default=240, ge=1, le=10000)):
     if aggregator is None:
         return {"history": []}
     return {"history": aggregator.get_history(limit)}
+
+
+class StatsIngestBody(BaseModel):
+    # The pushing worker's own advertised base URL (its Node.address). The
+    # controller resolves it to a node_id — a worker never knows its node_id.
+    address: str
+    stats: dict
+
+
+@router.post("/api/fleet/ingest/stats", dependencies=[Depends(require_fleet_token)])
+def ingest_stats(body: StatsIngestBody):
+    """Worker → controller stats push (opt-in, additive; poll is the fallback).
+
+    Resolves the poster to a node_id by address (nodes are keyed by node_id;
+    workers know only their own address) and hands the snapshot to the
+    aggregator, which then treats poll results for that node as fallback while
+    the push stays fresh. Unknown address → 404 (the worker retries once the
+    controller has discovered / registered it)."""
+    if db is None or aggregator is None:
+        raise HTTPException(503, "Controller not ready for stats ingest")
+    address = (body.address or "").rstrip("/")
+    if not address:
+        raise HTTPException(422, "address is required")
+    session = db.get_session()
+    try:
+        node = session.query(Node).filter_by(address=address).first()
+        node_id = node.id if node else None
+    finally:
+        session.close()
+    if node_id is None:
+        raise HTTPException(404, f"No node registered with address {address!r}")
+    aggregator.ingest_pushed_stats(node_id, body.stats)
+    return {"status": "ok", "node_id": node_id}
 
 
 def _empty() -> dict:

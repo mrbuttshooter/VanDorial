@@ -54,6 +54,8 @@ export interface paths {
         /**
          * Me
          * @description Return the current principal (logged-in username, or the API key name).
+         *
+         *     ``role`` + ``can_write`` let the console hide write controls for a viewer.
          */
         get: operations["me_api_auth_me_get"];
         put?: never;
@@ -137,6 +139,32 @@ export interface paths {
          *     call.
          */
         post: operations["set_fleet_trust_api_fleet_config_trust_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/ingest/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Stats
+         * @description Worker → controller stats push (opt-in, additive; poll is the fallback).
+         *
+         *     Resolves the poster to a node_id by address (nodes are keyed by node_id;
+         *     workers know only their own address) and hands the snapshot to the
+         *     aggregator, which then treats poll results for that node as fallback while
+         *     the push stays fresh. Unknown address → 404 (the worker retries once the
+         *     controller has discovered / registered it).
+         */
+        post: operations["ingest_stats_api_fleet_ingest_stats_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -472,6 +500,11 @@ export interface components {
         CreateUserRequest: {
             /** Password */
             password: string;
+            /**
+             * Role
+             * @default operator
+             */
+            role: string;
             /** Username */
             username: string;
         };
@@ -689,6 +722,15 @@ export interface components {
         SetPasswordRequest: {
             /** Password */
             password: string;
+        };
+        /** StatsIngestBody */
+        StatsIngestBody: {
+            /** Address */
+            address: string;
+            /** Stats */
+            stats: {
+                [key: string]: unknown;
+            };
         };
         /** ValidationError */
         ValidationError: {
@@ -986,6 +1028,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["FleetTrustBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_stats_api_fleet_ingest_stats_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Fleet-Token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatsIngestBody"];
             };
         };
         responses: {
