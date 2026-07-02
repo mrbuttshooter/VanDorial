@@ -277,6 +277,18 @@ def create_app(config_path: str = None):
     except Exception as e:
         logger.warning("Auto-resume of interrupted loops failed: %s", e)
 
+    # ── Prometheus metrics (auth-gated /metrics) ─────────────────────────────
+    # Renders what the engines already compute — no collector threads, no new
+    # dependency. Mounted on workers and consoles alike so every box in the
+    # fleet is scrapeable.
+    from gencall.api import metrics as metrics_api
+
+    metrics_api.stats_engine = stats_engine
+    metrics_api.loop_engine = loop_engine
+    metrics_api.loop_matcher = loop_matcher
+    metrics_api.call_parser = call_parser
+    app.include_router(metrics_api.router)
+
     # ── Live streams ────────────────────────────────────────────────────────
     # Mount the WebSocket hub (/ws, /ws/stats, …) and feed it stats snapshots.
     # Headless fleet workers skip this — the controller pulls /api/stats over the

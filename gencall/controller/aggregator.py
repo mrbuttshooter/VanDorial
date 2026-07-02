@@ -436,6 +436,11 @@ class FleetAggregator:
             st = self._node_status.get(node_id)
             return dict(st) if st else None
 
+    def all_node_status(self) -> list[dict]:
+        """Snapshot of every tracked node's status (for /metrics)."""
+        with self._lock:
+            return [dict(st) for st in self._node_status.values()]
+
     def get_fleet_stats(self) -> dict:
         """Return the current FleetStats: {aggregate, per_group, per_node}.
 

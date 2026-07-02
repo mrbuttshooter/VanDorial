@@ -374,6 +374,11 @@ class CallRecordParser:
         with self._lock:
             self._files.pop(path, None)
 
+    def tracked_count(self) -> int:
+        """Number of log files currently being tailed (for /metrics)."""
+        with self._lock:
+            return len(self._files)
+
     # ── parsing ──────────────────────────────────────────────────────────────
 
     def _read_new_lines(self, path, state):

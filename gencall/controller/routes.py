@@ -959,3 +959,15 @@ def openapi_schema(request: Request):
     """The controller's OpenAPI schema, auth-gated (the unauthenticated
     /openapi.json + /docs stay disabled at app construction)."""
     return request.app.openapi()
+
+
+@router.get("/metrics", dependencies=[Depends(require_api_key)],
+            include_in_schema=False)
+def controller_metrics():
+    """Prometheus metrics for the fleet control-plane (auth-gated)."""
+    from fastapi.responses import PlainTextResponse
+
+    from gencall.api.metrics import render_controller_metrics
+
+    return PlainTextResponse(render_controller_metrics(aggregator=aggregator),
+                             media_type="text/plain; version=0.0.4")
