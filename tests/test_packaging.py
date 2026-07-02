@@ -169,12 +169,16 @@ def test_wheelhouse_ships_build_backend_for_offline_install():
         assert _present(pkg), f"vendor/wheelhouse is missing runtime dep {pkg}"
 
 
-def test_offline_installer_installs_build_backend_strictly():
-    """The offline installer must install setuptools/wheel from the wheelhouse
-    BEFORE the --no-build-isolation editable build, and fail loudly if they are
-    absent (not silently fall back to a possibly-too-old seeded setuptools)."""
+def test_offline_installer_is_fully_offline_and_verifies_build_backend():
+    """The offline installer must (a) never fetch from the internet — every pip
+    install is --no-index — and (b) verify a PEP 517-capable setuptools (>=64)
+    is present from EITHER the venv-builder seed OR the wheelhouse before the
+    --no-build-isolation build, so a genuinely broken bundle fails with a clear
+    message rather than at a cryptic build step (the pyz seed alone is a valid
+    offline provider — the wheelhouse backend must not be forced)."""
     sh = _read("deploy/install-offline.sh")
+    for line in sh.splitlines():
+        if line.strip().startswith('"$PIP" install'):
+            assert "--no-index" in line, f"pip install without --no-index: {line.strip()}"
     assert "--no-build-isolation" in sh
-    # setuptools+wheel install is guarded by die (strict), not `|| true`.
-    assert "install --no-index --find-links=\"$WHEELHOUSE\" --upgrade setuptools wheel" in sh
-    assert "build backend" in sh
+    assert "setuptools.__version__" in sh and ">= 64" in sh

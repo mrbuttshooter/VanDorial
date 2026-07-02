@@ -51,14 +51,18 @@ data path — **3.0.0 is a drop-in upgrade from 2.2.x** (see the upgrade notes i
   that actually ship.
 
 ### Offline / air-gapped install (self-contained)
-- The `pyproject.toml` migration meant the PEP 517 build needs a build backend at
-  install time. The offline bundle now ships `pip` + `setuptools` (>=64, PEP 660
-  editable) + `wheel` in `vendor/wheelhouse/`, so **air-gapped boxes build and
-  install 3.0.0 with no network** (no PyPI, no GitHub). `install-offline.sh`
-  installs the backend strictly and fails loudly if a stale bundle lacks it;
-  `build-wheelhouse.sh` pins a dependency-free `wheel` to keep the wheelhouse
-  self-contained. See [docs/deploy/release-3.0.md](docs/deploy/release-3.0.md)
-  "Air-gapped / no-internet boxes".
+- The `pyproject.toml` migration meant the install-time build is PEP 517/660 and
+  needs a `setuptools >= 64`. This is satisfied **entirely offline** from either
+  source: the bundled venv builder (`vendor/virtualenv.pyz`) already **seeds a
+  modern setuptools from wheels embedded in the zipapp** (no network), and the
+  wheelhouse now also ships `pip`/`setuptools`/`wheel` as belt-and-suspenders.
+  `install-offline.sh` upgrades from the wheelhouse best-effort (`--no-index` —
+  never the internet) then **verifies the setuptools capability** (from seed or
+  wheelhouse) so a genuinely broken bundle fails with a clear message instead of
+  a cryptic build error. Air-gapped boxes install 3.0.0 with **no PyPI and no
+  GitHub**. `build-wheelhouse.sh` pins a dependency-free `wheel` to keep the
+  wheelhouse self-contained. See
+  [docs/deploy/release-3.0.md](docs/deploy/release-3.0.md) "Air-gapped boxes".
 
 ### Database migrations (applied automatically on boot)
 - Worker: `0008_call_records_dir_created`, `0009_loop_campaign_schedule`

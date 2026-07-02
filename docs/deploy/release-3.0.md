@@ -54,12 +54,15 @@ Docker path: `./deploy/install.sh` then `./deploy/smoke-loopback.sh`.
 Boxes with no internet can't `git clone` or reach PyPI, so 3.0.0 ships a
 **fully self-contained offline bundle** — nothing is downloaded at install time:
 
-- `vendor/wheelhouse/` — every Python dependency **plus the build backend**
-  (`pip`, `setuptools`, `wheel`). 3.0.0 moved packaging to `pyproject.toml`, so
-  the offline install now builds the app with PEP 517/660 using the wheelhouse's
-  own setuptools — **the build backend is bundled**, no network needed.
+- `vendor/wheelhouse/` — every Python dependency, **plus** `pip`/`setuptools`/
+  `wheel`. 3.0.0 moved packaging to `pyproject.toml`, so the install builds the
+  app with PEP 517/660 (`setuptools >= 64`). That setuptools is available
+  **entirely offline** from either the venv builder's embedded seed (see below)
+  or the wheelhouse — nothing is fetched.
+- `vendor/virtualenv.pyz` — the venv builder, which **embeds** its `pip`/
+  `setuptools` seed wheels, so it creates the venv (with a modern setuptools)
+  with no OS `python3-venv` and no network.
 - `vendor/debs/` — SIPp (`sip-tester` + libs), dpkg-installed if `sipp` is absent.
-- `vendor/virtualenv.pyz` — the venv builder (no OS `python3-venv` required).
 - `gencall/web/console/` — the console is **prebuilt** (no `npm`/Node on the box).
 
 **Workflow:** build/refresh the bundle once on an *online* box whose Python
@@ -80,10 +83,12 @@ sudo ./deploy/install-offline.sh                   # ROLE=worker|controller, no 
 ```
 
 The offline installer verifies the wheelhouse Python tag matches the box and
-**fails loudly** if the build backend (`setuptools`/`wheel`) is missing from the
-wheelhouse — so a stale bundle is caught immediately, not at a cryptic build
-error. If you already run 2.2.x from an unpacked bundle, upgrading is the same:
-drop in the 3.0.0 bundle and re-run `install-offline.sh` (migrations auto-apply).
+that a PEP 517-capable `setuptools` (>=64) is available **from either the venv
+builder's embedded seed or the wheelhouse** — so a genuinely broken bundle is
+caught immediately with a clear message, not at a cryptic build error. Every
+`pip` step uses `--no-index` (never the internet). If you already run 2.2.x from
+an unpacked bundle, upgrading is the same: drop in the 3.0.0 bundle and re-run
+`install-offline.sh` (migrations auto-apply).
 
 > The committed release tag already contains a ready-to-use wheelhouse for
 > Ubuntu 22.04 / Python 3.10. You only need `build-wheelhouse.sh` if your boxes

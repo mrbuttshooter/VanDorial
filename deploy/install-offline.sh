@@ -137,15 +137,25 @@ else
   python3 -m venv "$INSTALL_DIR/venv"
 fi
 PIP="$INSTALL_DIR/venv/bin/pip"
-# The bundle now ships pip/setuptools/wheel in the wheelhouse, so the PEP 517
-# build below does not depend on whatever the venv seed happened to provide.
-# setuptools (>=64, PEP 660 editable) + wheel are REQUIRED to build gencall from
-# pyproject.toml with --no-build-isolation, so install them strictly (fail loudly
-# with a clear message rather than at the cryptic build step). pip itself is a
-# best-effort upgrade.
-"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade pip >/dev/null 2>&1 || true
-"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade setuptools wheel \
-  || die "Could not install setuptools/wheel from the wheelhouse — the bundle is missing the build backend. Rebuild it on a matching-Python online box: deploy/build-wheelhouse.sh"
+PYBIN="$INSTALL_DIR/venv/bin/python"
+# The PEP 517/660 build below (pyproject.toml, --no-build-isolation) needs a
+# setuptools >= 64 in the venv. That comes from EITHER source, both offline:
+#   - the venv builder (virtualenv.pyz) SEEDS a modern setuptools from wheels
+#     embedded in the zipapp — no network, no wheelhouse needed; OR
+#   - the wheelhouse, if the bundle ships pip/setuptools/wheel (it does).
+# So upgrade from the wheelhouse best-effort (--no-index = never the internet),
+# then VERIFY the capability regardless of source — a genuinely broken bundle
+# fails here with a clear message instead of at a cryptic build step.
+"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+"$PYBIN" - <<'PY' || die "No setuptools>=64 available offline (needed to build gencall from pyproject.toml). The bundled venv builder (vendor/virtualenv.pyz) should seed it; otherwise add setuptools to vendor/wheelhouse via deploy/build-wheelhouse.sh on a matching-Python online box."
+import sys
+try:
+    import setuptools
+    ok = int(setuptools.__version__.split(".")[0]) >= 64
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PY
 "$PIP" install --no-index --find-links="$WHEELHOUSE" -r "$INSTALL_DIR/requirements.txt"
 # Install the package itself (editable; --no-build-isolation so pip uses the
 # venv's setuptools instead of trying to fetch build deps from the internet).
