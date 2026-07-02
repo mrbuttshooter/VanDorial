@@ -994,3 +994,71 @@ def test_ingest_stats_stores_snapshot_for_node(controller, monkeypatch):
     agg = controller_routes.aggregator
     assert agg._node_stats[node["id"]] == snap
     assert agg._recently_pushed_locked(node["id"]) is True
+
+
+# ─── Per-node fleet-run rows (roadmap #10) ────────────────────────────────────
+
+def test_fleet_launch_writes_per_node_rows(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=True, start_raises=True)
+    n3 = ctx.register_node(client, "http://node-3", online=False)
+
+    run_id = client.post("/api/fleet/launch", json={
+        "name": "camp", "node_ids": [n1["id"], n2["id"], n3["id"]],
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9", "remote_port": 5060,
+                        "transport": "udp"},
+        "rate": {"mode": "per_node", "value": 4.0},
+    }, headers=headers).json()["fleet_run_id"]
+
+    detail = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()
+    # Legacy blob is unchanged AND the normalized rows are present.
+    assert len(detail["results"]) == 3
+    rows = {r["node_id"]: r for r in detail["per_node_rows"]}
+    assert set(rows) == {n1["id"], n2["id"], n3["id"]}
+    assert rows[n1["id"]]["kind"] == "test"
+    assert rows[n1["id"]]["ok"] is True
+    assert rows[n1["id"]]["status"] == "dispatched"
+    assert rows[n1["id"]]["ref_id"] == f"test-{n1['id']}"
+    assert rows[n2["id"]]["status"] == "failed" and rows[n2["id"]]["error"]
+    assert rows[n3["id"]]["status"] == "offline"
+    assert rows[n3["id"]]["ref_id"] is None
+
+
+def test_fleet_stop_flips_rows_to_stopped(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    n2 = ctx.register_node(client, "http://node-2", online=False)  # offline row
+    run_id = client.post("/api/fleet/launch", json={
+        "name": "camp", "node_ids": [n1["id"], n2["id"]],
+        "scenario": "basic_call",
+        "destination": {"remote_host": "10.0.0.9", "remote_port": 5060,
+                        "transport": "udp"},
+        "rate": {"mode": "per_node", "value": 1.0},
+    }, headers=headers).json()["fleet_run_id"]
+
+    assert client.post(f"/api/fleet/{run_id}/stop", headers=headers).status_code == 200
+    rows = {r["node_id"]: r for r in
+            client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()["per_node_rows"]}
+    # The dispatched node's row is now 'stopped'; the offline row stays 'offline'.
+    assert rows[n1["id"]]["status"] == "stopped"
+    assert rows[n2["id"]]["status"] == "offline"
+
+
+def test_fleet_loop_launch_writes_loop_rows(controller):
+    client, headers, ctx = controller
+    n1 = ctx.register_node(client, "http://node-1", online=True)
+    run_id = client.post("/api/fleet/loops/launch", json={
+        "name": "loopcamp", "node_ids": [n1["id"]],
+        "destination": {"remote_host": "10.0.0.9", "remote_port": 5060,
+                        "transport": "udp"},
+        "rate": {"mode": "per_node", "value": 2.0},
+        "duration_s": 60, "target_minutes": 100,
+    }, headers=headers).json()["fleet_run_id"]
+
+    rows = client.get(f"/api/fleet/runs/{run_id}", headers=headers).json()["per_node_rows"]
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "loop"
+    assert rows[0]["ref_id"] == f"camp-{n1['id']}"
+    assert rows[0]["status"] == "dispatched"

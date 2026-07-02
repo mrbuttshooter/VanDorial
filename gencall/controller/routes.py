@@ -32,7 +32,7 @@ from pydantic import BaseModel
 # a node's `address`, so block link-local/metadata targets there too.
 from gencall.api.routes import require_api_key, _reject_unsafe_worker_url
 
-from gencall.controller.models import Node, Group, FleetRun
+from gencall.controller.models import Node, Group, FleetRun, FleetRunNode
 from gencall.controller.node_client import NodeClient
 from gencall.controller import ws as controller_ws
 
@@ -145,6 +145,40 @@ class FleetLoopLaunchRequest(BaseModel):
 # Marker stored in FleetRun.scenario to distinguish loop-campaign runs from
 # one-shot test runs (so the stop/aggregate paths dispatch to /api/loops).
 LOOP_RUN_SCENARIO = "__loop__"
+
+
+def _row_status_for(entry: dict) -> str:
+    """Per-node FleetRunNode status derived from a dispatch result entry."""
+    if entry.get("ok"):
+        return "dispatched"
+    if entry.get("error") == "node offline":
+        return "offline"
+    return "failed"
+
+
+def _write_run_nodes(session, run_id: int, dispatched: list, kind: str) -> None:
+    """Persist one FleetRunNode per dispatched entry (first-class, queryable form
+    of the FleetRun.results blob). Caller commits. ``kind`` is 'test' or 'loop';
+    the member ref is test_id or campaign_id respectively."""
+    for entry in dispatched:
+        ref = entry.get("test_id") if kind == "test" else entry.get("campaign_id")
+        session.add(FleetRunNode(
+            fleet_run_id=run_id,
+            node_id=entry.get("node_id"),
+            kind=kind,
+            ok=bool(entry.get("ok")),
+            ref_id=str(ref) if ref is not None else None,
+            status=_row_status_for(entry),
+            error=entry.get("error"),
+        ))
+
+
+def _mark_run_nodes_stopped(session, run_id: int) -> None:
+    """Flip a run's still-active per-node rows to 'stopped' (caller commits)."""
+    rows = session.query(FleetRunNode).filter_by(fleet_run_id=run_id).all()
+    for row in rows:
+        if row.status in ("dispatched",):
+            row.status = "stopped"
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────────
@@ -594,6 +628,7 @@ async def fleet_launch(req: FleetLaunchRequest):
             run.status = status
             if status in ("failed",):
                 run.completed_at = datetime.datetime.utcnow()
+            _write_run_nodes(session, fleet_run_id, dispatched, kind="test")
             session.commit()
     finally:
         session.close()
@@ -640,6 +675,7 @@ async def fleet_stop(run_id: int):
         if run:
             run.status = "stopped"
             run.completed_at = datetime.datetime.utcnow()
+            _mark_run_nodes_stopped(session, run_id)
             session.commit()
     finally:
         session.close()
@@ -749,6 +785,7 @@ async def fleet_loops_launch(req: FleetLoopLaunchRequest):
             run.status = status
             if status in ("failed",):
                 run.completed_at = datetime.datetime.utcnow()
+            _write_run_nodes(session, fleet_run_id, dispatched, kind="loop")
             session.commit()
     finally:
         session.close()
@@ -795,6 +832,7 @@ async def fleet_loops_stop(run_id: int):
         if run:
             run.status = "stopped"
             run.completed_at = datetime.datetime.utcnow()
+            _mark_run_nodes_stopped(session, run_id)
             session.commit()
     finally:
         session.close()
@@ -869,7 +907,14 @@ def get_fleet_run(run_id: int):
         run = session.query(FleetRun).filter_by(id=run_id).first()
         if not run:
             raise HTTPException(404, f"Fleet run {run_id} not found")
-        return run.to_dict()
+        view = run.to_dict()
+        # Additive: the normalized per-node rows alongside the legacy results
+        # blob. Existing consumers that read `results`/status are unaffected.
+        rows = (session.query(FleetRunNode)
+                .filter_by(fleet_run_id=run_id)
+                .order_by(FleetRunNode.node_id).all())
+        view["per_node_rows"] = [r.to_dict() for r in rows]
+        return view
     finally:
         session.close()
 

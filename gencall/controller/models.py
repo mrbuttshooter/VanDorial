@@ -184,6 +184,50 @@ class FleetRun(Base):
         }
 
 
+# ─── FleetRunNode ──────────────────────────────────────────────────────────────
+
+class FleetRunNode(Base):
+    """One node's participation in a fleet run — the normalized, queryable form
+    of the entries denormalized into FleetRun.results.
+
+    Written at launch (one row per dispatched node, including offline ones) and
+    updated on stop. The results JSON blob is kept in lockstep for back-compat;
+    these rows are the first-class per-node record that survives a controller
+    restart with real per-node timelines. A brand-new table is provisioned by
+    the controller's bare create_all (which never ALTERs, but does create missing
+    tables), so no migration runner is needed.
+    """
+    __tablename__ = "fleet_run_nodes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fleet_run_id = Column(Integer, index=True, nullable=False)
+    node_id = Column(Integer, nullable=False)
+    kind = Column(String(8), default="test")        # test | loop
+    ok = Column(Boolean, default=False)
+    # The member ref: test_id (test run) or campaign_id (loop run); None on failure.
+    ref_id = Column(String(255), nullable=True)
+    # dispatched | failed | offline | stopped
+    status = Column(String(16), default="dispatched")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        onupdate=datetime.datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "fleet_run_id": self.fleet_run_id,
+            "node_id": self.node_id,
+            "kind": self.kind,
+            "ok": bool(self.ok),
+            "ref_id": self.ref_id,
+            "status": self.status,
+            "error": self.error,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
 # ─── FleetSettings ───────────────────────────────────────────────────────────
 
 class FleetSettings(Base):
