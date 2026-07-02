@@ -28,9 +28,13 @@ echo "Building wheelhouse for $("$PY" -V 2>&1)  ->  $OUT"
 mkdir -p "$OUT"
 
 # App dependencies (requirements.txt) + the build backend so 'pip install -e .'
-# resolves offline too (install-offline.sh uses --no-build-isolation).
+# resolves offline too (install-offline.sh uses --no-build-isolation). The build
+# backend is REQUIRED offline: pyproject.toml builds with setuptools.build_meta,
+# so setuptools (>=64 for PEP 660 editable) + wheel must be in the wheelhouse.
 "$PY" -m pip download -d "$OUT" -r "$REPO/requirements.txt"
-"$PY" -m pip download -d "$OUT" pip setuptools wheel
+# pin wheel to the last dependency-free release (0.46+ pulls in 'packaging');
+# keeps the wheelhouse self-contained without an extra transitive wheel.
+"$PY" -m pip download -d "$OUT" pip setuptools "wheel<0.46"
 
 echo
 echo "Done: $(ls "$OUT"/*.whl 2>/dev/null | wc -l) wheels in $OUT  (for $("$PY" -V 2>&1))."

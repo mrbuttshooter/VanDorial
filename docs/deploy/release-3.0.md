@@ -47,9 +47,47 @@ starts the `gencall-worker` systemd service. DB migrations apply at boot
 - Controller console (if role=controller): `http://<box-ip>:8080/console/`
 - Logs: `journalctl -u gencall-worker -f` (or `gencall-controller`)
 
-Air-gapped box? Use `sudo ./deploy/install-offline.sh` (same prompts; the bundle
-ships SIPp, the venv builder, and every wheel). Docker path:
-`./deploy/install.sh` then `./deploy/smoke-loopback.sh`.
+Docker path: `./deploy/install.sh` then `./deploy/smoke-loopback.sh`.
+
+### Air-gapped / no-internet boxes (most IPs)
+
+Boxes with no internet can't `git clone` or reach PyPI, so 3.0.0 ships a
+**fully self-contained offline bundle** — nothing is downloaded at install time:
+
+- `vendor/wheelhouse/` — every Python dependency **plus the build backend**
+  (`pip`, `setuptools`, `wheel`). 3.0.0 moved packaging to `pyproject.toml`, so
+  the offline install now builds the app with PEP 517/660 using the wheelhouse's
+  own setuptools — **the build backend is bundled**, no network needed.
+- `vendor/debs/` — SIPp (`sip-tester` + libs), dpkg-installed if `sipp` is absent.
+- `vendor/virtualenv.pyz` — the venv builder (no OS `python3-venv` required).
+- `gencall/web/console/` — the console is **prebuilt** (no `npm`/Node on the box).
+
+**Workflow:** build/refresh the bundle once on an *online* box whose Python
+matches the air-gapped targets (Ubuntu 22.04 / Python 3.10), tar it, copy it to
+each air-gapped box, and run the offline installer:
+
+```bash
+# on an ONLINE box, same Python as the targets (only needed to (re)build the bundle):
+git clone https://github.com/mrbuttshooter/VanDorial.git && cd VanDorial
+git checkout 3.0.0
+PYTHON=python3.10 ./deploy/build-wheelhouse.sh     # refresh vendor/wheelhouse
+./deploy/build-debs.sh                             # refresh vendor/debs (SIPp)
+tar czf gencall-3.0.0-offline.tgz --exclude='.git' .
+
+# copy gencall-3.0.0-offline.tgz to each AIR-GAPPED box, then:
+tar xzf gencall-3.0.0-offline.tgz && cd VanDorial
+sudo ./deploy/install-offline.sh                   # ROLE=worker|controller, no network
+```
+
+The offline installer verifies the wheelhouse Python tag matches the box and
+**fails loudly** if the build backend (`setuptools`/`wheel`) is missing from the
+wheelhouse — so a stale bundle is caught immediately, not at a cryptic build
+error. If you already run 2.2.x from an unpacked bundle, upgrading is the same:
+drop in the 3.0.0 bundle and re-run `install-offline.sh` (migrations auto-apply).
+
+> The committed release tag already contains a ready-to-use wheelhouse for
+> Ubuntu 22.04 / Python 3.10. You only need `build-wheelhouse.sh` if your boxes
+> run a different Python/OS.
 
 ---
 

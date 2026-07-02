@@ -139,3 +139,42 @@ def test_deploy_doc_ships_nftables_and_ufw_rules():
     assert "default deny incoming" in doc  # ufw
     # The whitelist / trust boundary is named.
     assert "MADA" in doc and "whitelist" in doc.lower()
+
+
+# ── offline wheelhouse (air-gapped install must be self-contained) ───────────
+
+
+def test_wheelhouse_ships_build_backend_for_offline_install():
+    """Air-gapped boxes can't reach PyPI/GitHub, so install-offline.sh builds
+    gencall from pyproject.toml with --no-build-isolation against the committed
+    wheelhouse. That PEP 517/660 build needs pip + setuptools + wheel to be
+    IN the wheelhouse (setuptools>=64 for editable installs); without them the
+    offline install fails at a cryptic build step. Guard their presence so a
+    future wheelhouse rebuild can't silently drop the build backend."""
+    import glob
+    wh = os.path.join(REPO_ROOT, "vendor", "wheelhouse")
+    assert os.path.isdir(wh), "vendor/wheelhouse missing (offline bundle)"
+
+    def _present(pkg):
+        return bool(glob.glob(os.path.join(wh, f"{pkg}-*.whl")))
+
+    for pkg in ("pip", "setuptools", "wheel"):
+        assert _present(pkg), (
+            f"vendor/wheelhouse is missing a {pkg} wheel — the offline build "
+            f"backend. Rebuild with deploy/build-wheelhouse.sh.")
+
+    # The runtime deps must be there too (a representative sample — the full set
+    # is resolved from requirements.txt at install time).
+    for pkg in ("fastapi", "uvicorn", "sqlalchemy", "pydantic", "httpx", "dpkt"):
+        assert _present(pkg), f"vendor/wheelhouse is missing runtime dep {pkg}"
+
+
+def test_offline_installer_installs_build_backend_strictly():
+    """The offline installer must install setuptools/wheel from the wheelhouse
+    BEFORE the --no-build-isolation editable build, and fail loudly if they are
+    absent (not silently fall back to a possibly-too-old seeded setuptools)."""
+    sh = _read("deploy/install-offline.sh")
+    assert "--no-build-isolation" in sh
+    # setuptools+wheel install is guarded by die (strict), not `|| true`.
+    assert "install --no-index --find-links=\"$WHEELHOUSE\" --upgrade setuptools wheel" in sh
+    assert "build backend" in sh

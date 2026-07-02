@@ -50,6 +50,16 @@ data path — **3.0.0 is a drop-in upgrade from 2.2.x** (see the upgrade notes i
 - Removed dead console page and corrected the scenario catalog to the templates
   that actually ship.
 
+### Offline / air-gapped install (self-contained)
+- The `pyproject.toml` migration meant the PEP 517 build needs a build backend at
+  install time. The offline bundle now ships `pip` + `setuptools` (>=64, PEP 660
+  editable) + `wheel` in `vendor/wheelhouse/`, so **air-gapped boxes build and
+  install 3.0.0 with no network** (no PyPI, no GitHub). `install-offline.sh`
+  installs the backend strictly and fails loudly if a stale bundle lacks it;
+  `build-wheelhouse.sh` pins a dependency-free `wheel` to keep the wheelhouse
+  self-contained. See [docs/deploy/release-3.0.md](docs/deploy/release-3.0.md)
+  "Air-gapped / no-internet boxes".
+
 ### Database migrations (applied automatically on boot)
 - Worker: `0008_call_records_dir_created`, `0009_loop_campaign_schedule`
   (run by `apply_migrations` at startup).

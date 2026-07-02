@@ -137,9 +137,15 @@ else
   python3 -m venv "$INSTALL_DIR/venv"
 fi
 PIP="$INSTALL_DIR/venv/bin/pip"
-# Upgrade pip/setuptools/wheel from the wheelhouse if present (tolerant — the
-# venv already ships a usable pip+setuptools, so failure here is non-fatal).
-"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+# The bundle now ships pip/setuptools/wheel in the wheelhouse, so the PEP 517
+# build below does not depend on whatever the venv seed happened to provide.
+# setuptools (>=64, PEP 660 editable) + wheel are REQUIRED to build gencall from
+# pyproject.toml with --no-build-isolation, so install them strictly (fail loudly
+# with a clear message rather than at the cryptic build step). pip itself is a
+# best-effort upgrade.
+"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade pip >/dev/null 2>&1 || true
+"$PIP" install --no-index --find-links="$WHEELHOUSE" --upgrade setuptools wheel \
+  || die "Could not install setuptools/wheel from the wheelhouse — the bundle is missing the build backend. Rebuild it on a matching-Python online box: deploy/build-wheelhouse.sh"
 "$PIP" install --no-index --find-links="$WHEELHOUSE" -r "$INSTALL_DIR/requirements.txt"
 # Install the package itself (editable; --no-build-isolation so pip uses the
 # venv's setuptools instead of trying to fetch build deps from the internet).
