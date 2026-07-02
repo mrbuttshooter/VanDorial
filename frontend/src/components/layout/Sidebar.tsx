@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import styles from "./layout.module.css";
 import {
@@ -12,6 +12,7 @@ import {
   IconPower,
 } from "../icons";
 import { api, requireAuth } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { useToast } from "../ui/Toast";
 
 interface NavItem {
@@ -55,21 +56,10 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
 
 export function Sidebar({ activeTests }: { activeTests: number }) {
   const toast = useToast();
-  const [username, setUsername] = useState<string | null>(null);
+  const { me, role } = useAuth();
+  const username = me?.username ?? null;
   const [loggingOut, setLoggingOut] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    api
-      .me()
-      .then((me) => alive && setUsername(me.username))
-      .catch(() => {
-        /* token may be gone; the auth gate handles the bounce to login */
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const logout = async () => {
     setLoggingOut(true);
@@ -123,6 +113,7 @@ export function Sidebar({ activeTests }: { activeTests: number }) {
         <div className={styles.sidebarUser}>
           <span className={styles.sidebarUserName}>
             {username ? `Signed in · ${username}` : "Signed in"}
+            {me ? ` · ${role}` : ""}
           </span>
           <button
             type="button"

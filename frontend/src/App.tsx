@@ -3,6 +3,7 @@ import { HashRouter, Route, Routes, Link } from "react-router-dom";
 import { Shell } from "./components/layout/Shell";
 import { ToastProvider } from "./components/ui/Toast";
 import { FleetScopeProvider } from "./fleet/scope";
+import { AuthProvider } from "./lib/auth";
 import { Dashboard } from "./pages/Dashboard";
 import { Campaigns } from "./pages/Campaigns";
 import { Scenarios } from "./pages/Scenarios";
@@ -69,6 +70,7 @@ function AuthGate() {
   }
 
   return (
+    <AuthProvider>
     <FleetScopeProvider>
       {/* HashRouter keeps deep links working when FastAPI serves the SPA from
           a static mount without per-route rewrites. */}
@@ -108,6 +110,7 @@ function AuthGate() {
         </Routes>
       </HashRouter>
     </FleetScopeProvider>
+    </AuthProvider>
   );
 }
 

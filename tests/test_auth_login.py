@@ -97,13 +97,17 @@ def client(db, monkeypatch):
     gw.sessions = SessionManager(db=db)
     monkeypatch.setattr(routes, "gateway", gw)
     auth._fail_log.clear()  # reset the per-IP throttle between tests
-    gw.users.create_user("admin", "supersecret")
+    gw.users.create_user("admin", "supersecret", role="admin")
 
     app = FastAPI()
     app.include_router(auth.router)
 
     @app.get("/api/protected", dependencies=[Depends(routes.require_api_key)])
     def protected():
+        return {"ok": True}
+
+    @app.post("/api/protected", dependencies=[Depends(routes.require_api_key)])
+    def protected_write():
         return {"ok": True}
 
     return TestClient(app), gw
@@ -194,3 +198,75 @@ def test_bootstrap_disabled_once_a_user_exists(db, monkeypatch):
     with pytest.raises(HTTPException) as ei:
         routes.console_bootstrap(local)
     assert ei.value.status_code == 404
+
+
+def _login(c, username, password):
+    return c.post("/api/auth/login",
+                  json={"username": username, "password": password}).json()["token"]
+
+
+def test_viewer_is_read_only(client):
+    """A viewer may GET but not issue any state-changing method."""
+    c, gw = client
+    gw.users.create_user("val", "viewersecret", role="viewer")
+    tok = _login(c, "val", "viewersecret")
+    h = {"X-API-Key": tok}
+    # Reads work, and identity reports the role + can_write=False.
+    assert c.get("/api/protected", headers=h).status_code == 200
+    me = c.get("/api/auth/me", headers=h).json()
+    assert me["role"] == "viewer" and me["can_write"] is False
+    # A write on the generic protected route is blocked with 403 (not 401).
+    assert c.post("/api/protected", headers=h).status_code == 403
+
+
+def test_operator_can_write_but_not_manage_users(client):
+    c, gw = client
+    gw.users.create_user("opp", "operatorsecret", role="operator")
+    tok = _login(c, "opp", "operatorsecret")
+    h = {"X-API-Key": tok}
+    me = c.get("/api/auth/me", headers=h).json()
+    assert me["role"] == "operator" and me["can_write"] is True
+    # Writes on operational routes are allowed...
+    assert c.post("/api/protected", headers=h).status_code == 200
+    # ...but account management is admin-only.
+    assert c.get("/api/auth/users", headers=h).status_code == 403
+    assert c.post("/api/auth/users",
+                  json={"username": "x", "password": "yyyyyyyy"},
+                  headers=h).status_code == 403
+
+
+def test_admin_can_create_roled_users(client):
+    c, _ = client
+    tok = _login(c, "admin", "supersecret")
+    h = {"X-API-Key": tok}
+    r = c.post("/api/auth/users",
+               json={"username": " viewerbob", "password": "bobsecret1",
+                     "role": "viewer"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["role"] == "viewer"
+    # An invalid role is rejected.
+    assert c.post("/api/auth/users",
+                  json={"username": "nope", "password": "nopesecret",
+                        "role": "superuser"}, headers=h).status_code == 422
+
+
+def test_role_change_takes_effect_next_request(client):
+    """Demoting a live session to viewer blocks its next write (role is read
+    from the user row per request, not frozen at login)."""
+    c, gw = client
+    user = gw.users.create_user("dyn", "dynsecret1", role="operator")
+    tok = _login(c, "dyn", "dynsecret1")
+    h = {"X-API-Key": tok}
+    assert c.post("/api/protected", headers=h).status_code == 200
+    gw.users.set_role(user["id"], "viewer")
+    assert c.post("/api/protected", headers=h).status_code == 403
+    assert c.get("/api/protected", headers=h).status_code == 200
+
+
+def test_machine_key_is_full_access(client):
+    c, gw = client
+    raw, _ = gw.keys.create_key("ci")
+    h = {"X-API-Key": raw}
+    assert c.post("/api/protected", headers=h).status_code == 200
+    # Machine keys may manage users (trusted automation).
+    assert c.get("/api/auth/users", headers=h).status_code == 200

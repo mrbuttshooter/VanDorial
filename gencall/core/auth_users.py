@@ -29,6 +29,21 @@ import time
 
 logger = logging.getLogger("gencall.auth_users")
 
+# Console RBAC. A viewer may only issue safe (GET/HEAD/OPTIONS) requests;
+# operator and admin get full read+write. Machine API keys are unaffected —
+# they carry their own permissions and are meant for automation. The mapping is
+# expressed as gateway permissions so the existing require_api_key path enforces
+# it: "execute" gates every state-changing method.
+VALID_ROLES = ("admin", "operator", "viewer")
+DEFAULT_ROLE = "operator"
+
+
+def permissions_for_role(role: str) -> list[str]:
+    """Gateway permission list for a console role (unknown role -> read-only)."""
+    if role in ("admin", "operator"):
+        return ["read", "execute"]
+    return ["read"]
+
 # PBKDF2 cost. 200k SHA-256 iterations is a sane 2020s default for an internal
 # tool and keeps login well under ~150 ms on the boxes this runs on.
 _PBKDF2_ITERS = 200_000
@@ -92,7 +107,8 @@ class UserManager:
         finally:
             session.close()
 
-    def create_user(self, username: str, password: str, role: str = "operator") -> dict:
+    def create_user(self, username: str, password: str,
+                    role: str = DEFAULT_ROLE) -> dict:
         """Create an account. Raises ValueError on a blank/duplicate username."""
         from gencall.db.models import User
         username = (username or "").strip()
@@ -100,6 +116,10 @@ class UserManager:
             raise ValueError("username is required")
         if len(password or "") < 8:
             raise ValueError("password must be at least 8 characters")
+        role = (role or DEFAULT_ROLE).strip().lower()
+        if role not in VALID_ROLES:
+            raise ValueError(
+                f"role must be one of {', '.join(VALID_ROLES)}")
         session = self.db.get_session()
         try:
             if session.query(User).filter_by(username=username).first():
@@ -153,6 +173,23 @@ class UserManager:
         finally:
             session.close()
 
+    def set_role(self, user_id: int, role: str) -> bool:
+        """Change an account's role. Raises ValueError on an unknown role."""
+        from gencall.db.models import User
+        role = (role or "").strip().lower()
+        if role not in VALID_ROLES:
+            raise ValueError(f"role must be one of {', '.join(VALID_ROLES)}")
+        session = self.db.get_session()
+        try:
+            u = session.query(User).filter_by(id=user_id).first()
+            if not u:
+                return False
+            u.role = role
+            session.commit()
+            return True
+        finally:
+            session.close()
+
     def delete_user(self, user_id: int) -> bool:
         from gencall.db.models import User
         session = self.db.get_session()
@@ -200,10 +237,15 @@ class SessionManager:
             session.close()
 
     def validate(self, raw_token: str) -> dict | None:
-        """Return {user_id, username, expires_at} for a live token, else None."""
+        """Return {user_id, username, role, expires_at} for a live token, else None.
+
+        The role is read from the user row (not frozen at login) so promoting or
+        demoting an account takes effect on its next request. A missing/disabled
+        user invalidates the session.
+        """
         if not raw_token:
             return None
-        from gencall.db.models import LoginSession
+        from gencall.db.models import LoginSession, User
         session = self.db.get_session()
         try:
             row = session.query(LoginSession).filter_by(
@@ -215,7 +257,12 @@ class SessionManager:
                 session.delete(row)
                 session.commit()
                 return None
+            user = session.query(User).filter_by(id=row.user_id).first()
+            if user is None or not user.enabled:
+                # The account was deleted or disabled after this token was issued.
+                return None
             return {"user_id": row.user_id, "username": row.username,
+                    "role": user.role or DEFAULT_ROLE,
                     "expires_at": row.expires_at}
         finally:
             session.close()

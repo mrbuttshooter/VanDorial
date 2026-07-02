@@ -39,6 +39,14 @@ class APIKey:
     permissions: list[str] = field(default_factory=lambda: ["read", "execute"])
     rate_limit: int = 60     # requests per minute
     request_count: int = 0
+    # Console role for a session-backed principal ("admin"/"operator"/"viewer");
+    # "machine" for an API key. Display/introspection only — enforcement is
+    # driven by ``permissions`` ("execute" gates state-changing methods).
+    role: str = "machine"
+
+    def can_write(self) -> bool:
+        """True if this principal may issue state-changing requests."""
+        return "execute" in self.permissions
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +58,7 @@ class APIKey:
             "permissions": self.permissions,
             "rate_limit": self.rate_limit,
             "request_count": self.request_count,
+            "role": self.role,
         }
 
 

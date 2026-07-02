@@ -168,11 +168,13 @@ def cmd_users(args):
 
     if args.users_command == "create":
         try:
-            user = mgr.create_user(args.username, _resolve_password())
+            user = mgr.create_user(args.username, _resolve_password(),
+                                   role=args.role)
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
-        print(f"Console user created: {user['username']} (id={user['id']})")
+        print(f"Console user created: {user['username']} "
+              f"(id={user['id']}, role={user['role']})")
     elif args.users_command == "passwd":
         # Find the user id by username.
         match = [u for u in mgr.list_users() if u["username"] == args.username]
@@ -273,6 +275,11 @@ def main():
     u_create.add_argument("username", help="Login username")
     u_create.add_argument("--password", default="",
                           help="Password (else $GENCALL_USER_PASSWORD or prompt)")
+    # CLI account creation is an out-of-band, box-level trusted channel (root /
+    # installer), so it defaults to admin — the API endpoint defaults to operator.
+    u_create.add_argument("--role", default="admin",
+                          choices=["admin", "operator", "viewer"],
+                          help="Account role (default: admin)")
 
     u_passwd = users_sub.add_parser("passwd", help="Reset a user's password")
     u_passwd.add_argument("username", help="Login username")

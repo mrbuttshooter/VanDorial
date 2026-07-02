@@ -79,6 +79,11 @@
             "title": "Password",
             "type": "string"
           },
+          "role": {
+            "default": "operator",
+            "title": "Role",
+            "type": "string"
+          },
           "username": {
             "title": "Username",
             "type": "string"
@@ -1299,7 +1304,7 @@
     },
     "/api/auth/me": {
       "get": {
-        "description": "Return the current principal (logged-in username, or the API key name).",
+        "description": "Return the current principal (logged-in username, or the API key name).\n\n``role`` + ``can_write`` let the console hide write controls for a viewer.",
         "operationId": "me_api_auth_me_get",
         "parameters": [
           {

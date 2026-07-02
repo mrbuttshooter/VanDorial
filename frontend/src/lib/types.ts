@@ -594,4 +594,8 @@ export interface LoginResult {
 export interface MeResult {
   username: string;
   key_id: string;
+  /** Console role: "admin" | "operator" | "viewer", or "machine" for an API key. */
+  role: string;
+  /** False for a viewer (read-only): the UI hides write controls. */
+  can_write: boolean;
 }

@@ -63,6 +63,7 @@ class LoginRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str = Field(min_length=8)
+    role: str = "operator"
 
 
 class SetPasswordRequest(BaseModel):
@@ -76,6 +77,17 @@ def _gateway():
     if gw is None or getattr(gw, "users", None) is None or getattr(gw, "sessions", None) is None:
         raise HTTPException(503, "Login is not configured on this box")
     return gw
+
+
+def require_admin(principal=Depends(require_api_key)):
+    """Gate account management to admins (and machine API keys, which are
+    trusted automation). A console operator has full *operational* access but
+    must not be able to mint/delete accounts or change other users' passwords —
+    that would let any operator escalate to admin."""
+    if principal.role not in ("admin", "machine"):
+        raise HTTPException(
+            403, "Account management requires the admin role")
+    return principal
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -112,25 +124,29 @@ def logout(request: Request, x_api_key: str = None):
 
 @router.get("/api/auth/me", dependencies=[Depends(require_api_key)])
 def me(principal=Depends(require_api_key)):
-    """Return the current principal (logged-in username, or the API key name)."""
-    return {"username": principal.name, "key_id": principal.key_id}
+    """Return the current principal (logged-in username, or the API key name).
+
+    ``role`` + ``can_write`` let the console hide write controls for a viewer.
+    """
+    return {"username": principal.name, "key_id": principal.key_id,
+            "role": principal.role, "can_write": principal.can_write()}
 
 
-@router.get("/api/auth/users", dependencies=[Depends(require_api_key)])
+@router.get("/api/auth/users", dependencies=[Depends(require_admin)])
 def list_users():
     return {"users": _gateway().users.list_users()}
 
 
-@router.post("/api/auth/users", dependencies=[Depends(require_api_key)])
+@router.post("/api/auth/users", dependencies=[Depends(require_admin)])
 def create_user(req: CreateUserRequest):
     try:
         return {"status": "created", "user": _gateway().users.create_user(
-            req.username, req.password)}
+            req.username, req.password, role=req.role)}
     except ValueError as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/api/auth/users/{user_id}/password", dependencies=[Depends(require_api_key)])
+@router.post("/api/auth/users/{user_id}/password", dependencies=[Depends(require_admin)])
 def set_password(user_id: int, req: SetPasswordRequest):
     try:
         ok = _gateway().users.set_password(user_id, req.password)
@@ -141,7 +157,7 @@ def set_password(user_id: int, req: SetPasswordRequest):
     return {"status": "updated", "id": user_id}
 
 
-@router.delete("/api/auth/users/{user_id}", dependencies=[Depends(require_api_key)])
+@router.delete("/api/auth/users/{user_id}", dependencies=[Depends(require_admin)])
 def delete_user(user_id: int):
     gw = _gateway()
     # Refuse to delete the last account — that would lock everyone out of the

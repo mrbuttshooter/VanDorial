@@ -7,6 +7,7 @@ import { IconPower } from "../icons";
 import { useLiveStats, useStreamStatus } from "@/hooks/useStream";
 import { api } from "@/lib/api";
 import { useToast } from "../ui/Toast";
+import { useAuth } from "@/lib/auth";
 import { abbrev, num } from "@/lib/format";
 import { Modal, ModalActions } from "../ui/Modal";
 
@@ -31,6 +32,7 @@ export function Shell() {
   const connected = useStreamStatus();
   const toast = useToast();
   const [confirmStop, setConfirmStop] = useState(false);
+  const { canWrite } = useAuth();
 
   const active = latest?.active_instances ?? 0;
 
@@ -84,14 +86,16 @@ export function Shell() {
               {connected ? "Stream Live" : "Reconnecting"}
             </span>
 
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setConfirmStop(true)}
-              disabled={active === 0}
-            >
-              <IconPower /> Stop All
-            </Button>
+            {canWrite && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setConfirmStop(true)}
+                disabled={active === 0}
+              >
+                <IconPower /> Stop All
+              </Button>
+            )}
           </div>
         </header>
 

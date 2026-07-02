@@ -95,9 +95,25 @@ def require_api_key(request: Request,
     if not gateway.rate_limiter.check(api_key.key_id, api_key.rate_limit):
         raise HTTPException(429, "Rate limit exceeded")
 
+    # Console RBAC: a read-only principal (viewer role) may issue only safe
+    # methods. Machine API keys carry "execute" and are unaffected. GET/HEAD/
+    # OPTIONS are always allowed; every state-changing method needs "execute".
+    if request.method not in _SAFE_METHODS and not api_key.can_write():
+        ip = request.client.host if request.client else ""
+        logger.info("rbac: blocked %s %s for read-only principal %s from %s",
+                    request.method, request.url.path, api_key.key_id, ip or "?")
+        raise HTTPException(
+            403, "This account is read-only (viewer); write actions require an "
+                 "operator or admin role")
+
     ip = request.client.host if request.client else ""
     gateway.audit.log(api_key, action=f"{request.method} {request.url.path}", ip=ip)
     return api_key
+
+
+# Methods that never change state — a viewer (read-only) principal is limited to
+# exactly these; everything else needs the "execute" permission.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _session_principal(token: str):
@@ -110,12 +126,15 @@ def _session_principal(token: str):
     if not sess:
         return None
     from gencall.core.api_gateway import APIKey
+    from gencall.core.auth_users import DEFAULT_ROLE, permissions_for_role
+    role = sess.get("role", DEFAULT_ROLE)
     return APIKey(
         key_id=f"session:{sess['username']}",
         key_hash="",
         name=sess["username"],
-        permissions=["read", "execute"],
+        permissions=permissions_for_role(role),
         rate_limit=600,
+        role=role,
     )
 
 

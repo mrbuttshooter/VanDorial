@@ -232,7 +232,7 @@ export const api = {
   me: () =>
     call<MeResult>(
       () => request("/api/auth/me"),
-      async () => ({ username: "demo", key_id: "mock" }),
+      async () => ({ username: "demo", key_id: "mock", role: "admin", can_write: true }),
     ),
 
   // ---- System ----
