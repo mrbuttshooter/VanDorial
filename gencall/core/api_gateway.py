@@ -191,8 +191,15 @@ class APIKeyManager:
             logger.info("API key registered: %s (%s)", name, key_id)
             return api_key
 
-    def validate_key(self, raw_key: str) -> APIKey | None:
-        """Validate a raw API key. Returns the APIKey if valid and enabled."""
+    def validate_key(self, raw_key: str, touch: bool = True) -> APIKey | None:
+        """Validate a raw API key. Returns the APIKey if valid and enabled.
+
+        touch=True (default) records usage (last_used/request_count), which on
+        the DB backend is a row UPDATE + commit per call. Pass touch=False for
+        hot, high-frequency validations that must stay read-only — e.g. the
+        WebSocket handshake, where a browser reconnect storm would otherwise
+        hammer the DB with one write per attempt.
+        """
         if not raw_key:
             return None
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
@@ -205,10 +212,11 @@ class APIKeyManager:
                     key_hash=key_hash, enabled=True).first()
                 if not row:
                     return None
-                row.last_used = time.time()
-                row.request_count = (row.request_count or 0) + 1
                 result = _row_to_apikey(row)
-                session.commit()
+                if touch:
+                    row.last_used = time.time()
+                    row.request_count = (row.request_count or 0) + 1
+                    session.commit()
                 return result
             finally:
                 session.close()
@@ -222,8 +230,9 @@ class APIKeyManager:
             if not api_key or not api_key.enabled:
                 return None
 
-            api_key.last_used = time.time()
-            api_key.request_count += 1
+            if touch:
+                api_key.last_used = time.time()
+                api_key.request_count += 1
             return api_key
 
     def revoke_key(self, key_id: str) -> bool:
@@ -284,7 +293,12 @@ class RateLimiter:
     """Token bucket rate limiter per API key."""
 
     def __init__(self):
-        self._buckets: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        # Unbounded deque: the 60s sliding-window popleft in check()/
+        # get_remaining() trims each bucket every call, so length stays bounded
+        # by real req/min traffic. A fixed maxlen=1000 would silently CAP the
+        # window and disable enforcement for any key whose limit exceeds 1000
+        # (len(bucket) could never reach the limit).
+        self._buckets: dict[str, deque] = defaultdict(deque)
 
     def check(self, key_id: str, limit: int) -> bool:
         """Check if a request is allowed. Returns True if within rate limit."""

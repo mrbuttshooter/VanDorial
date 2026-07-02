@@ -112,7 +112,11 @@ class StatsEngine:
         rt_sum = 0.0
         active = 0
 
-        for inst in self._sipp_engine.instances.values():
+        # Snapshot the values view: another thread adding/removing a SIPp
+        # instance mid-iteration would raise "dictionary changed size during
+        # iteration" and drop the entire stats snapshot. list() copies the refs
+        # (we only read state/stats), mirroring sipp_engine.py's list(...) guard.
+        for inst in list(self._sipp_engine.instances.values()):
             if inst.state.value == "running":
                 active += 1
                 s = inst.stats

@@ -368,6 +368,10 @@ class SIPpEngine:
         port = getattr(instance, "media_port", 0)
         if port:
             self._media_ports_used.discard(port)
+            # Clear it so a second release (e.g. self-exit in _monitor_instance
+            # followed by remove_instance) is a no-op and can't discard a port
+            # that has since been reallocated to a different live instance.
+            instance.media_port = 0
 
     def _set_file_limit(self):
         """Set the open file limit for SIPp."""
@@ -644,6 +648,13 @@ class SIPpEngine:
                             f"Exit code {exit_code}; see SIPp -trace_err file"
                         )
                         logger.error("SIPp instance %s exited with code %d", instance.id, exit_code)
+                    # Release the RTP media base-port on self-exit. stop_instance/
+                    # remove_instance release it, but a finite (-m) completion or
+                    # a crash exits here without either — leaking the port from
+                    # the in-use set and shrinking the usable RTP window over the
+                    # box's uptime. Take the lock to match the other release sites.
+                    with self._lock:
+                        self._release_media_port(instance)
                     break
 
                 self._read_stats(instance)

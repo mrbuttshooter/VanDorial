@@ -37,11 +37,10 @@ from gencall.db.schema import CALL_RECORD_FIELDS
 
 logger = logging.getLogger("gencall.call_records")
 
-# Upsert statements generated from the shared field list so the writer can
-# never drift from the schema (or from the LoopMatcher's read shape). The
-# UPDATE keeps the identity triple (campaign_id, direction, call_uuid) and the
-# first-seen created_at; everything else is refreshed by a later, more complete
-# parse of the same call.
+# INSERT is generated from the shared field list so the writer can never drift
+# from the schema (or from the LoopMatcher's read shape). The UPDATE keeps the
+# identity triple (campaign_id, direction, call_uuid) and the first-seen
+# created_at; everything else is refreshed by a later, more complete parse.
 _IDENTITY_FIELDS = ("campaign_id", "direction", "call_uuid")
 _UPDATABLE_FIELDS = tuple(f for f in CALL_RECORD_FIELDS
                           if f not in _IDENTITY_FIELDS and f != "created_at")
@@ -49,10 +48,26 @@ _INSERT_SQL = (
     "INSERT INTO call_records (" + ", ".join(CALL_RECORD_FIELDS) + ") "
     "VALUES (" + ", ".join(f":{f}" for f in CALL_RECORD_FIELDS) + ")"
 )
+# MERGE, don't clobber (v2.3.0 wave-2, billed-minute fix). A record can be
+# re-ingested across passes (an answer line in one pass, a later BYE-only pass).
+# COALESCE keeps an already-populated value when the incoming one is NULL; the
+# CASE guards stop a good answered row (final_code=200, duration>0) from being
+# nulled to 0 by a partial re-ingest that lacked the answer line. This must stay
+# hand-written (the CASE logic is field-specific), so it is NOT generated from
+# the field list — keep it in sync with CALL_RECORD_FIELDS by hand.
 _UPDATE_SQL = (
     "UPDATE call_records SET "
-    + ", ".join(f"{f} = :{f}" for f in _UPDATABLE_FIELDS)
-    + " WHERE id = :id"
+    "a_number = COALESCE(:a_number, a_number), "
+    "b_number = COALESCE(:b_number, b_number), "
+    "source_ip = COALESCE(:source_ip, source_ip), "
+    "t_start_ms = COALESCE(:t_start_ms, t_start_ms), "
+    "t_answer_ms = COALESCE(:t_answer_ms, t_answer_ms), "
+    "t_end_ms = COALESCE(:t_end_ms, t_end_ms), "
+    "duration_ms = CASE WHEN :duration_ms > 0 "
+    "  THEN :duration_ms ELSE duration_ms END, "
+    "final_code = CASE WHEN :final_code IS NOT NULL "
+    "  AND :final_code <> 0 THEN :final_code ELSE final_code END "
+    "WHERE id = :id"
 )
 
 # Minimum poll interval for the tail loop. The spec mandates >= 1 s for any

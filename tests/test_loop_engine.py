@@ -1513,3 +1513,42 @@ def test_start_outside_window_starts_paused(loop_engine, db, monkeypatch):
     assert inst is None or inst.state != SIPpState.RUNNING
     # Row still 'running' (scheduled pause, not stopped).
     assert loop_engine.get_campaign(cid)["status"] == "running"
+# ─── #5 adaptive-pool relaunch carries the -m call count forward ──────────────
+
+
+def test_adaptive_restart_carries_forward_call_count(loop_engine, tmp_path):
+    """The adaptive-pool UAC restart must carry the attempted-call count across
+    relaunches (max_calls = target - already_placed), not reset SIPp's -m to the
+    full target each rebuild — which made a call-targeted campaign overshoot."""
+    eng = loop_engine
+    c = eng.start_campaign(name="cf", dest_host="1.2.3.4", rate=5.0,
+                           max_concurrent=10, duration_s=1, target_calls=100_000)
+    cid = c["id"]
+    # Simulate prior UAC generations having already placed 5000 calls.
+    eng._campaigns[cid]["calls_placed"] = 5000
+    pool = tmp_path / "pool.csv"
+    pool.write_text("10001;20001\n10002;20002\n", encoding="utf-8")
+
+    assert eng._restart_uac_with_csv(cid, str(pool)) is True
+    placed = eng._campaigns[cid]["calls_placed"]
+    assert placed >= 5000                          # prior count retained
+    new = eng.engine.get_instance(f"uac-{cid}")
+    assert new is not None
+    assert new.max_calls == 100_000 - placed       # -m = remaining, not the full target
+    eng.stop_campaign(cid)
+
+
+def test_adaptive_restart_completes_when_target_reached(loop_engine, tmp_path):
+    """When the cumulative target is already met, the restart finalizes the
+    campaign instead of relaunching (max_calls=0 would mean UNLIMITED)."""
+    eng = loop_engine
+    c = eng.start_campaign(name="done", dest_host="1.2.3.4", rate=5.0,
+                           max_concurrent=10, duration_s=1, target_calls=100)
+    cid = c["id"]
+    eng._campaigns[cid]["calls_placed"] = 100      # target already reached
+    pool = tmp_path / "pool.csv"
+    pool.write_text("10001;20001\n", encoding="utf-8")
+
+    assert eng._restart_uac_with_csv(cid, str(pool)) is True
+    assert eng._campaigns[cid]["status"] == "completed"
+    assert eng.engine.get_instance(f"uac-{cid}") is None   # not relaunched

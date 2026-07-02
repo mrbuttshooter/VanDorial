@@ -86,16 +86,40 @@ _AUTOINCREMENT_RE = re.compile(
     r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", re.IGNORECASE
 )
 
+# PostgreSQL will NOT coerce the integer literal 0/1 to a boolean in a column
+# DEFAULT (SQLite, the test DB, silently accepts it) — so `BOOLEAN DEFAULT 0`
+# passes CI and then aborts the whole migration transaction on a Postgres box,
+# permanently wedging the chain. Rewrite the literal to FALSE/TRUE for Postgres.
+_BOOL_DEFAULT_RE = re.compile(
+    r"(\bBOOLEAN\s+DEFAULT\s+)([01])\b", re.IGNORECASE
+)
+
+# Matches `ALTER TABLE <t> ADD COLUMN <c> ...` so we can skip an add-column that
+# is already present. The ORM's Database.ensure_added_columns() idempotently adds
+# late columns too, so a migration file (e.g. 0006/0007) that ADDs the same
+# column would otherwise raise "duplicate column" on EVERY boot — the file never
+# gets recorded in schema_migrations and permanently wedges all later migrations.
+_ADD_COLUMN_RE = re.compile(
+    r"\bALTER\s+TABLE\s+([\"'`]?)(?P<table>\w+)\1\s+ADD\s+COLUMN\s+"
+    r"([\"'`]?)(?P<col>\w+)\3",
+    re.IGNORECASE,
+)
+
 
 def _translate_for_dialect(stmt, dialect_name):
-    """Rewrite SQLite-only DDL tokens for the target SQLAlchemy dialect.
+    """Rewrite SQLite-authored DDL tokens for the target SQLAlchemy dialect.
 
-    Currently only ``INTEGER PRIMARY KEY AUTOINCREMENT`` needs translation; on
-    PostgreSQL it becomes ``BIGSERIAL PRIMARY KEY``. On sqlite (or any other
+    On PostgreSQL: ``INTEGER PRIMARY KEY AUTOINCREMENT`` -> ``BIGSERIAL PRIMARY
+    KEY``, and ``BOOLEAN DEFAULT 0/1`` -> ``BOOLEAN DEFAULT FALSE/TRUE`` (Postgres
+    rejects an integer default on a boolean column). On sqlite (or any other
     dialect) the statement is returned unchanged.
     """
     if dialect_name == "postgresql":
-        return _AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", stmt)
+        stmt = _AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", stmt)
+        stmt = _BOOL_DEFAULT_RE.sub(
+            lambda m: m.group(1) + ("TRUE" if m.group(2) == "1" else "FALSE"),
+            stmt,
+        )
     return stmt
 
 
@@ -105,12 +129,22 @@ def apply_migrations(engine):
     Idempotent: tracks applied filenames in ``schema_migrations`` and skips
     those already recorded. Returns the list of filenames applied this call.
     """
-    from sqlalchemy import text
+    from sqlalchemy import text, inspect
 
     # Branch DDL generation on the live engine's dialect so SQLite-authored
     # migrations apply cleanly on PostgreSQL (production) too — see
     # _translate_for_dialect.
     dialect_name = engine.dialect.name
+
+    def _column_present(conn, table, col):
+        """True if `table.col` already exists (so an ADD COLUMN would collide)."""
+        try:
+            cols = {c["name"].lower() for c in inspect(conn).get_columns(table)}
+        except Exception:
+            # Table may not exist yet in this file's context — let the real
+            # statement run and surface any genuine error.
+            return False
+        return col.lower() in cols
 
     applied = []
     with engine.begin() as conn:
@@ -135,6 +169,18 @@ def apply_migrations(engine):
         # One transaction per file: all-or-nothing.
         with engine.begin() as conn:
             for stmt in statements:
+                # Skip an ADD COLUMN whose column already exists (e.g. the ORM's
+                # ensure_added_columns() beat this migration to it). Without this
+                # the duplicate-column error rolls back the file every boot and
+                # wedges all later migrations. Only genuinely-present columns are
+                # skipped; any other DDL — and any real error — still runs/raises.
+                m = _ADD_COLUMN_RE.search(stmt)
+                if m and _column_present(conn, m.group("table"), m.group("col")):
+                    logger.info(
+                        "Migration %s: column %s.%s already present, skipping ADD COLUMN",
+                        filename, m.group("table"), m.group("col"),
+                    )
+                    continue
                 conn.execute(text(_translate_for_dialect(stmt, dialect_name)))
             conn.execute(
                 text(

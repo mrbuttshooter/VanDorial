@@ -273,6 +273,19 @@ def start_test(req: StartTestRequest):
     transport_map = {"udp": SIPpTransport.UDP, "tcp": SIPpTransport.TCP, "tls": SIPpTransport.TLS}
     transport = transport_map.get(norm_transport, SIPpTransport.UDP)
 
+    # Bound rate/concurrency/duration against the box caps — REJECT only, never
+    # clamp, so a valid in-range test's SIPp command line is untouched. This also
+    # closes the direct /api/tests/start bypass: the fleet path never enforced
+    # caps on the controller OR the worker, so an unbounded rate/call_limit could
+    # OOM the box. call_limit is the -l simultaneous-call ceiling (channels).
+    from gencall.core.config import Config as _Config
+    from gencall.api.loop_validation import validate_caps as _validate_caps
+    try:
+        _validate_caps(req.call_rate, req.call_limit, _Config(),
+                       duration_s=req.duration)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
     instance_id = req.name or f"test-{uuid.uuid4().hex[:8]}"
 
     instance = SIPpInstance(

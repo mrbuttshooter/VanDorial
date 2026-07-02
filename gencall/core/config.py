@@ -6,6 +6,7 @@ Reads gencall.cfg and provides typed access to all settings.
 import configparser
 import os
 import logging
+from urllib.parse import quote
 
 logger = logging.getLogger("gencall.config")
 
@@ -25,7 +26,12 @@ class Config:
     def __init__(self, path=None):
         if self._initialized:
             return
-        self._parser = configparser.ConfigParser()
+        # interpolation=None: config VALUES are returned verbatim. Without this,
+        # ConfigParser's BasicInterpolation treats a literal '%' as the start of
+        # an interpolation token and raises InterpolationSyntaxError at first
+        # access — so a legal '%' in pg_password, fleet_token, an ssl path, etc.
+        # would crash the process on boot. '%' is legal in all these fields.
+        self._parser = configparser.ConfigParser(interpolation=None)
         self._path = path or self._find_config()
         if self._path:
             self._parser.read(self._path)
@@ -282,7 +288,14 @@ class Config:
             host = os.environ.get("GENCALL_PG_HOST") or self.get("database", "pg_host", "127.0.0.1")
             port = os.environ.get("GENCALL_PG_PORT") or self.getint("database", "pg_port", 5432)
             db = os.environ.get("GENCALL_PG_DATABASE") or self.get("database", "pg_database", "gencall")
-            return f"postgresql://{user}:{pw}@{host}:{port}/{db}"
+            # Percent-encode the credential/name fields so special characters
+            # (@ : / % etc.) in a password/user/db can't corrupt the DSN and
+            # silently redirect the connection. Host is a plain hostname/IP.
+            # quote(safe='') keeps this stdlib-only for the offline node path.
+            return (
+                f"postgresql://{quote(str(user), safe='')}:{quote(str(pw), safe='')}"
+                f"@{host}:{int(port)}/{quote(str(db), safe='')}"
+            )
         else:
             path = self.get("database", "sqlite_path", "/opt/gencall/etc/gencall.db")
             return f"sqlite:///{path}"
@@ -334,11 +347,21 @@ class Config:
 
     # Force-finalize a call record with no parsed BYE after this long, so the
     # tail-parser's in-memory accumulator can't leak. Must be comfortably above
-    # the longest call hold (ACD) you run; default 1800 s (30 min) covers any
-    # normal loop. 0 disables the staleness sweep.
+    # the longest call hold (ACD) you run. 0 disables the staleness sweep.
+    #
+    # The DEFAULT tracks the answered-call ceiling: a call cannot outlive
+    # loops_answered_max_duration_s (the UAS BYE guard), so we default to that +
+    # 300 s of margin. The old fixed 1800 s (30 min) default was BELOW the 7200 s
+    # answered ceiling, so a normal answered call of 30 min–2 h was force-evicted
+    # mid-call and later re-ingested from its BYE line alone as a 0-second,
+    # code-0 record — silently undercounting billed minutes. Keeping the default
+    # above the ceiling means an answerable call is never evicted while active.
     @property
     def loops_record_max_age_s(self):
-        return self.getint("loops", "record_max_age_s", 1800)
+        return self.getint(
+            "loops", "record_max_age_s",
+            max(1800, self.loops_answered_max_duration_s + 300),
+        )
 
     # Minimum seconds between UAS restart attempts — the throttled backoff floor
     # for the answer-side monitor (design §8). Never busy-restart a crash loop.

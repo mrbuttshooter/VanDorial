@@ -159,7 +159,7 @@ class UserManager:
             session.close()
 
     def set_password(self, user_id: int, password: str) -> bool:
-        from gencall.db.models import User
+        from gencall.db.models import User, LoginSession
         if len(password or "") < 8:
             raise ValueError("password must be at least 8 characters")
         session = self.db.get_session()
@@ -168,6 +168,11 @@ class UserManager:
             if not u:
                 return False
             u.password_hash = hash_password(password)
+            # A password change must invalidate every outstanding browser session
+            # for this account — otherwise a compromised/stale session survives the
+            # reset. SessionManager.validate() only checks token_hash+expiry, so
+            # deleting the rows is the only way to revoke them.
+            session.query(LoginSession).filter_by(user_id=user_id).delete()
             session.commit()
             return True
         finally:
@@ -191,12 +196,17 @@ class UserManager:
             session.close()
 
     def delete_user(self, user_id: int) -> bool:
-        from gencall.db.models import User
+        from gencall.db.models import User, LoginSession
         session = self.db.get_session()
         try:
             u = session.query(User).filter_by(id=user_id).first()
             if not u:
                 return False
+            # Revoke the user's live browser sessions before removing the account.
+            # validate() authenticates on token_hash+expiry alone and never
+            # re-checks that the account still exists, so without this an already
+            # -issued session token keeps working after the user is deleted.
+            session.query(LoginSession).filter_by(user_id=user_id).delete()
             session.delete(u)
             session.commit()
             logger.info("console user deleted: %s", u.username)

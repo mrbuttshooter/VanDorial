@@ -120,6 +120,12 @@ export function Dashboard() {
           <div style={{ padding: "var(--space-6)", display: "grid", placeItems: "center" }}>
             <Spinner />
           </div>
+        ) : loops.error && !loops.data ? (
+          <EmptyState
+            mark="⚠"
+            title="Controller unreachable"
+            hint={loops.error}
+          />
         ) : runningLoops.length === 0 ? (
           <EmptyState
             mark="○"
